@@ -755,6 +755,13 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1RotatePlatformDraw", 0),
     FunctionInfo("PS1HPZBridge", 0),
     FunctionInfo("PS1HPZBridgeDraw", 0),
+    FunctionInfo("PS1StageSetup", 0),
+    FunctionInfo("PS1HUDDraw", 0),
+    FunctionInfo("PS1TurretPlatform", 0),
+    FunctionInfo("PS1BeltPlatform", 0),
+    FunctionInfo("PS1HFlipper", 0),
+    FunctionInfo("PS1Earthquake", 0),
+    FunctionInfo("PS1Spikes", 0),
 #endif
 };
 
@@ -1270,6 +1277,13 @@ enum ScrFunc {
     FUNC_PS1ROTATEPLATFORMDRAW,
     FUNC_PS1HPZBRIDGE,
     FUNC_PS1HPZBRIDGEDRAW,
+    FUNC_PS1STAGESETUP,
+    FUNC_PS1HUDDRAW,
+    FUNC_PS1TURRETPLATFORM,
+    FUNC_PS1BELTPLATFORM,
+    FUNC_PS1HFLIPPER,
+    FUNC_PS1EARTHQUAKE,
+    FUNC_PS1SPIKES,
 #endif
     FUNC_MAX_CNT
 };
@@ -4464,6 +4478,848 @@ static void PS1HPZBridgeDraw()
         v[22]--;
     }
 }
+
+// CallFunction from a native opcode: the function runs in a nested ProcessScript. The natives replace whole subs, so
+// the VM's stacks are empty when they run; the nested run starts its foreach stack at the depth the transcribed script
+// had at that call (the ForEach loops around it), so the function's loops use the same foreachStack slots as in the
+// script. Exact because no Sonic 2 function returns from inside a loop or switch (the loops and switches it opens
+// all close before it returns, leaving the stacks where they were); the patcher checks that for every function of
+// a file before it patches in a native that calls one (patch_bytecode.py calls_safe).
+static int s_ps1CallForeachDepth = 0;
+volatile uint32_t g_ps1ScriptNestedCalls = 0; // test evidence (logic_test.sh): nested calls made by natives
+static void PS1CallScriptFunction(int fn, int foreachDepth)
+{
+    g_ps1ScriptNestedCalls = g_ps1ScriptNestedCalls + 1;
+    s_ps1CallForeachDepth  = foreachDepth;
+    ProcessScript(scriptFunctionList[fn].ptr.scriptCodePtr, scriptFunctionList[fn].ptr.jumpTablePtr, EVENT_MAIN);
+}
+static int PS1CollisionLeft(Entity &e) // VAR_OBJECTCOLLISIONLEFT's getter
+{
+    AnimationFile *animFile = objectScriptList[e.type].animFile;
+    if (!animFile)
+        return 0;
+    int h = animFrames[animationList[animFile->aniListOffset + e.animation].frameListOffset + e.frame].hitboxID;
+    return hitboxList[animFile->hitboxListOffset + h].left[0];
+}
+
+// Sonic 2's Stage Setup update sub (GlobalCode object "Stage Setup", every zone; ~60 VM instructions a frame, 13
+// hblanks on the emulator), natively: one statement per script instruction, in order. The script functions it
+// calls run in the VM (PS1CallScriptFunction): 71 the oscillators (itself PS1Oscillate), 50 the player's death.
+// Patched in only when the sub and its jump-table entries match STAGESETUP_SIG.
+static void PS1StageSetupUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr = scriptEng.checkResult;
+    int *G  = globalVariables;
+    TypeGroupList &players = objectTypeGroupList[256];
+    if (stageMode < 2 || stageMode > 3) { // switch STAGESTATE: cases 2 and 3 only `break`; the default runs
+        G[18]++;
+        if (G[18] == 4) {
+            G[18] = 0;
+            G[19]++;
+            G[19] &= 7;
+        }
+        PS1ScriptWrite(24725, scriptCode[24725] + 1); // Inc LOCAL[24725]
+        if (scriptCode[24725] > 17)
+            PS1ScriptWrite(24725, 0);
+        if (G[0] != 2) {
+            if (G[22] >= G[24]) {
+                G[25]++;
+                G[24] += 50000;
+                PlaySfx(24, 0);
+                PauseSound();
+                PS1ResetObjectEntity(25, 34, 2, 0, 0);
+                PS1_OBJ(25).priority = 1;
+            }
+        }
+        G[17]++;
+        G[17] &= 511;
+        PS1CallScriptFunction(71, 0);
+        if (timeEnabled == 1) {
+            if (stageMinutes == 10) {
+                cr   = debugMode == 1;
+                t[0] = cr;
+                cr   = G[0] == 2;
+                t[0] |= cr;
+                if (t[0] == 0) {
+                    G[52]           = 1;
+                    ap[6]           = 0;
+                    PS1_OBJ(0).type = 1;
+                    PS1CallScriptFunction(50, 0);
+                }
+                stageMinutes      = 9;
+                stageSeconds      = 59;
+                stageMilliseconds = 99;
+                timeEnabled       = 0;
+            }
+        }
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6]     = players.entityRefs[loop];
+            Entity &p = PS1_OBJ(ap[6]);
+            t[0]      = PS1CollisionLeft(p);
+            t[0] <<= 16;
+            t[0] += p.xpos;
+            t[1] = curXBoundary1;
+            t[1] <<= 16;
+            if (t[0] < t[1]) {
+                if (p.right == 1) {
+                    p.xvel  = 65536;
+                    p.speed = 65536;
+                }
+                else {
+                    p.xvel  = 0;
+                    p.speed = 0;
+                }
+                p.xpos = t[1];
+                t[0]   = PS1CollisionLeft(p);
+                t[0] <<= 16;
+                p.xpos -= t[0];
+            }
+            t[1] = curYBoundary2;
+            t[1] <<= 16;
+            if (t[1] < G[49]) {
+                if (p.ypos > G[49])
+                    PS1CallScriptFunction(50, 1);
+            }
+            else {
+                if (p.ypos > t[1])
+                    PS1CallScriptFunction(50, 1);
+            }
+        }
+    }
+    if (G[5] == 0) {
+        if (PS1_OBJ(0).controlMode > -1)
+            G[7] = 1;
+        else
+            G[7] = 0;
+    }
+    else {
+        G[7] = 0;
+    }
+    auto addRef = [](int layer, int ref) { drawListEntries[layer].entityRefs[drawListEntries[layer].listSize++] = ref; };
+    ap[6] = ap[7];
+    ap[6]--;
+    while (ap[6] > -1) {
+        if (PS1_OBJ(ap[6]).visible == 1) {
+            ap[6] += ap[7];
+            if (PS1_OBJ(ap[6]).values[18] == 0) {
+                ap[6] -= ap[7];
+                ap[0] = PS1_OBJ(ap[6]).values[18];
+                addRef(ap[0], ap[6]);
+                ap[6] += ap[7];
+                addRef(ap[0], ap[6]);
+                ap[6] -= ap[7];
+            }
+            else {
+                ap[6] -= ap[7];
+                ap[0] = PS1_OBJ(ap[6]).values[18];
+                ap[6] += ap[7];
+                addRef(ap[0], ap[6]);
+                ap[6] -= ap[7];
+                ap[0] = PS1_OBJ(ap[6]).values[18];
+                addRef(ap[0], ap[6]);
+            }
+        }
+        ap[6]--;
+    }
+}
+static int PS1CollisionRight(Entity &e) // VAR_OBJECTCOLLISIONRIGHT's getter
+{
+    AnimationFile *animFile = objectScriptList[e.type].animFile;
+    if (!animFile)
+        return 0;
+    int h = animFrames[animationList[animFile->aniListOffset + e.animation].frameListOffset + e.frame].hitboxID;
+    return hitboxList[animFile->hitboxListOffset + h].right[0];
+}
+
+// FUNC_DRAWSPRITESCREENXY / FUNC_DRAWNUMBERS for the running entity (the VM's scriptInfo).
+static void PS1DrawSpriteScreenXY(int frame, int x, int y)
+{
+    ObjectScript *o = &objectScriptList[objectEntityList[objectEntityPos].type];
+    SpriteFrame *f  = &scriptFrames[o->frameListOffset + frame];
+    DrawSprite(x + f->pivotX, y + f->pivotY, f->width, f->height, f->sprX, f->sprY, o->spriteSheetID);
+}
+static void PS1DrawNumbers(int base, int x, int y, int value, int digits, int spacing, int showAll)
+{
+    ObjectScript *o = &objectScriptList[objectEntityList[objectEntityPos].type];
+    int i           = 10;
+    if (showAll) {
+        while (digits > 0) {
+            SpriteFrame *f = &scriptFrames[o->frameListOffset + value % i / (i / 10) + base];
+            DrawSprite(f->pivotX + x, f->pivotY + y, f->width, f->height, f->sprX, f->sprY, o->spriteSheetID);
+            x -= spacing;
+            i *= 10;
+            --digits;
+        }
+    }
+    else {
+        int extra = 10;
+        if (value)
+            extra = 10 * value;
+        while (digits > 0) {
+            if (extra >= i) {
+                SpriteFrame *f = &scriptFrames[o->frameListOffset + value % i / (i / 10) + base];
+                DrawSprite(f->pivotX + x, f->pivotY + y, f->width, f->height, f->sprX, f->sprY, o->spriteSheetID);
+            }
+            x -= spacing;
+            i *= 10;
+            --digits;
+        }
+    }
+}
+
+// Sonic 2's HUD drawing (GlobalCode function 72, called by the HUD's draw sub every frame in every zone; ~25 VM
+// instructions + DrawNumbers), natively: one statement per script instruction, in order. The function's body is
+// patched to `PS1HUDDraw / return` only when it matches HUD_FN_SIG.
+static void PS1HUDDraw()
+{
+    int *t     = scriptEng.temp;
+    int *G     = globalVariables;
+    Entity &me = objectEntityList[objectEntityPos];
+    Entity &p  = PS1_OBJ(0);
+    PS1DrawSpriteScreenXY(10, 17, 13);
+    if (stageMinutes == 9) {
+        if (me.values[1] > 7)
+            PS1DrawSpriteScreenXY(11, 17, 29);
+    }
+    if (p.values[0] == 0) {
+        if (me.values[1] > 7)
+            PS1DrawSpriteScreenXY(12, 17, 45);
+    }
+    PS1DrawNumbers(0, 104, 13, G[22], 6, 8, 0);
+    if (G[0] < 2) {
+        PS1DrawSpriteScreenXY(14, 67, 29);
+    }
+    else {
+        PS1DrawSpriteScreenXY(13, 67, 29);
+        PS1DrawNumbers(0, 104, 29, stageMilliseconds, 2, 8, 1);
+    }
+    PS1DrawNumbers(0, 80, 29, stageSeconds, 2, 8, 1);
+    PS1DrawNumbers(0, 56, 29, stageMinutes, 1, 8, 1);
+    PS1DrawNumbers(0, 80, 45, p.values[0], 3, 8, 0);
+    if (debugMode == 1) {
+        t[0] = p.xpos;
+        t[0] >>= 16;
+        t[0] = abs(t[0]);
+        t[1] = SCREEN_XSIZE;
+        t[1] -= 24;
+        PS1DrawNumbers(0, t[1], 13, t[0], 5, 8, 1);
+        t[0] = p.ypos;
+        t[0] >>= 16;
+        t[0] = abs(t[0]);
+        PS1DrawNumbers(0, t[1], 29, t[0], 5, 8, 1);
+        t[1] -= 42;
+        if (p.xpos >= 0)
+            PS1DrawSpriteScreenXY(18, t[1], 15);
+        else
+            PS1DrawSpriteScreenXY(36, t[1], 15);
+        if (p.ypos >= 0)
+            PS1DrawSpriteScreenXY(19, t[1], 31);
+        else
+            PS1DrawSpriteScreenXY(37, t[1], 31);
+    }
+    t[0] = playerListPos;
+    t[0] += 15;
+    PS1DrawSpriteScreenXY(t[0], 16, 212);
+    t[0] += 6;
+    PS1DrawSpriteScreenXY(t[0], 33, 213);
+    PS1DrawSpriteScreenXY(20, 38, 222);
+    PS1DrawNumbers(24, 56, 220, G[25], 2, 8, 0);
+}
+
+// VAR_OBJECTOUTOFBOUNDS's getter (the !RETRO_REV00 branch), for natives.
+static int PS1ObjectOutOfBounds(Entity *entPtr)
+{
+    int boundX1_2P = -(0x200 << 16);
+    int boundX2_2P = (0x200 << 16);
+    int boundX3_2P = -(0x180 << 16);
+    int boundX4_2P = (0x180 << 16);
+    int boundY1_2P = -(0x180 << 16);
+    int boundY2_2P = (0x180 << 16);
+    int boundY3_2P = -(0x100 << 16);
+    int boundY4_2P = (0x100 << 16);
+    int x          = entPtr->xpos >> 16;
+    int y          = entPtr->ypos >> 16;
+    if (entPtr->priority == PRIORITY_BOUNDS_SMALL || entPtr->priority == PRIORITY_ACTIVE_SMALL) {
+        if (stageMode == STAGEMODE_2P) {
+            x         = entPtr->xpos;
+            y         = entPtr->ypos;
+            bool oob1 = x <= objectEntityList[0].xpos + boundX3_2P || x >= objectEntityList[0].xpos + boundX4_2P
+                        || y <= objectEntityList[0].ypos + boundY3_2P || y >= objectEntityList[0].ypos + boundY4_2P;
+            bool oob2 = x <= objectEntityList[1].xpos + boundX3_2P || x >= objectEntityList[1].xpos + boundX4_2P
+                        || y <= objectEntityList[1].ypos + boundY3_2P || y >= objectEntityList[1].ypos + boundY4_2P;
+            return oob1 && oob2;
+        }
+        return x <= xScrollOffset - OBJECT_BORDER_X3 || x >= xScrollOffset + OBJECT_BORDER_X4 || y <= yScrollOffset - OBJECT_BORDER_Y3
+               || y >= yScrollOffset + OBJECT_BORDER_Y4;
+    }
+    if (stageMode == STAGEMODE_2P) {
+        x         = entPtr->xpos;
+        y         = entPtr->ypos;
+        bool oob1 = x <= objectEntityList[0].xpos + boundX1_2P || x >= objectEntityList[0].xpos + boundX2_2P
+                    || y <= objectEntityList[0].ypos + boundY1_2P || y >= objectEntityList[0].ypos + boundY2_2P;
+        bool oob2 = x <= objectEntityList[1].xpos + boundX1_2P || x >= objectEntityList[1].xpos + boundX2_2P
+                    || y <= objectEntityList[1].ypos + boundY1_2P || y >= objectEntityList[1].ypos + boundY2_2P;
+        return oob1 && oob2;
+    }
+    return x <= xScrollOffset - OBJECT_BORDER_X1 || x >= xScrollOffset + OBJECT_BORDER_X2 || y <= yScrollOffset - OBJECT_BORDER_Y1
+           || y >= yScrollOffset + OBJECT_BORDER_Y2;
+}
+
+// Wing Fortress's Turret Platform (stage object in Zone11; update 40 VM instructions, ~3.5 hblanks a frame each,
+// 7 on screen), natively: one statement per script instruction, in order; its reset (stage function 121) inline.
+// Patched in only when the sub (with its jump-table entries) and function 121 match TURRET_SIG / TURRET_FN_SIG.
+static void PS1TurretPlatformUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    switch (me.state) {
+        case 0:
+            t[0] = G[17];
+            t[0] &= 240;
+            if (t[0] == me.propertyValue) {
+                me.priority       = 1;
+                me.values[0]      = 160;
+                me.animationTimer = 6;
+                me.state          = 1;
+            }
+            break;
+        case 1:
+            me.animationTimer++;
+            me.frame = me.animationTimer;
+            me.frame = me.frame / 6;
+            if (me.frame == 4)
+                me.state = 2;
+            break;
+        case 2:
+            me.values[0]--;
+            if (me.values[0] == 0)
+                me.state = 3;
+            break;
+        case 3:
+            me.animationTimer--;
+            me.frame = me.animationTimer;
+            me.frame = me.frame / 6;
+            if (me.animationTimer == 0)
+                me.state = 0;
+            break;
+    }
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6] = players.entityRefs[loop];
+        if (me.frame >= 3)
+            PlatformCollision(&PS1_OBJ(self), -32, -24, 32, 0, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+    }
+    if (PS1ObjectOutOfBounds(&PS1_OBJ(self)) == 1) {
+        ap[0]     = self;
+        Entity &o = PS1_OBJ(ap[0]); // CallFunction 121
+        o.values[0]      = 0;
+        o.animationTimer = 0;
+        o.frame          = 0;
+        o.state          = 0;
+        o.priority       = 1;
+    }
+}
+
+// Wing Fortress's Belt Platform (stage object in Zone11; update 50 VM instructions, ~2.8 hblanks a frame each, 8 on
+// screen), natively: one statement per script instruction, in order. Patched in only when the sub and its
+// jump-table entries match BELTPLAT_SIG.
+static void PS1BeltPlatformUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    switch (me.state) {
+        case 0: break;
+        case 1:
+            me.animationTimer++;
+            if (me.animationTimer == 4) {
+                me.animationTimer = 0;
+                me.frame--;
+                if (me.frame == 0)
+                    me.state = 2;
+            }
+            break;
+        case 2: {
+            me.ypos += me.yvel;
+            v[0]--;
+            if (v[0] == 0)
+                me.state = 3;
+            t[2]                   = 0;
+            TypeGroupList &players = objectTypeGroupList[256];
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                t[0]  = (v[1] & (1 << t[2])) >> t[2];
+                if (t[0] == 1)
+                    PS1_OBJ(ap[6]).ypos += me.yvel;
+                v[1] &= ~(1 << t[2]);
+                PlatformCollision(&PS1_OBJ(self), -24, -4, 24, 4, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                if (cr == 1)
+                    v[1] |= 1 << t[2];
+                t[2]++;
+            }
+            break;
+        }
+        case 3:
+            me.animationTimer++;
+            if (me.animationTimer == 4) {
+                me.animationTimer = 0;
+                me.frame++;
+                if (me.frame == 3)
+                    me.state = 0;
+            }
+            break;
+    }
+    t[0] = me.xpos;
+    t[0] >>= 16;
+    t[0] -= cameraXPos;
+    t[0] = abs(t[0]);
+    t[0] -= 128;
+    if (t[0] > SCREEN_CENTERX) {
+        me.state    = 0;
+        me.priority = 0;
+    }
+}
+
+// Casino Night's H Flipper (stage object in Zone04; update 170 VM instructions, ~15 hblanks a frame each on the
+// emulator), natively: one statement per script instruction, in order; its launch (stage function 122) inline.
+// OBJECTIXPOS / OBJECTIYPOS reads keep the VM's write-back: the position is truncated to whole pixels.
+// Patched in only when the sub (with its jump-table entries) and function 122 match HFLIPPER_SIG / HFLIPPER_FN_SIG.
+static void PS1HFlipperUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    auto notLocked = [&](Entity &p) { // CheckEqual state 31 / Or state 13 -> TEMP0; true when TEMP0 == 0
+        cr   = p.state == 31;
+        t[0] = cr;
+        cr   = p.state == 13;
+        t[0] |= cr;
+        return t[0] == 0;
+    };
+    auto launch = [&](Entity &p) { // CallFunction 122
+        t[0]   = p.xpos >> 16;
+        p.xpos = t[0] << 16; // Equal TEMP0 OBJECTIXPOS[1,1,6]: write-back
+        int ix = me.xpos >> 16;
+        t[0] -= ix;
+        me.xpos = ix << 16; // Sub TEMP0 OBJECTIXPOS: write-back
+        if (me.direction == 1)
+            t[0] = -t[0];
+        t[0] += 35;
+        t[2] = t[0];
+        if (t[2] > 64)
+            t[2] = 64;
+        t[2] <<= 5;
+        t[2] += 2048;
+        t[2] = -t[2];
+        t[3] = t[0];
+        t[3] >>= 2;
+        t[3] += 64;
+        t[0] = Sin256(t[3]);
+        t[1] = Cos256(t[3]);
+        t[0] *= t[2];
+        t[1] *= t[2];
+        p.yvel = t[0];
+        if (me.direction == 1)
+            t[1] = -t[1];
+        p.speed = t[1];
+        p.xvel  = t[1];
+    };
+    if (me.state == 1) { // switch OBJECTSTATE: case 1 only
+        me.frame = v[0];
+        me.frame = me.frame >> 2;
+        me.frame = me.frame + 1;
+        if (v[0] < 12) {
+            v[0]++;
+        }
+        else {
+            v[0]     = 0;
+            me.frame = 0;
+            me.state = 0;
+        }
+    }
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        cr        = p.state == 28;
+        t[0]      = cr;
+        cr        = p.state == 26;
+        t[0] |= cr;
+        if (t[0] != 0)
+            continue;
+        v[4] = p.xpos;
+        v[4] -= me.xpos;
+        v[4] >>= 16;
+        v[3] = v[4];
+        v[3] += PS1CollisionLeft(p);
+        v[5] = v[4];
+        v[5] += PS1CollisionRight(p);
+        v[3] += 24;
+        if (v[3] < 0)
+            v[3] = 0;
+        if (v[3] > 47)
+            v[3] = 47;
+        v[4] += 24;
+        if (v[4] < 0)
+            v[4] = 0;
+        if (v[4] > 47)
+            v[4] = 47;
+        v[5] += 24;
+        if (v[5] < 0)
+            v[5] = 0;
+        if (v[5] > 47)
+            v[5] = 47;
+        get(v[1], v[3], v[6]);
+        get(v[1], v[4], v[7]);
+        get(v[1], v[5], v[8]);
+        v[9] = v[6];
+        if (v[7] < v[9])
+            v[9] = v[7];
+        if (v[8] < v[9])
+            v[9] = v[8];
+        get(v[2], v[3], v[6]);
+        get(v[2], v[4], v[7]);
+        get(v[2], v[5], v[8]);
+        v[10] = v[6];
+        if (v[7] > v[10])
+            v[10] = v[7];
+        if (v[8] > v[10])
+            v[10] = v[8];
+        if (p.state != 1) {
+            BoxCollision(&PS1_OBJ(self), -24, v[9], 24, v[10], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 4) {
+                cr   = p.state == 24;
+                t[0] = cr;
+                cr   = p.state == 20;
+                t[0] |= cr;
+                cr = p.state == 21;
+                t[0] |= cr;
+                cr = p.state == 19;
+                t[0] |= cr;
+                cr = p.state == 31;
+                t[0] |= cr;
+                cr = p.state == 13;
+                t[0] |= cr;
+                if (t[0] == 0) {
+                    p.state   = 12;
+                    p.gravity = 1;
+                }
+            }
+            t[0] = 4;
+        }
+        else {
+            t[0] = 12;
+        }
+        v[9] -= t[0];
+        v[10] = v[9];
+        v[10] += 8;
+        TouchCollision(&PS1_OBJ(self), -24, v[9], 24, v[10], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        if (cr != 1)
+            continue;
+        p.ypos = v[9];
+        p.ypos += t[0];
+        p.ypos -= PS1CollisionBottom(p);
+        p.ypos <<= 16;
+        p.ypos += me.ypos;
+        if (me.state == 0) {
+            if (me.direction == 0)
+                TouchCollision(&PS1_OBJ(self), -26, -12, 20, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            else
+                TouchCollision(&PS1_OBJ(self), -20, -12, 26, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 1) {
+                if (notLocked(p)) {
+                    p.state     = 14;
+                    p.animation = G[67];
+                }
+                p.scrollTracking = 0;
+                p.gravity        = 0;
+                p.controlLock    = 8;
+                if (p.jumpPress == 1) {
+                    if (notLocked(p))
+                        p.state = 12;
+                    p.gravity     = 1;
+                    p.values[1]   = 0;
+                    p.controlLock = 0;
+                    launch(p);
+                    me.state = 1;
+                    StopSfx(0);
+                    PlaySfx(48, 0);
+                }
+                else {
+                    p.speed = me.xvel;
+                    p.xvel  = me.xvel;
+                    p.yvel  = 0;
+                }
+            }
+            else {
+                if (notLocked(p))
+                    p.state = 12;
+                p.gravity   = 1;
+                p.values[1] = 0;
+            }
+            p.animation = G[67];
+            if (p.prevAnimation != G[67])
+                p.ypos = ((p.ypos >> 16) - p.values[30]) << 16; // Sub OBJECTIYPOS OBJECTVALUE30 (write-back)
+        }
+        else {
+            if (notLocked(p))
+                p.state = 12;
+            launch(p);
+            p.gravity   = 1;
+            p.values[1] = 0;
+        }
+    }
+}
+
+// Hill Top's Earthquake (stage object in Zone05: the ceiling / floor sections that rise and fall; update 99 VM
+// instructions, ~5 hblanks a frame each on the emulator), natively: one statement per script instruction, in order.
+// Crushing (function 46) and falling out (function 50) run in the VM from inside the player loop (foreach depth 1).
+// Patched in only when the sub and its jump-table entries match EARTHQUAKE_SIG and the functions are callable.
+static void PS1EarthquakeUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    auto L     = [](int pos) { return (int)scriptCode[pos]; };
+    TouchCollision(&PS1_OBJ(self), v[7], v[8], v[9], v[10], &PS1_OBJ(0), 0, 0, 0, 0);
+    if (cr == 1) {
+        if (L(63679) == 0) {
+            PS1ScriptWrite(63679, 2);
+            PS1ScriptWrite(63680, v[0]);
+            PS1ScriptWrite(63681, v[1]);
+            PS1ScriptWrite(63682, v[2]);
+            hParallax.scrollPos[20] = v[16];
+        }
+    }
+    TouchCollision(&PS1_OBJ(self), v[3], v[4], v[5], v[6], &PS1_OBJ(0), 0, 0, 0, 0);
+    if (cr == 1) {
+        if (L(63679) == 0) {
+            PS1ScriptWrite(63679, 1);
+            PS1ScriptWrite(63680, v[0]);
+            PS1ScriptWrite(63681, v[1]);
+            PS1ScriptWrite(63682, v[2]);
+            hParallax.scrollPos[20] = v[16];
+        }
+    }
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[0]      = v[12];
+        t[0] -= v[15];
+        t[1] = v[14];
+        t[1] -= v[15];
+        if (me.propertyValue == 3) {
+            t[2] = p.xpos;
+            t[2] -= me.xpos;
+            t[2] += 25165824;
+            if (t[2] > 0) {
+                t[2] >>= 18;
+                t[0] += t[2];
+            }
+            t[0]++;
+            if (p.values[42] == 0) {
+                if (p.gravity == 1) {
+                    if (p.xvel > 0) {
+                        t[2] = p.xvel;
+                        t[2] >>= 2;
+                        p.ypos += t[2];
+                        p.ypos += 131072;
+                    }
+                }
+            }
+        }
+        BoxCollision(&PS1_OBJ(self), v[11], t[0], v[13], t[1], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        switch (cr) { // the script's switch: case 1 falls into cases 2 / 3
+            case 1:
+                t[0] = L(63683);
+                t[0] -= v[15];
+                t[0] <<= 16;
+                p.ypos -= t[0];
+                // fall through
+            case 2:
+            case 3:
+                if (me.propertyValue == 2)
+                    PS1CallScriptFunction(46, 1);
+                if (me.propertyValue == 4)
+                    PS1CallScriptFunction(46, 1);
+                if (me.propertyValue == 5)
+                    PS1CallScriptFunction(46, 1);
+                break;
+            case 4:
+                if (p.gravity == 0)
+                    PS1CallScriptFunction(50, 1);
+                break;
+        }
+    }
+    TypeGroupList &group = objectTypeGroupList[11];
+    for (int loop = 0; loop < group.listSize; ++loop) {
+        ap[0]     = group.entityRefs[loop];
+        Entity &o = PS1_OBJ(ap[0]);
+        if (o.yvel >= 0) {
+            t[0] = v[12];
+            t[0] -= v[15];
+            t[1] = v[14];
+            t[1] -= v[15];
+            if (me.propertyValue == 3) {
+                t[2] = o.xpos;
+                t[2] -= me.xpos;
+                t[2] += 25165824;
+                if (t[2] > 0) {
+                    t[2] >>= 18;
+                    t[0] += t[2];
+                }
+                t[0]++;
+            }
+            t[2] = o.yvel;
+            PlatformCollision(&PS1_OBJ(self), v[11], t[0], v[13], t[1], &PS1_OBJ(ap[0]), -8, -8, 8, 8);
+            if (cr == 1) {
+                o.yvel = t[2];
+                t[2] >>= 2;
+                o.yvel -= t[2];
+                o.yvel = -o.yvel;
+                if (o.yvel > -65536)
+                    o.yvel = -65536;
+                o.gravity = 1;
+            }
+        }
+    }
+    v[15] = L(63683);
+}
+
+// Sonic 2's Spikes (GlobalCode object "Spikes"; update 121 VM instructions, ~3 hblanks a frame each), natively: one
+// statement per script instruction, in order. The moving spikes' states (switch OBJECTSTATE 1-5), then the player
+// loop of their orientation (switch OBJECTPROPERTYVALUE 0-3); hurting (function 49) and killing (function 50) run in
+// the VM from inside the loop (foreach depth 1). Patched in only when the sub and its jump-table entries match
+// SPIKES_SIG.
+static void PS1SpikesUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    auto rise  = [&]() { // states 1 and 3 (the same instructions)
+        if (v[0] < 60) {
+            v[0]++;
+        }
+        else {
+            me.state++;
+            v[0] = 0;
+            t[0] = SCREEN_CENTERX;
+            t[0] += 64;
+            t[1] = t[0];
+            t[0] = -t[0];
+            TouchCollision(&PS1_OBJ(self), t[0], -128, t[1], 128, &PS1_OBJ(0), 0, 0, 0, 0);
+            if (cr == 1)
+                PlaySfx(29, 0);
+        }
+    };
+    switch (me.state) {
+        case 1: rise(); break;
+        case 2:
+            if (v[1] < 2097152) {
+                v[1] += 524288;
+                me.xpos += me.xvel;
+                me.ypos += me.yvel;
+            }
+            else {
+                me.state++;
+            }
+            break;
+        case 3: rise(); break;
+        case 4:
+            if (v[1] > 0) {
+                v[1] -= 524288;
+                me.xpos -= me.xvel;
+                me.ypos -= me.yvel;
+            }
+            else {
+                me.state = 1;
+            }
+            break;
+        case 5:
+            ap[0]   = v[2];
+            me.ypos = PS1_OBJ(self - ap[0]).ypos; // OBJECTYPOS[3,1,0]: entity (this - arrayPos0)
+            break;
+    }
+    TypeGroupList &players = objectTypeGroupList[256];
+    auto solidKill         = [&](int l, int tp, int r, int b) {
+        BoxCollision(&PS1_OBJ(self), l, tp, r, b, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        if (cr == 4) {
+            if (PS1_OBJ(ap[6]).gravity == 0)
+                PS1CallScriptFunction(50, 1);
+        }
+    };
+    auto touchHurt = [&](int l, int tp, int r, int b) {
+        TouchCollision(&PS1_OBJ(self), l, tp, r, b, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        if (cr == 1)
+            PS1CallScriptFunction(49, 1);
+    };
+    switch (me.propertyValue) {
+        case 0:
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                solidKill(-16, -16, 16, 16);
+                if (PS1_OBJ(ap[6]).yvel > -1)
+                    touchHurt(-15, -17, 15, -12);
+            }
+            break;
+        case 1:
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                solidKill(-16, -16, 15, 16);
+                if (PS1_OBJ(ap[6]).xvel <= 0)
+                    touchHurt(12, -15, 16, 15);
+            }
+            break;
+        case 2:
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                solidKill(-15, -16, 16, 16);
+                touchHurt(-16, -15, -12, 15);
+            }
+            break;
+        case 3:
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                t[0]  = PS1_OBJ(ap[6]).yvel;
+                BoxCollision(&PS1_OBJ(self), -16, -16, 16, 15, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                if (cr == 4) {
+                    if (PS1_OBJ(ap[6]).gravity == 0) {
+                        if (PS1_OBJ(ap[6]).collisionMode == 0) {
+                            PS1CallScriptFunction(50, 1);
+                            PS1_OBJ(ap[6]).values[7] = 0;
+                        }
+                        else {
+                            PS1CallScriptFunction(49, 1);
+                        }
+                    }
+                    else {
+                        PS1CallScriptFunction(49, 1);
+                    }
+                    t[0] = 1;
+                }
+                if (t[0] < 1)
+                    touchHurt(-15, 12, 15, 14);
+            }
+            break;
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -4481,7 +5337,12 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
     int scriptCodePtr = scriptCodeStart;
     jumpTableStackPos = 0;
     functionStackPos  = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+    foreachStackPos       = s_ps1CallForeachDepth; // 0, or a native's PS1CallScriptFunction: the script's depth there
+    s_ps1CallForeachDepth = 0;
+#else
     foreachStackPos   = 0;
+#endif
 
     while (running) {
         int opcode           = PS1_RAW(scriptCodePtr++);
@@ -6611,6 +7472,34 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1HPZBRIDGEDRAW:
                 opcodeSize = 0;
                 PS1HPZBridgeDraw();
+                break;
+            case FUNC_PS1STAGESETUP:
+                opcodeSize = 0;
+                PS1StageSetupUpdate();
+                break;
+            case FUNC_PS1HUDDRAW:
+                opcodeSize = 0;
+                PS1HUDDraw();
+                break;
+            case FUNC_PS1TURRETPLATFORM:
+                opcodeSize = 0;
+                PS1TurretPlatformUpdate();
+                break;
+            case FUNC_PS1BELTPLATFORM:
+                opcodeSize = 0;
+                PS1BeltPlatformUpdate();
+                break;
+            case FUNC_PS1HFLIPPER:
+                opcodeSize = 0;
+                PS1HFlipperUpdate();
+                break;
+            case FUNC_PS1EARTHQUAKE:
+                opcodeSize = 0;
+                PS1EarthquakeUpdate();
+                break;
+            case FUNC_PS1SPIKES:
+                opcodeSize = 0;
+                PS1SpikesUpdate();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
