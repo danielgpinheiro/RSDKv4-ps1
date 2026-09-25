@@ -120,8 +120,9 @@ def walk(code, start, funcs, nvars):
             elif t == 2:
                 ops.append(('int', code[p])); p += 1
             elif t == 3:
-                p += code[p] // 4 + 2
-                ops.append(('str', None))
+                n = code[p]
+                ops.append(('str', ''.join(chr((code[p + 1 + c // 4] >> (24 - 8 * (c % 4))) & 0xFF) for c in range(n))))
+                p += n // 4 + 2
             else:
                 raise ValueError('bad operand type %d at %d' % (t, p - 1))
         out.append((at, name, ops))
