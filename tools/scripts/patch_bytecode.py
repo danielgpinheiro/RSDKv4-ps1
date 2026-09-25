@@ -14,6 +14,8 @@ natively, leaving the same temps and table / local writes behind.
 - Metropolis's Horizontal Door (stage object: its update sub) -> PS1HorizontalDoor / End when exactly HDOOR_SIG.
 - Metropolis's Button Bridge (stage object: its update sub, two switches) -> PS1ButtonBridge / End when the sub and
   its jump-table entries are exactly BUTTONBRIDGE_SIG.
+- Plane switches (GlobalCode objects "Plane Sw V" / "Plane Sw H": their update subs) -> PS1PlaneSwitchV / H / End
+  when exactly PLANESWV_SIG / PLANESWH_SIG.
 - Ring (GlobalCode object "Ring": its update sub, ~21 VM instructions a frame per ring) -> PS1Ring / End, only
   when the sub is exactly RING_SIG (the instructions RSDKv4/Script.cpp PS1RingUpdate transcribes, constants
   included).
@@ -659,6 +661,65 @@ BUTTONBRIDGE_SIG = [
 ]
 
 
+PLANESWV_SIG = [
+    'ForEachActive 0 256 ARRAYPOS6',
+    'CheckEqual OBJECTVALUE6 0',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTGRAVITY[1,1,6] 0',
+    'Or TEMP0 CHECKRESULT',
+    'IfEqual 2 TEMP0 1',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -12 OBJECTVALUE0 12 OBJECTVALUE1 ARRAYPOS6 0 0 0 0',
+    'IfEqual 4 CHECKRESULT 1',
+    'IfGreater 6 OBJECTXVEL[1,1,6] 0',
+    'GetBit TEMP0 OBJECTPROPERTYVALUE 6',
+    'IfEqual 8 TEMP0 0',
+    'Equal OBJECTCOLLISIONPLANE[1,1,6] OBJECTVALUE3',
+    'endif',
+    'Equal OBJECTVALUE18[1,1,6] OBJECTVALUE5',
+    'else',
+    'GetBit TEMP0 OBJECTPROPERTYVALUE 6',
+    'IfEqual 10 TEMP0 0',
+    'Equal OBJECTCOLLISIONPLANE[1,1,6] OBJECTVALUE2',
+    'endif',
+    'Equal OBJECTVALUE18[1,1,6] OBJECTVALUE4',
+    'endif',
+    'endif',
+    'endif',
+    'next',
+    'End',
+]
+
+PLANESWH_SIG = [
+    'ForEachActive 0 256 ARRAYPOS6',
+    'CheckEqual OBJECTVALUE6 0',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTGRAVITY[1,1,6] 0',
+    'Or TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTSTATE[1,1,6] 24',
+    'Or TEMP0 CHECKRESULT',
+    'IfEqual 2 TEMP0 1',
+    'BoxCollisionTest 0 OBJECTENTITYPOS OBJECTVALUE0 -12 OBJECTVALUE1 12 ARRAYPOS6 0 0 0 0',
+    'IfEqual 4 CHECKRESULT 1',
+    'IfGreater 6 OBJECTYVEL[1,1,6] 0',
+    'GetBit TEMP0 OBJECTPROPERTYVALUE 6',
+    'IfEqual 8 TEMP0 0',
+    'Equal OBJECTCOLLISIONPLANE[1,1,6] OBJECTVALUE3',
+    'endif',
+    'Equal OBJECTVALUE18[1,1,6] OBJECTVALUE5',
+    'else',
+    'GetBit TEMP0 OBJECTPROPERTYVALUE 6',
+    'IfEqual 10 TEMP0 0',
+    'Equal OBJECTCOLLISIONPLANE[1,1,6] OBJECTVALUE2',
+    'endif',
+    'Equal OBJECTVALUE18[1,1,6] OBJECTVALUE4',
+    'endif',
+    'endif',
+    'endif',
+    'next',
+    'End',
+]
+
+
 def patch_global_sub(bcdir, obj_name, sub, sig, op_name):
     """GlobalCode object `obj_name`'s sub `sub` (0 update, 1 draw) -> op / End when it is exactly `sig`."""
     names, vars_ = bs.tables(3)
@@ -748,7 +809,9 @@ def main():
                      ('losering', lambda d: patch_global_sub(d, 'Lose Ring', 0, LOSERING_SIG, 'PS1LoseRing')),
                      ('hdoor', lambda d: patch_stage_sub(d, 'Horizontal Door', 0, HDOOR_SIG, 'PS1HorizontalDoor')),
                      ('buttonbridge', lambda d: patch_stage_sub(d, 'Button Bridge', 0, BUTTONBRIDGE_SIG, 'PS1ButtonBridge',
-                                                                with_jumps=True))):
+                                                                with_jumps=True)),
+                     ('planesw', lambda d: patch_global_sub(d, 'Plane Sw V', 0, PLANESWV_SIG, 'PS1PlaneSwitchV') + ', ' +
+                      patch_global_sub(d, 'Plane Sw H', 0, PLANESWH_SIG, 'PS1PlaneSwitchH'))):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 

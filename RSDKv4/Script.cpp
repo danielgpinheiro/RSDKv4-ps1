@@ -749,6 +749,8 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1LoseRing", 0),
     FunctionInfo("PS1HorizontalDoor", 0),
     FunctionInfo("PS1ButtonBridge", 0),
+    FunctionInfo("PS1PlaneSwitchV", 0),
+    FunctionInfo("PS1PlaneSwitchH", 0),
 #endif
 };
 
@@ -1258,6 +1260,8 @@ enum ScrFunc {
     FUNC_PS1LOSERING,
     FUNC_PS1HORIZONTALDOOR,
     FUNC_PS1BUTTONBRIDGE,
+    FUNC_PS1PLANESWITCHV,
+    FUNC_PS1PLANESWITCHH,
 #endif
     FUNC_MAX_CNT
 };
@@ -3974,6 +3978,52 @@ static void PS1ButtonBridgeUpdate()
     }
 }
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+// The plane switches' update subs (GlobalCode objects "Plane Sw V" / "Plane Sw H": each player passing through sets
+// its collision plane and draw layer by direction), natively: one statement per script instruction, in order; the
+// horizontal one also skips players in state 24 and tests the y velocity. Patched in only when the subs match
+// PLANESWV_SIG / PLANESWH_SIG exactly.
+static void PS1PlaneSwitchUpdate(bool vertical)
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        cr        = me.values[6] == 0;
+        t[0]      = cr;
+        cr        = p.gravity == 0;
+        t[0] |= cr;
+        if (!vertical) {
+            cr = p.state == 24;
+            t[0] |= cr;
+        }
+        if (t[0] == 1) {
+            if (vertical)
+                TouchCollision(&PS1_OBJ(self), -12, me.values[0], 12, me.values[1], &PS1_OBJ(ap[6]), 0, 0, 0, 0);
+            else
+                TouchCollision(&PS1_OBJ(self), me.values[0], -12, me.values[1], 12, &PS1_OBJ(ap[6]), 0, 0, 0, 0);
+            if (cr == 1) {
+                if ((vertical ? p.xvel : p.yvel) > 0) {
+                    t[0] = (me.propertyValue & (1 << 6)) >> 6;
+                    if (t[0] == 0)
+                        p.collisionPlane = me.values[3];
+                    p.values[18] = me.values[5];
+                }
+                else {
+                    t[0] = (me.propertyValue & (1 << 6)) >> 6;
+                    if (t[0] == 0)
+                        p.collisionPlane = me.values[2];
+                    p.values[18] = me.values[4];
+                }
+            }
+        }
+    }
+}
+#endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
 // variables read it. The same value, evaluated where it is read (arrayVal is the operand's, in scope there).
@@ -6096,6 +6146,14 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1BUTTONBRIDGE:
                 opcodeSize = 0;
                 PS1ButtonBridgeUpdate();
+                break;
+            case FUNC_PS1PLANESWITCHV:
+                opcodeSize = 0;
+                PS1PlaneSwitchUpdate(true);
+                break;
+            case FUNC_PS1PLANESWITCHH:
+                opcodeSize = 0;
+                PS1PlaneSwitchUpdate(false);
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
