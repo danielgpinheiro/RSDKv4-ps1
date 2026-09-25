@@ -748,6 +748,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1BridgeDraw", 0),
     FunctionInfo("PS1LoseRing", 0),
     FunctionInfo("PS1HorizontalDoor", 0),
+    FunctionInfo("PS1ButtonBridge", 0),
 #endif
 };
 
@@ -1256,6 +1257,7 @@ enum ScrFunc {
     FUNC_PS1BRIDGEDRAW,
     FUNC_PS1LOSERING,
     FUNC_PS1HORIZONTALDOOR,
+    FUNC_PS1BUTTONBRIDGE,
 #endif
     FUNC_MAX_CNT
 };
@@ -3867,6 +3869,111 @@ static void PS1LoseRingUpdate()
     }
 }
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+// Metropolis's Button Bridge update sub (stage object "Button Bridge", up to 9 on screen), natively: one statement
+// per script instruction, in order; the switch cases as its jump table maps them (state 0 / 1 / 2 / 3; the carry
+// switch on the collision result: 1, and 2 or 3). Patched in only when the sub and its jump-table entries match
+// BUTTONBRIDGE_SIG exactly (tools/scripts/patch_bytecode.py).
+static void PS1ButtonBridgeSlide(int dirSign) // states 1 and 3: dirSign -1 = state 1 (direction 0 moves left)
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    t[0] = me.xpos;
+    t[0] &= -65536;
+    if (me.direction == 0) {
+        me.xpos += dirSign * 131072;
+        me.frame = dirSign < 0 ? me.frame + 1 : me.frame - 1;
+    }
+    else {
+        me.xpos -= dirSign * 131072;
+        me.frame = dirSign < 0 ? me.frame - 1 : me.frame + 1;
+    }
+    me.frame &= 3;
+    me.values[0]--;
+    if (me.values[0] <= 0) {
+        if (dirSign < 0) { // state 1
+            if (me.propertyValue == 0)
+                me.state = 2;
+            else {
+                me.state     = 0;
+                me.values[0] = 64;
+            }
+        }
+        else { // state 3
+            if (me.propertyValue == 0) {
+                me.state     = 0;
+                me.values[0] = 64;
+            }
+            else
+                me.state = 2;
+        }
+    }
+    t[1] = me.xpos;
+    t[1] &= -65536;
+    t[1] -= t[0];
+    t[2]    = me.xpos;
+    me.xpos = t[0];
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6] = players.entityRefs[loop];
+        BoxCollision(&PS1_OBJ(self), -64, -12, 64, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        switch (cr) {
+            case 1: PS1_OBJ(ap[6]).xpos += t[1]; break;
+            case 2:
+            case 3:
+                if (PS1_OBJ(ap[6]).state == 24) {
+                    PS1_OBJ(ap[6]).values[1] = 0;
+                    PS1_OBJ(ap[6]).animation = globalVariables[86];
+                    PS1_OBJ(ap[6]).state     = 22;
+                }
+                break;
+            default: break;
+        }
+    }
+    me.xpos = t[2];
+}
+static void PS1ButtonBridgeUpdate()
+{
+    int *ap  = scriptEng.arrayPosition;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    TypeGroupList &players = objectTypeGroupList[256];
+    switch (me.state) {
+        case 0:
+            if (PS1_OBJ(self + 1).values[0] == 1) {
+                if (me.propertyValue == 0)
+                    me.state = 1;
+                else
+                    me.state = 3;
+            }
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                BoxCollision(&PS1_OBJ(self), -64, -12, 64, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            }
+            break;
+        case 1: PS1ButtonBridgeSlide(-1); break;
+        case 2:
+            me.values[0]++;
+            if (me.values[0] == 180) {
+                me.values[0] = 0;
+                if (me.propertyValue == 0)
+                    me.state = 3;
+                else
+                    me.state = 1;
+                me.values[0] = 64;
+            }
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                BoxCollision(&PS1_OBJ(self), -64, -12, 64, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            }
+            break;
+        case 3: PS1ButtonBridgeSlide(1); break;
+        default: break;
+    }
+}
+#endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
 // variables read it. The same value, evaluated where it is read (arrayVal is the operand's, in scope there).
@@ -5985,6 +6092,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1LOSERING:
                 opcodeSize = 0;
                 PS1LoseRingUpdate();
+                break;
+            case FUNC_PS1BUTTONBRIDGE:
+                opcodeSize = 0;
+                PS1ButtonBridgeUpdate();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:

@@ -12,6 +12,8 @@ natively, leaving the same temps and table / local writes behind.
 - Lose Ring (GlobalCode object "Lose Ring": its update sub, the rings scattered on a hit) -> PS1LoseRing / End
   when it is exactly LOSERING_SIG.
 - Metropolis's Horizontal Door (stage object: its update sub) -> PS1HorizontalDoor / End when exactly HDOOR_SIG.
+- Metropolis's Button Bridge (stage object: its update sub, two switches) -> PS1ButtonBridge / End when the sub and
+  its jump-table entries are exactly BUTTONBRIDGE_SIG.
 - Ring (GlobalCode object "Ring": its update sub, ~21 VM instructions a frame per ring) -> PS1Ring / End, only
   when the sub is exactly RING_SIG (the instructions RSDKv4/Script.cpp PS1RingUpdate transcribes, constants
   included).
@@ -133,6 +135,42 @@ def listing(ins):
                 parts.append(str(o[1]))
         out.append((n + ' ' + ' '.join(parts)).strip())
     return out
+
+
+JUMP_OPS = ('IfEqual', 'IfGreater', 'IfGreaterOrEqual', 'IfLower', 'IfLowerOrEqual', 'IfNotEqual', 'WEqual', 'WGreater',
+            'WGreaterOrEqual', 'WLower', 'WLowerOrEqual', 'WNotEqual', 'switch', 'ForEachActive', 'ForEachAll')
+
+
+def jump_listing(ins, jt, start, jstart):
+    """The jump-table entries a sub's jumps use (If / While: else / end; switch: low, high, default, end, cases;
+    ForEach: its two), code offsets as instruction indices ('@k'), as extra listing lines."""
+    idx = {at - start: k for k, (at, _, _) in enumerate(ins)}
+    out = []
+    for k, (_, n, ops) in enumerate(ins):
+        if n not in JUMP_OPS:
+            continue
+        j = jstart + ops[0][1]
+        if n == 'switch':
+            lo, hi = jt[j], jt[j + 1]
+            ents = ['%d' % lo, '%d' % hi] + ['@%s' % idx.get(o, '?%d' % o) for o in jt[j + 2:j + 4] + jt[j + 4:j + 5 + hi - lo]]
+        else:
+            ents = ['@%s' % idx.get(o, '?%d' % o) for o in jt[j:j + 2]]
+        out.append('JT %d %s %s' % (k, n, ' '.join(ents)))
+    return out
+
+
+def sub_listing(path, obj, sub, names, vars_):
+    """(full code, own code, base, pointer, listing with jump-table lines) of object `obj`'s sub in a stage file."""
+    code, jt, subs, jsubs, _, _ = bs.full_code(path)
+    own = bs.load(path)
+    base = len(code) - len(own[0])
+    jbase = 0
+    if base:
+        jbase = len(bs.load(os.path.join(os.path.dirname(path), 'GlobalCode.bin'))[1])
+        jt = bs.load(os.path.join(os.path.dirname(path), 'GlobalCode.bin'))[1] + jt
+    ptr, jptr = subs[obj][sub], jsubs[obj][sub]
+    ins = instructions(code, ptr, names, vars_)
+    return code, base, ptr, listing(ins) + jump_listing(ins, jt, ptr, jptr)
 
 
 RING_SIG = [
@@ -306,8 +344,9 @@ BRIDGE_SIG = [
 ]
 
 
-def patch_stage_sub(bcdir, obj_name, sub, sig, op_name):
-    """Every stage file whose object `obj_name` has sub `sub` (0 update, 1 draw) equal to `sig` -> op / End."""
+def patch_stage_sub(bcdir, obj_name, sub, sig, op_name, with_jumps=False):
+    """Every stage file whose object `obj_name` has sub `sub` (0 update, 1 draw) equal to `sig` -> op / End
+    (with_jumps: the signature also holds the sub's jump-table entries, jump_listing)."""
     names, vars_ = bs.tables(3)
     fn = [n for n, _ in names]
     op, end = fn.index(op_name), fn.index('End')
@@ -336,7 +375,9 @@ def patch_stage_sub(bcdir, obj_name, sub, sig, op_name):
         if full[ptr] == op:
             already.append(folder)
             continue
-        if listing(instructions(full, ptr, names, vars_)) != sig:
+        got = sub_listing(path, objs.index(obj_name), sub, names, vars_)[3] if with_jumps else \
+            listing(instructions(full, ptr, names, vars_))
+        if got != sig:
             continue
         own[ptr - base:ptr - base + 2] = [op, end]
         open(path, 'wb').write(encode(own) + rest)
@@ -489,6 +530,135 @@ HDOOR_SIG = [
 ]
 
 
+BUTTONBRIDGE_SIG = [
+    'switch 0 OBJECTSTATE',
+    'IfEqual 8 OBJECTVALUE0[2,0,1] 1',
+    'IfEqual 10 OBJECTPROPERTYVALUE 0',
+    'Equal OBJECTSTATE 1',
+    'else',
+    'Equal OBJECTSTATE 3',
+    'endif',
+    'endif',
+    'ForEachActive 12 256 ARRAYPOS6',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -64 -12 64 8 ARRAYPOS6 65536 65536 65536 65536',
+    'next',
+    'break',
+    'Equal TEMP0 OBJECTXPOS',
+    'And TEMP0 -65536',
+    'IfEqual 14 OBJECTDIRECTION 0',
+    'Sub OBJECTXPOS 131072',
+    'Inc OBJECTFRAME',
+    'else',
+    'Add OBJECTXPOS 131072',
+    'Dec OBJECTFRAME',
+    'endif',
+    'And OBJECTFRAME 3',
+    'Dec OBJECTVALUE0',
+    'IfLowerOrEqual 16 OBJECTVALUE0 0',
+    'IfEqual 18 OBJECTPROPERTYVALUE 0',
+    'Equal OBJECTSTATE 2',
+    'else',
+    'Equal OBJECTSTATE 0',
+    'Equal OBJECTVALUE0 64',
+    'endif',
+    'endif',
+    'Equal TEMP1 OBJECTXPOS',
+    'And TEMP1 -65536',
+    'Sub TEMP1 TEMP0',
+    'Equal TEMP2 OBJECTXPOS',
+    'Equal OBJECTXPOS TEMP0',
+    'ForEachActive 20 256 ARRAYPOS6',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -64 -12 64 8 ARRAYPOS6 65536 65536 65536 65536',
+    'switch 22 CHECKRESULT',
+    'Add OBJECTXPOS[1,1,6] TEMP1',
+    'break',
+    'IfEqual 29 OBJECTSTATE[1,1,6] 24',
+    'Equal OBJECTVALUE1[1,1,6] 0',
+    'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,86]',
+    'Equal OBJECTSTATE[1,1,6] 22',
+    'endif',
+    'break',
+    'endswitch',
+    'next',
+    'Equal OBJECTXPOS TEMP2',
+    'break',
+    'Inc OBJECTVALUE0',
+    'IfEqual 31 OBJECTVALUE0 180',
+    'Equal OBJECTVALUE0 0',
+    'IfEqual 33 OBJECTPROPERTYVALUE 0',
+    'Equal OBJECTSTATE 3',
+    'else',
+    'Equal OBJECTSTATE 1',
+    'endif',
+    'Equal OBJECTVALUE0 64',
+    'endif',
+    'ForEachActive 35 256 ARRAYPOS6',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -64 -12 64 8 ARRAYPOS6 65536 65536 65536 65536',
+    'next',
+    'break',
+    'Equal TEMP0 OBJECTXPOS',
+    'And TEMP0 -65536',
+    'IfEqual 37 OBJECTDIRECTION 0',
+    'Add OBJECTXPOS 131072',
+    'Dec OBJECTFRAME',
+    'else',
+    'Sub OBJECTXPOS 131072',
+    'Inc OBJECTFRAME',
+    'endif',
+    'And OBJECTFRAME 3',
+    'Dec OBJECTVALUE0',
+    'IfLowerOrEqual 39 OBJECTVALUE0 0',
+    'IfEqual 41 OBJECTPROPERTYVALUE 0',
+    'Equal OBJECTSTATE 0',
+    'Equal OBJECTVALUE0 64',
+    'else',
+    'Equal OBJECTSTATE 2',
+    'endif',
+    'endif',
+    'Equal TEMP1 OBJECTXPOS',
+    'And TEMP1 -65536',
+    'Sub TEMP1 TEMP0',
+    'Equal TEMP2 OBJECTXPOS',
+    'Equal OBJECTXPOS TEMP0',
+    'ForEachActive 43 256 ARRAYPOS6',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -64 -12 64 8 ARRAYPOS6 65536 65536 65536 65536',
+    'switch 45 CHECKRESULT',
+    'Add OBJECTXPOS[1,1,6] TEMP1',
+    'break',
+    'IfEqual 52 OBJECTSTATE[1,1,6] 24',
+    'Equal OBJECTVALUE1[1,1,6] 0',
+    'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,86]',
+    'Equal OBJECTSTATE[1,1,6] 22',
+    'endif',
+    'break',
+    'endswitch',
+    'next',
+    'Equal OBJECTXPOS TEMP2',
+    'break',
+    'endswitch',
+    'End',
+    'JT 0 switch 0 3 @104 @105 @1 @12 @51 @65',
+    'JT 1 IfEqual @7 @8',
+    'JT 2 IfEqual @5 @7',
+    'JT 8 ForEachActive @8 @11',
+    'JT 14 IfEqual @18 @21',
+    'JT 23 IfLowerOrEqual @30 @31',
+    'JT 24 IfEqual @27 @30',
+    'JT 36 ForEachActive @36 @49',
+    'JT 38 switch 1 3 @47 @48 @39 @41 @41',
+    'JT 41 IfEqual @45 @46',
+    'JT 52 IfEqual @60 @61',
+    'JT 54 IfEqual @57 @59',
+    'JT 61 ForEachActive @61 @64',
+    'JT 67 IfEqual @71 @74',
+    'JT 76 IfLowerOrEqual @83 @84',
+    'JT 77 IfEqual @81 @83',
+    'JT 89 ForEachActive @89 @102',
+    'JT 91 switch 1 3 @100 @101 @92 @94 @94',
+    'JT 94 IfEqual @98 @99',
+]
+
+
 def patch_global_sub(bcdir, obj_name, sub, sig, op_name):
     """GlobalCode object `obj_name`'s sub `sub` (0 update, 1 draw) -> op / End when it is exactly `sig`."""
     names, vars_ = bs.tables(3)
@@ -576,7 +746,9 @@ def main():
     for name, fn in (('oscillate', patch_oscillate), ('ring', patch_ring),
                      ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
                      ('losering', lambda d: patch_global_sub(d, 'Lose Ring', 0, LOSERING_SIG, 'PS1LoseRing')),
-                     ('hdoor', lambda d: patch_stage_sub(d, 'Horizontal Door', 0, HDOOR_SIG, 'PS1HorizontalDoor'))):
+                     ('hdoor', lambda d: patch_stage_sub(d, 'Horizontal Door', 0, HDOOR_SIG, 'PS1HorizontalDoor')),
+                     ('buttonbridge', lambda d: patch_stage_sub(d, 'Button Bridge', 0, BUTTONBRIDGE_SIG, 'PS1ButtonBridge',
+                                                                with_jumps=True))):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 

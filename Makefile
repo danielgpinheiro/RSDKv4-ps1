@@ -74,6 +74,13 @@ CPPFLAGS += -DPS1_MEMCARD_TEST=1
 SRCS += ps1/memcard_test.cpp
 endif
 
+# Build-flag stamp: every object depends on build/flags.txt, rewritten only when PROFILE / BOOT / BOOT_ID /
+# BOOT_PLAYER change, so switching them rebuilds everything (make only sees source timestamps otherwise: a
+# PROFILE=1 build once kept a non-profile Object.o).
+BUILD_FLAGS := PROFILE=$(PROFILE) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER)
+$(shell mkdir -p build; echo '$(BUILD_FLAGS)' | cmp -s - build/flags.txt || echo '$(BUILD_FLAGS)' > build/flags.txt)
+EXTRA_DEPS += build/flags.txt
+
 # C++20 is the minimum required by psyqo.
 CXXFLAGS = -std=c++20
 
@@ -103,6 +110,8 @@ ps1/mdec.o: CPPFLAGS += -O2
 ps1/gpu_chain.o: CPPFLAGS += -O2
 # The script VM and the object / collision loops are the CPU hot path (as in the Sonic CD port).
 RSDKv4/Script.o RSDKv4/Object.o RSDKv4/Collision.o: CPPFLAGS += -O2
+
+$(OBJS): build/flags.txt
 
 # Cancel make's built-in `%: %.o` link rule: the extensionless libc shim headers
 # (ps1/libc/string, vector, ...) listed in .dep files must not be rebuilt from `string.o`.
