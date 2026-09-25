@@ -3538,8 +3538,14 @@ void LoadBytecode(int stageListID, int scriptID)
     }
 }
 
+#if RETRO_PLATFORM == RETRO_PS1
+static byte s_ps1OpSize[FUNC_MAX_CNT]; // the operand count of each opcode (functions[].opcodeSize)
+#endif
 void ClearScriptData()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    for (int f = 0; f < FUNC_MAX_CNT; ++f) s_ps1OpSize[f] = functions[f].opcodeSize;
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
     memset(&scriptCode, 0, sizeof(scriptCode));
     s_ps1ScriptBigCount = 0;
@@ -3625,13 +3631,19 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
     while (running) {
         int opcode           = PS1_RAW(scriptCodePtr++);
 #if RETRO_PLATFORM == RETRO_PS1
+#if PS1_PROFILE
         ++g_ps1VmOps;
+#endif
         if ((uint)opcode >= FUNC_MAX_CNT) { // corrupt / desynced code: stop this sub instead of jumping wild
             g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
             break;
         }
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+        int opcodeSize       = s_ps1OpSize[opcode]; // functions[opcode].opcodeSize as a byte table (ClearScriptData)
+#else
         int opcodeSize       = functions[opcode].opcodeSize;
+#endif
         int scriptCodeOffset = scriptCodePtr;
 
         scriptText[0] = '\0';

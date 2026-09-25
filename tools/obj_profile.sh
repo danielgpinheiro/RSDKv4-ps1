@@ -2,6 +2,7 @@
 # Per-object-type CPU profile of a `make BOOT=<folder>` build (headless): holds Right from frame 240 and dumps the
 # last frame's per-type ticks (root counter 2, sysclock/8 = 0.24 us; Object.cpp g_ps1TypeTicks / DrawCalls) at
 # frames F (default 420 600), then prints the top types by name (GameConfig + StageConfig order).
+# Build with `make BOOT=<folder> PROFILE=1` (VM instruction counts; without it the ops column is 0).
 # Usage: tools/obj_profile.sh FOLDER [OUT_PREFIX] [F1 F2]
 cd "$(dirname "$0")/.."
 STAGE=$1; OUT=${2:-/tmp/rsdkv4_prof}; F1=${3:-420}; F2=${4:-600}
