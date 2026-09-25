@@ -1276,7 +1276,9 @@ int jumpTableStackPos = 0;
 int functionStackPos  = 0;
 int foreachStackPos   = 0;
 
+#if !(RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)) // PS1: in the scratchpad (Script.hpp)
 ScriptEngine scriptEng = ScriptEngine();
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
 char scriptText[PS1_SCRIPTTEXT_SIZE];
 #define PS1_TXT(c) scriptText[(uint)(c) < PS1_SCRIPTTEXT_SIZE - 1 ? (c) : PS1_SCRIPTTEXT_SIZE - 1]
@@ -3602,6 +3604,11 @@ void ClearScriptData()
     SetObjectTypeName("Blank Object", OBJ_TYPE_BLANKOBJECT);
 }
 
+#if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
+// PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
+// variables read it. The same value, evaluated where it is read (arrayVal is the operand's, in scope there).
+#define inputCheck (!(forceUseScripts || Engine.usingOrigins) || arrayVal <= 1)
+#endif
 void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 {
     bool running      = true;
@@ -3657,7 +3664,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     default: break;
                 }
 
-#if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE
+#if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM != RETRO_PS1 // PS1: inputCheck is evaluated where it is read
                 bool inputCheck = true; // Default to true for mobile bytecode
                 // If we're using the scripts or an Origins datafile, check the array value
                 if (forceUseScripts || Engine.usingOrigins)
@@ -6041,7 +6048,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     default: break;
                 }
 
-#if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE
+#if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM != RETRO_PS1 // PS1: inputCheck is evaluated where it is read
                 bool inputCheck = true; // Default to true for mobile bytecode
                 // If we're using the scripts or an Origins datafile, check the array value
                 if (forceUseScripts || Engine.usingOrigins)

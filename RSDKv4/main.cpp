@@ -80,6 +80,7 @@ class RSDKv4PS1App final : public psyqo::Application {
         m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;
         PS1ProfTicksInit(); // per-object-type CPU profile (Object.cpp g_ps1TypeTicks)
+        memset(&scriptEng, 0, sizeof(scriptEng)); // the VM state in the scratchpad (Script.hpp)
 #ifdef PS1_BOOT_FOLDER
         StrCopy(Engine.startSceneFolder, g_ps1BootBuild);
         StrCopy(Engine.startSceneID, PS1_BOOT_ID);

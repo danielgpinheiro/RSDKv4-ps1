@@ -92,7 +92,16 @@ extern int jumpTableStackPos;
 extern int functionStackPos;
 extern int foreachStackPos;
 
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)
+// PS1: the VM's hot state (operands, temps, array positions, check result: 136 B) lives in the 1 KB scratchpad
+// (0x1F800000, single-cycle; RAM loads cost ~5-7 cycles without a data cache), at its end: 0x1F800378-0x1F8003FF.
+// The Sonic CD floor renderer's vertex rows use the first 960 B (ps1/render.cpp): Sonic 2 has no 3D floor layer.
+// Zeroed at boot (RSDKv4/main.cpp).
+#define PS1_SCRATCH_SCRIPTENG (0x1F800400 - ((sizeof(ScriptEngine) + 7) & ~7))
+#define scriptEng             (*reinterpret_cast<ScriptEngine *>(PS1_SCRATCH_SCRIPTENG))
+#else
 extern ScriptEngine scriptEng;
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
 #define PS1_SCRIPTTEXT_SIZE (0x100) // Sonic 2's longest string operand: 36 chars
 extern char scriptText[PS1_SCRIPTTEXT_SIZE];
