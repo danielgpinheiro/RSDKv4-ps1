@@ -31,3 +31,7 @@ int  PS1VideoDecodeTo(uint32_t t0, int x, int y); // full-screen STR2: 1 = a new
 // Timing helpers (root counter 1 = hblanks, 16-bit wrap ~4 s).
 uint32_t PS1Hblanks();
 uint32_t PS1HblanksSince(uint32_t t0);
+// Root counter 2 at sysclock/8 (4.23 MHz, 0.24 us; wraps every 15.5 ms): fine-grained profiling ticks.
+// psyqo uses counter 1 (hblanks) only. PS1ProfTicksInit() in start().
+void PS1ProfTicksInit();
+uint32_t PS1ProfTicks();

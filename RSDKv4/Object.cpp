@@ -118,8 +118,24 @@ void ProcessStartupObjects()
     curObjectType = 0;
 }
 
+#if RETRO_PLATFORM == RETRO_PS1
+#include "../ps1/video.hh"
+// Per-object-type CPU profile of the last frame (root counter 2 ticks, 0.24 us; GDB + tools/obj_profile.py):
+// update subs (ProcessObjects) and draw subs (DrawObjectList), with call counts.
+uint32_t g_ps1TypeTicks[OBJECT_COUNT], g_ps1TypeCalls[OBJECT_COUNT];
+uint32_t g_ps1TypeDrawTicks[OBJECT_COUNT], g_ps1TypeDrawCalls[OBJECT_COUNT];
+uint32_t g_ps1TypeOps[OBJECT_COUNT]; // VM instructions of the update subs, last frame
+extern uint32_t g_ps1VmOps;
+volatile uint32_t g_ps1ObjSlotsWalked = 0;
+#endif
+
 void ProcessObjects()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    memset(g_ps1TypeTicks, 0, sizeof(g_ps1TypeTicks));
+    memset(g_ps1TypeCalls, 0, sizeof(g_ps1TypeCalls));
+    memset(g_ps1TypeOps, 0, sizeof(g_ps1TypeOps));
+#endif
     for (int i = 0; i < DRAWLAYER_COUNT; ++i) drawListEntries[i].listSize = 0;
 
     for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
@@ -162,8 +178,18 @@ void ProcessObjects()
 
         if (processObjectFlag[objectEntityPos] && entity->type > OBJ_TYPE_BLANKOBJECT) {
             ObjectScript *scriptInfo = &objectScriptList[entity->type];
+#if RETRO_PLATFORM == RETRO_PS1
+            int ps1Type    = entity->type;
+            uint32_t ps1Op0 = g_ps1VmOps;
+            uint32_t ps1T0 = PS1ProfTicks();
+#endif
             if (scriptCode[scriptInfo->eventUpdate.scriptCodePtr] > 0)
                 ProcessScript(scriptInfo->eventUpdate.scriptCodePtr, scriptInfo->eventUpdate.jumpTablePtr, EVENT_MAIN);
+#if RETRO_PLATFORM == RETRO_PS1
+            g_ps1TypeTicks[ps1Type] += (PS1ProfTicks() - ps1T0) & 0xFFFF;
+            g_ps1TypeCalls[ps1Type]++;
+            g_ps1TypeOps[ps1Type] += g_ps1VmOps - ps1Op0;
+#endif
 
             if (entity->drawOrder < DRAWLAYER_COUNT)
                 drawListEntries[entity->drawOrder].entityRefs[drawListEntries[entity->drawOrder].listSize++] = objectEntityPos;

@@ -79,6 +79,7 @@ class RSDKv4PS1App final : public psyqo::Application {
         g_ps1CDRom = &m_cdrom;
         m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;
+        PS1ProfTicksInit(); // per-object-type CPU profile (Object.cpp g_ps1TypeTicks)
 #ifdef PS1_BOOT_FOLDER
         StrCopy(Engine.startSceneFolder, g_ps1BootBuild);
         StrCopy(Engine.startSceneID, PS1_BOOT_ID);

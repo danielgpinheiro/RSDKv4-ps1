@@ -10,6 +10,7 @@ volatile uint32_t g_ps1ScriptDivZero   = 0; // Div / Mod / Rand by 0 (result 0 i
 volatile uint32_t g_ps1ScriptBadOpcode = 0; // opcode out of range: sub stopped
 volatile uint32_t g_ps1ScriptBadPtr    = 0; // sub/function pointers past the PS1 arrays (not the PC "no sub" sentinels)
 volatile uint32_t g_ps1ScriptBigCount  = 0; // big (non-int16) script values of the loaded code
+uint32_t g_ps1VmOps = 0; // VM instructions executed (profile: Object.cpp per type)
 volatile uint32_t g_ps1Scene3DOverflow = 0; // Scene3D index / count past the PS1-sized buffers (clamped)
 volatile int32_t g_ps1Scene3DMaxVertex = 0; // largest vertex / face index the scripts used
 volatile int32_t g_ps1Scene3DMaxFace   = 0;
@@ -20,38 +21,48 @@ volatile uint32_t g_ps1Prof3DTransformHbl = 0, g_ps1Prof3DSortHbl = 0, g_ps1Prof
 // new stage after GlobalCode) first drops the entries at or past it. The scripts also write into the code
 // area at runtime (object-type locals, SetTableValue tables: <= ~1,030 slots per stage): a slot that must hold a
 // big value is inserted once (sorted) and stays in the table, later writes update it in place.
+// Lookups go through a bucket index: s_ps1BigBucket[b] = the first entry at or past code slot b * 128 (Sonic 2 has
+// ~1 big value per 31 slots, so a lookup is ~2 compares instead of a 12-step binary search: the oscillation
+// table update alone went from ~107 hblanks a frame). The index is rebuilt lazily after the table changes.
+// A terminator entry (pos INT_MAX) past the last one ends every scan.
 struct PS1ScriptBig {
     int pos;
     int value;
 };
-static PS1ScriptBig s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT];
+#define PS1_BIGBUCKET_SHIFT (7)
+#define PS1_BIGBUCKET_COUNT ((SCRIPTCODE_COUNT >> PS1_BIGBUCKET_SHIFT) + 1)
+static PS1ScriptBig s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1];
 static int s_ps1ScriptBigCount = 0;
+static ushort s_ps1BigBucket[PS1_BIGBUCKET_COUNT];
+static bool s_ps1BigBucketDirty = true;
+static void PS1ScriptBigChanged()
+{
+    s_ps1ScriptBig[s_ps1ScriptBigCount].pos = 0x7FFFFFFF;
+    s_ps1BigBucketDirty                     = true;
+    g_ps1ScriptBigCount                     = s_ps1ScriptBigCount;
+}
+static void PS1ScriptBigIndex()
+{
+    int k = 0;
+    for (int b = 0; b < PS1_BIGBUCKET_COUNT; ++b) {
+        int start = b << PS1_BIGBUCKET_SHIFT;
+        while (s_ps1ScriptBig[k].pos < start) ++k; // the terminator stops it
+        s_ps1BigBucket[b] = k;
+    }
+    s_ps1BigBucketDirty = false;
+}
+static inline int PS1ScriptBigFind(int pos) // index of the first entry with .pos >= pos
+{
+    if (s_ps1BigBucketDirty)
+        PS1ScriptBigIndex();
+    int k = s_ps1BigBucket[pos >> PS1_BIGBUCKET_SHIFT];
+    while (s_ps1ScriptBig[k].pos < pos) ++k;
+    return k;
+}
 int PS1ScriptBigValue(int pos)
 {
-    int lo = 0, hi = s_ps1ScriptBigCount - 1;
-    while (lo <= hi) {
-        int mid = (lo + hi) >> 1;
-        int p   = s_ps1ScriptBig[mid].pos;
-        if (p == pos)
-            return s_ps1ScriptBig[mid].value;
-        if (p < pos)
-            lo = mid + 1;
-        else
-            hi = mid - 1;
-    }
-    return PS1_SCRIPT_BIG; // never stored as big: the literal value
-}
-static int PS1ScriptBigFind(int pos) // index of the first entry with .pos >= pos
-{
-    int lo = 0, hi = s_ps1ScriptBigCount;
-    while (lo < hi) {
-        int mid = (lo + hi) >> 1;
-        if (s_ps1ScriptBig[mid].pos < pos)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
-    return lo;
+    int k = PS1ScriptBigFind(pos);
+    return s_ps1ScriptBig[k].pos == pos ? s_ps1ScriptBig[k].value : PS1_SCRIPT_BIG; // not stored: the literal value
 }
 __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
 {
@@ -68,20 +79,23 @@ __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
         }
         int k = PS1ScriptBigFind(pos);
         memmove(&s_ps1ScriptBig[k + 1], &s_ps1ScriptBig[k], (s_ps1ScriptBigCount - k) * sizeof(PS1ScriptBig));
-        s_ps1ScriptBig[k].pos = pos;
+        s_ps1ScriptBig[k].pos   = pos;
         s_ps1ScriptBig[k].value = value;
         ++s_ps1ScriptBigCount;
-        g_ps1ScriptBigCount  = s_ps1ScriptBigCount;
+        PS1ScriptBigChanged();
         scriptCode.slot[pos] = PS1_SCRIPT_BIG;
         return;
     }
     int k = PS1ScriptBigFind(pos);
-    if (k < s_ps1ScriptBigCount && s_ps1ScriptBig[k].pos == pos)
+    if (s_ps1ScriptBig[k].pos == pos)
         s_ps1ScriptBig[k].value = value;
 }
 static bool PS1ScriptStore(int pos, int value)
 {
-    while (s_ps1ScriptBigCount && s_ps1ScriptBig[s_ps1ScriptBigCount - 1].pos >= pos) --s_ps1ScriptBigCount;
+    if (s_ps1ScriptBigCount && s_ps1ScriptBig[s_ps1ScriptBigCount - 1].pos >= pos) {
+        while (s_ps1ScriptBigCount && s_ps1ScriptBig[s_ps1ScriptBigCount - 1].pos >= pos) --s_ps1ScriptBigCount;
+        PS1ScriptBigChanged();
+    }
     if (value > PS1_SCRIPT_BIG && value <= 0x7FFF) {
         scriptCode.slot[pos] = (short)value;
         return true;
@@ -91,7 +105,7 @@ static bool PS1ScriptStore(int pos, int value)
     scriptCode.slot[pos]                         = PS1_SCRIPT_BIG;
     s_ps1ScriptBig[s_ps1ScriptBigCount].pos      = pos;
     s_ps1ScriptBig[s_ps1ScriptBigCount++].value = value;
-    g_ps1ScriptBigCount                          = s_ps1ScriptBigCount;
+    PS1ScriptBigChanged();
     return true;
 }
 
@@ -726,6 +740,11 @@ const FunctionInfo functions[] = {
     FunctionInfo("IsInputSlotAssigned", 1),
     FunctionInfo("ResetInputSlotAssignments", 0),
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1 extensions, only in bytecode rewritten by tools/scripts/patch_bytecode.py (docs/30): hot script loops run
+    // natively, with every side effect of the script (temps, table / local writes).
+    FunctionInfo("PS1Oscillate", 4),
+#endif
 };
 
 #if RETRO_USE_COMPILER
@@ -1226,6 +1245,9 @@ enum ScrFunc {
     FUNC_ASSIGNINPUTSLOTTODEVICE,
     FUNC_ISSLOTASSIGNED,
     FUNC_RESETINPUTSLOTASSIGNMENTS,
+#endif
+#if RETRO_PLATFORM == RETRO_PS1
+    FUNC_PS1OSCILLATE,
 #endif
     FUNC_MAX_CNT
 };
@@ -3519,7 +3541,7 @@ void ClearScriptData()
 #if RETRO_PLATFORM == RETRO_PS1
     memset(&scriptCode, 0, sizeof(scriptCode));
     s_ps1ScriptBigCount = 0;
-    g_ps1ScriptBigCount = 0;
+    PS1ScriptBigChanged();
 #else
     memset(scriptCode, 0, sizeof(scriptCode));
 #endif
@@ -3591,6 +3613,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
     while (running) {
         int opcode           = scriptCode[scriptCodePtr++];
 #if RETRO_PLATFORM == RETRO_PS1
+        ++g_ps1VmOps;
         if ((uint)opcode >= FUNC_MAX_CNT) { // corrupt / desynced code: stop this sub instead of jumping wild
             g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
             break;
@@ -5666,6 +5689,58 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 AddTextMenuEntry(menu, Engine.gameVersion);
                 break;
             }
+#if RETRO_PLATFORM == RETRO_PS1
+            case FUNC_PS1OSCILLATE: {
+                // Sonic 2's Stage Setup oscillators (GlobalCode function 71, ~390 VM instructions a frame): for
+                // each of `count` oscillators, a velocity / position pair in `state` (a script table) moves towards
+                // a limit from `params` and flips direction (a bit of the local `bits`). The same loop natively:
+                //   t0 = t1 = 0; while (t0 < n) { t4 = P[t1]; t6 = S[t1]; ++t1; t5 = P[t1]; t7 = S[t1]; --t1;
+                //   t2 = bit t0 of L; if (!t2) { t7 += t4; t6 += t7; if (t6 >= t5) set bit } else { t7 -= t4;
+                //   t6 += t7; if (t6 < t5) clear bit } S[t1++] = t6; S[t1++] = t7; ++t0 }
+                // with GetTableValue / SetTableValue's bounds (an index past the table leaves / writes nothing).
+                opcodeSize = 0;
+                int state = scriptEng.operands[0], params = scriptEng.operands[1], bits = scriptEng.operands[2], n = scriptEng.operands[3];
+                int *t     = scriptEng.temp;
+                auto get   = [](int table, int index, int &dst) {
+                    if (index >= 0 && index < scriptCode[table])
+                        dst = scriptCode[table + index + 1];
+                };
+                auto set = [](int table, int index, int value) {
+                    if (index >= 0 && index < scriptCode[table])
+                        PS1ScriptWrite(table + index + 1, value);
+                };
+                t[0] = 0;
+                t[1] = 0;
+                while (t[0] < n) {
+                    get(params, t[1], t[4]);
+                    get(state, t[1], t[6]);
+                    ++t[1];
+                    get(params, t[1], t[5]);
+                    get(state, t[1], t[7]);
+                    --t[1];
+                    int l = scriptCode[bits];
+                    t[2]  = (l & (1 << t[0])) >> t[0];
+                    if (t[2] == 0) {
+                        t[7] += t[4];
+                        t[6] += t[7];
+                        if (t[6] >= t[5])
+                            PS1ScriptWrite(bits, l | (1 << t[0]));
+                    }
+                    else {
+                        t[7] -= t[4];
+                        t[6] += t[7];
+                        if (t[6] < t[5])
+                            PS1ScriptWrite(bits, l & ~(1 << t[0]));
+                    }
+                    set(state, t[1], t[6]);
+                    ++t[1];
+                    set(state, t[1], t[7]);
+                    ++t[1];
+                    ++t[0];
+                }
+                break;
+            }
+#endif
             case FUNC_GETTABLEVALUE: {
                 int arrPos = scriptEng.operands[1];
                 if (arrPos >= 0) {

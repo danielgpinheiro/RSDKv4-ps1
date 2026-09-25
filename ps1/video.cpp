@@ -51,6 +51,12 @@ volatile uint32_t g_ps1VideoMdecHbl = 0; // MDEC in/out DMA + wait
 
 uint32_t PS1Hblanks() { return COUNTERS[1].value; }
 uint32_t PS1HblanksSince(uint32_t t0) { return (PS1Hblanks() - t0) & 0xffff; }
+void PS1ProfTicksInit()
+{
+    COUNTERS[2].mode  = 0x200; // clock source: system clock / 8, free running
+    COUNTERS[2].value = 0;
+}
+uint32_t PS1ProfTicks() { return COUNTERS[2].value; }
 
 static FILE *s_str = nullptr;
 

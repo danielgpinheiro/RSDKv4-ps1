@@ -6,6 +6,7 @@
 // nothing. Phase 3 replaces this with the GPU renderer (ps1/render.cpp from the Sonic CD port). Sprite
 // pixels are never in RAM on the PS1 (GFXDATA_SIZE, Sprite.cpp).
 #include "RetroEngine.hpp"
+#include "../ps1/video.hh"
 
 int SCREEN_XSIZE_CONFIG = DEFAULT_SCREEN_XSIZE;
 int SCREEN_XSIZE        = DEFAULT_SCREEN_XSIZE; // 320 (user decision; PC 424)
@@ -41,6 +42,7 @@ void FlipScreen() {}
 void GenerateBlendLookupTable() {}
 void ClearScreen(byte index) {}
 
+extern uint32_t g_ps1TypeDrawTicks[OBJECT_COUNT], g_ps1TypeDrawCalls[OBJECT_COUNT]; // Object.cpp profile
 void DrawObjectList(int layer)
 {
     int size = drawListEntries[layer].listSize;
@@ -48,8 +50,11 @@ void DrawObjectList(int layer)
         objectEntityPos = drawListEntries[layer].entityRefs[i];
         int type        = objectEntityList[objectEntityPos].type;
         if (type) {
+            uint32_t t0 = PS1ProfTicks();
             if (scriptCode[objectScriptList[type].eventDraw.scriptCodePtr] > 0)
                 ProcessScript(objectScriptList[type].eventDraw.scriptCodePtr, objectScriptList[type].eventDraw.jumpTablePtr, EVENT_DRAW);
+            g_ps1TypeDrawTicks[type] += (PS1ProfTicks() - t0) & 0xFFFF;
+            g_ps1TypeDrawCalls[type]++;
         }
     }
 }
@@ -57,6 +62,8 @@ void DrawObjectList(int layer)
 // Upstream DrawStageGFX (Drawing.cpp) without the layers: water position, the draw lists in the same order.
 void DrawStageGFX()
 {
+    memset(g_ps1TypeDrawTicks, 0, sizeof(g_ps1TypeDrawTicks));
+    memset(g_ps1TypeDrawCalls, 0, sizeof(g_ps1TypeDrawCalls));
     waterDrawPos = waterLevel - yScrollOffset;
     if (waterDrawPos < 0)
         waterDrawPos = 0;
