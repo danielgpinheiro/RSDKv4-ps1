@@ -4461,8 +4461,15 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             }
         }
 
+#if RETRO_PLATFORM == RETRO_PS1
+        // PS1: upstream computes these two for every instruction; they are evaluated where read instead (the same
+        // values: no instruction changes objectEntityPos or its own entity's type before reading them).
+#define scriptInfo (&objectScriptList[objectEntityList[objectEntityPos].type])
+#define entity     (&objectEntityList[objectEntityPos])
+#else
         ObjectScript *scriptInfo = &objectScriptList[objectEntityList[objectEntityPos].type];
         Entity *entity           = &objectEntityList[objectEntityPos];
+#endif
         SpriteFrame *spriteFrame = nullptr;
 
         // Functions
@@ -6014,6 +6021,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 #endif
         }
 
+#if RETRO_PLATFORM == RETRO_PS1
+#undef scriptInfo
+#undef entity
+#endif
         // Set Values
         if (opcodeSize > 0)
             scriptCodePtr -= scriptCodePtr - scriptCodeOffset;
