@@ -751,6 +751,10 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1ButtonBridge", 0),
     FunctionInfo("PS1PlaneSwitchV", 0),
     FunctionInfo("PS1PlaneSwitchH", 0),
+    FunctionInfo("PS1RotatePlatform", 0),
+    FunctionInfo("PS1RotatePlatformDraw", 0),
+    FunctionInfo("PS1HPZBridge", 0),
+    FunctionInfo("PS1HPZBridgeDraw", 0),
 #endif
 };
 
@@ -1262,6 +1266,10 @@ enum ScrFunc {
     FUNC_PS1BUTTONBRIDGE,
     FUNC_PS1PLANESWITCHV,
     FUNC_PS1PLANESWITCHH,
+    FUNC_PS1ROTATEPLATFORM,
+    FUNC_PS1ROTATEPLATFORMDRAW,
+    FUNC_PS1HPZBRIDGE,
+    FUNC_PS1HPZBRIDGEDRAW,
 #endif
     FUNC_MAX_CNT
 };
@@ -4023,6 +4031,439 @@ static void PS1PlaneSwitchUpdate(bool vertical)
         }
     }
 }
+
+// Shared pieces of the natives below: FUNC_DIV with the PS1 zero guard, FUNC_DRAWSPRITEXY / FUNC_DRAWSPRITE for the
+// running entity (the VM's scriptInfo / entity), VAR_OBJECTCOLLISIONBOTTOM's getter.
+static inline int PS1ScriptDiv(int a, int b)
+{
+    if (!b) {
+        g_ps1ScriptDivZero = g_ps1ScriptDivZero + 1;
+        return 0;
+    }
+    return a / b;
+}
+static void PS1DrawSpriteXY(int frame, int x, int y)
+{
+    ObjectScript *o = &objectScriptList[objectEntityList[objectEntityPos].type];
+    SpriteFrame *f  = &scriptFrames[o->frameListOffset + frame];
+    DrawSprite((x >> 16) - xScrollOffset + f->pivotX, (y >> 16) - yScrollOffset + f->pivotY, f->width, f->height, f->sprX, f->sprY,
+               o->spriteSheetID);
+}
+static int PS1CollisionBottom(Entity &e)
+{
+    AnimationFile *animFile = objectScriptList[e.type].animFile;
+    if (!animFile)
+        return 0;
+    int h = animFrames[animationList[animFile->aniListOffset + e.animation].frameListOffset + e.frame].hitboxID;
+    return hitboxList[animFile->hitboxListOffset + h].bottom[0];
+}
+
+// Hidden Palace's Rotate Platform (stage object; update 58 VM instructions + draw 30 + 12 per chain link, ~29
+// hblanks a frame each on the emulator), natively: one statement per script instruction, in order. The update
+// calls GlobalCode function 45 (push the player off a touching platform) inline. Patched in only when the subs
+// and function 45 match ROTPLAT_SIG / ROTPLAT_DRAW_SIG / PUSHPLAYER_FN_SIG (tools/scripts/patch_bytecode.py).
+static void PS1RotatePlatformUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    if (me.state == 1) {
+        t[0] = G[17];
+        t[0] <<= 1;
+        v[11] = Sin512(t[0]);
+        v[11] >>= 3;
+        v[11] += 192;
+    }
+    else {
+        v[11] = 256;
+    }
+    t[2] = me.xpos;
+    t[3] = me.ypos;
+    v[0] += v[6];
+    v[0] &= 131071;
+    t[0] = v[0];
+    t[0] >>= 8;
+    t[1] = v[5];
+    t[1]++;
+    t[1] <<= 4;
+    me.xpos = v[1];
+    me.ypos = v[2];
+    v[3]    = Cos256(t[0]);
+    v[3] *= t[1];
+    v[3] *= v[11];
+    v[3] += t[2];
+    v[3] &= -65536;
+    v[1] = v[3];
+    v[3] -= me.xpos;
+    v[4] = Sin256(t[0]);
+    v[4] *= t[1];
+    v[4] *= v[11];
+    v[4] += t[3];
+    v[4] &= -65536;
+    v[2] = v[4];
+    v[4] -= me.ypos;
+    if (v[7] == 0) {
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6] = players.entityRefs[loop];
+            PlatformCollision(&PS1_OBJ(self), -24, -8, 24, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 1) {
+                PS1_OBJ(ap[6]).xpos += v[3];
+                PS1_OBJ(ap[6]).ypos += v[4];
+            }
+        }
+    }
+    else {
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6] = players.entityRefs[loop];
+            TouchCollision(&PS1_OBJ(self), -16, -16, 16, 16, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 1) { // CallFunction 45
+                Entity &p = PS1_OBJ(ap[6]);
+                if (p.state != 28) {
+                    ap[0] = ap[6];
+                    ap[0] += ap[7];
+                    if (p.values[7] == 0) {
+                        if (p.values[8] == 0) {
+                            p.state = 26;
+                            if (p.xpos > me.xpos)
+                                p.speed = 131072;
+                            else
+                                p.speed = -131072;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    me.xpos = t[2];
+    me.ypos = t[3];
+    t[0]    = v[9];
+    t[0] >>= 2;
+    if (t[0] >= 0 && t[0] < scriptCode[84593]) // GetTableValue v10 t0 84593
+        v[10] = scriptCode[84593 + t[0] + 1];
+    v[9]++;
+    v[9] &= 31;
+}
+static void PS1RotatePlatformDraw()
+{
+    int *t     = scriptEng.temp;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    t[0]       = 0;
+    t[1]       = 16;
+    t[4]       = v[0];
+    t[4] >>= 8;
+    while (t[0] < v[5]) {
+        t[2] = Cos256(t[4]);
+        t[2] *= t[1];
+        t[2] *= v[11];
+        t[2] += me.xpos;
+        t[3] = Sin256(t[4]);
+        t[3] *= t[1];
+        t[3] *= v[11];
+        t[3] += me.ypos;
+        PS1DrawSpriteXY(3, t[2], t[3]);
+        t[0]++;
+        t[1] += 16;
+    }
+    v[1] = Cos256(t[4]);
+    v[1] *= t[1];
+    v[1] *= v[11];
+    v[1] += me.xpos;
+    v[1] &= -65536;
+    v[2] = Sin256(t[4]);
+    v[2] *= t[1];
+    v[2] *= v[11];
+    v[2] += me.ypos;
+    v[2] &= -65536;
+    PS1DrawSpriteXY(v[8], v[1], v[2]);
+    PS1DrawSpriteXY(v[10], me.xpos, me.ypos); // DrawSprite v10
+}
+
+// Hidden Palace's Bridge (stage object "Bridge" in Zone08, not Emerald Hill's; update 188 VM instructions, draw 49
+// + a function call per log, ~70 hblanks a frame on the emulator), natively: one statement per script instruction,
+// in order; the draw's per-log function (stage function 114: the log's frame, then DrawSpriteXY) inline. Patched
+// in only when both subs and function 114 match HPZBRIDGE_SIG / HPZBRIDGE_DRAW_SIG / HPZBRIDGE_LOG_FN_SIG.
+static void PS1HPZBridgeUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    if (v[0] > 0) {
+        if (v[1] < 128)
+            v[1] += 8;
+    }
+    else {
+        if (v[1] > 0) {
+            v[1] -= 8;
+            v[5] = -1;
+        }
+        else {
+            v[3] = 0;
+        }
+    }
+    v[4] = v[3];
+    v[4] *= v[1];
+    v[4] >>= 7;
+    v[0]  = 0;
+    v[8]  = -5;
+    v[11] = -5;
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        if (p.state != 25) {
+            if (p.xpos > v[6]) {
+                if (p.xpos < v[7]) {
+                    if (ap[6] == v[5]) {
+                        v[2] = p.xpos;
+                        v[2] -= v[6];
+                        t[0] = v[2];
+                        t[0] >>= 8;
+                        t[1] = v[7];
+                        t[1] -= v[6];
+                        t[2] = t[1];
+                        t[2] >>= 16;
+                        t[0] = PS1ScriptDiv(t[0], t[2]);
+                        v[3] = Sin512(t[0]);
+                        t[1] >>= 13;
+                        v[3] *= t[1];
+                        t[0] = me.ypos;
+                        t[0] -= 3145728;
+                        if (p.ypos > t[0]) {
+                            if (p.yvel >= 0) {
+                                t[2] = PS1CollisionBottom(p);
+                                t[2] = -t[2];
+                                t[2] <<= 16;
+                                t[2] += v[4];
+                                t[2] -= 524288;
+                                v[0]++;
+                                p.ypos = me.ypos;
+                                p.ypos += t[2];
+                                p.gravity         = 0;
+                                p.yvel            = 0;
+                                p.floorSensors[0] = 1;
+                                p.floorSensors[1] = 1;
+                                p.floorSensors[2] = 1;
+                                v[8]              = v[2];
+                                v[8] >>= 20;
+                            }
+                            else {
+                                v[5] = -2;
+                            }
+                        }
+                    }
+                    else {
+                        if (p.yvel >= 0) {
+                            t[0] = p.xpos;
+                            t[0] -= v[6];
+                            if (t[0] > v[2]) {
+                                t[0] = v[7];
+                                t[0] -= p.xpos;
+                                t[3] = v[7];
+                                t[3] -= v[6];
+                                t[3] -= v[2];
+                                t[1] = t[0];
+                                t[1] <<= 7;
+                                t[1] = PS1ScriptDiv(t[1], t[3]);
+                            }
+                            else {
+                                t[1] = t[0];
+                                t[1] <<= 7;
+                                t[1] = PS1ScriptDiv(t[1], v[2]);
+                            }
+                            t[2] = Sin512(t[1]);
+                            t[2] *= v[4];
+                            t[2] >>= 9;
+                            t[2] -= 524288;
+                            if (p.yvel < 32768) {
+                                t[3] = t[2];
+                                t[3] >>= 16;
+                                t[4] = t[3];
+                                t[3] -= 8;
+                            }
+                            else {
+                                t[3] = t[2];
+                                t[3] >>= 16;
+                                t[4] = t[3];
+                                t[4] += 8;
+                            }
+                            TouchCollision(&PS1_OBJ(self), -1024, t[3], 1024, t[4], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                            if (cr == 1) {
+                                v[0]++;
+                                p.ypos = PS1CollisionBottom(p);
+                                p.ypos = -p.ypos;
+                                p.ypos <<= 16;
+                                p.ypos += me.ypos;
+                                p.ypos += t[2];
+                                p.floorSensors[0] = 1;
+                                p.floorSensors[1] = 1;
+                                p.floorSensors[2] = 1;
+                                v[11]             = p.xpos;
+                                v[11] -= v[6];
+                                v[11] >>= 20;
+                                if (ap[6] == 0) {
+                                    if (v[5] < 4) {
+                                        if (v[5] > 0) {
+                                            v[2] = p.xpos;
+                                            v[2] -= v[6];
+                                            t[0] = v[2];
+                                            t[0] >>= 8;
+                                            t[1] = v[7];
+                                            t[1] -= v[6];
+                                            t[2] = t[1];
+                                            t[2] >>= 16;
+                                            t[0] = PS1ScriptDiv(t[0], t[2]);
+                                            v[3] = Sin512(t[0]);
+                                            t[1] >>= 13;
+                                            v[3] *= t[1];
+                                            v[4] = v[3];
+                                            v[4] *= v[1];
+                                            v[4] >>= 7;
+                                        }
+                                        v[5] = 0;
+                                        if (p.yvel < 256)
+                                            v[1] = 128;
+                                    }
+                                }
+                                else {
+                                    if (v[5] == -1) {
+                                        v[5] = ap[6];
+                                        if (p.yvel < 256)
+                                            v[1] = 128;
+                                    }
+                                    if (v[5] == -2)
+                                        v[5] = ap[6];
+                                }
+                                p.gravity = 0;
+                                p.yvel    = 0;
+                            }
+                        }
+                    }
+                }
+                else {
+                    if (ap[6] == v[5]) {
+                        v[5] = -2;
+                        v[1] = 32;
+                    }
+                }
+            }
+            else {
+                if (ap[6] == v[5]) {
+                    v[5] = -2;
+                    v[1] = 32;
+                }
+            }
+        }
+    }
+    v[9] = v[8];
+    v[9]--;
+    v[10] = v[8];
+    v[10]++;
+    v[12] = v[11];
+    v[12]--;
+    v[13] = v[11];
+    v[13]++;
+    if (v[14] != v[8]) {
+        v[14] = v[8];
+        v[16] = 0;
+    }
+    if (v[15] != v[11]) {
+        v[15] = v[11];
+        v[17] = 0;
+    }
+    auto get = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    t[0] = v[16];
+    t[0] >>= 2;
+    get(73160, t[0], v[18]);
+    get(73169, t[0], v[19]);
+    v[16]++;
+    v[16] &= 31;
+    t[0] = v[17];
+    t[0] >>= 2;
+    get(73160, t[0], v[20]);
+    get(73169, t[0], v[21]);
+    v[17]++;
+    v[17] &= 31;
+}
+static void PS1HPZBridgeDraw()
+{
+    int *t     = scriptEng.temp;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    auto log   = [&]() { // CallFunction 114
+        me.frame = 0;
+        if (v[22] == v[9])
+            me.frame = v[19];
+        if (v[22] == v[10])
+            me.frame = v[19];
+        if (v[22] == v[12])
+            me.frame = v[21];
+        if (v[22] == v[13])
+            me.frame = v[21];
+        if (v[22] == v[8])
+            me.frame = v[18];
+        if (v[22] == v[11])
+            me.frame = v[20];
+        PS1DrawSpriteXY(me.frame, t[1], t[2]);
+    };
+    v[22] = 0;
+    t[0]  = 0;
+    t[1]  = v[6];
+    t[1] += 524288;
+    t[4] = 524288;
+    t[5] = v[2];
+    t[5] >>= 20;
+    while (t[0] < t[5]) {
+        t[3] = t[4];
+        t[3] <<= 7;
+        t[3] = PS1ScriptDiv(t[3], v[2]);
+        t[2] = Sin512(t[3]);
+        t[2] *= v[4];
+        t[2] >>= 9;
+        t[2] += me.ypos;
+        log();
+        t[1] += 1048576;
+        t[4] += 1048576;
+        t[0]++;
+        v[22]++;
+    }
+    t[2] = v[4];
+    t[2] += me.ypos;
+    log();
+    t[1] += 1048576;
+    t[0]++;
+    t[5] = v[7];
+    t[5] -= v[6];
+    t[5] -= v[2];
+    t[1] = v[7];
+    t[1] -= 524288;
+    t[4]  = 524288;
+    v[22] = me.propertyValue;
+    v[22]--;
+    while (t[0] < me.propertyValue) {
+        t[3] = t[4];
+        t[3] <<= 7;
+        t[3] = PS1ScriptDiv(t[3], t[5]);
+        t[2] = Sin512(t[3]);
+        t[2] *= v[4];
+        t[2] >>= 9;
+        t[2] += me.ypos;
+        log();
+        t[1] -= 1048576;
+        t[4] += 1048576;
+        t[0]++;
+        v[22]--;
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -6154,6 +6595,22 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1PLANESWITCHH:
                 opcodeSize = 0;
                 PS1PlaneSwitchUpdate(false);
+                break;
+            case FUNC_PS1ROTATEPLATFORM:
+                opcodeSize = 0;
+                PS1RotatePlatformUpdate();
+                break;
+            case FUNC_PS1ROTATEPLATFORMDRAW:
+                opcodeSize = 0;
+                PS1RotatePlatformDraw();
+                break;
+            case FUNC_PS1HPZBRIDGE:
+                opcodeSize = 0;
+                PS1HPZBridgeUpdate();
+                break;
+            case FUNC_PS1HPZBRIDGEDRAW:
+                opcodeSize = 0;
+                PS1HPZBridgeDraw();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
