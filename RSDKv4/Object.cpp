@@ -69,6 +69,44 @@ static void PS1BuildTypeGroups()
     }
     objectEntityPos = ENTITY_COUNT; // as upstream's loops leave it
 }
+// The same lists from a candidate slot list (ascending; ProcessObjects' flagged slots): each list gets the same
+// entities in the same order as the full walk, which only ever finds flagged slots.
+static void PS1BuildTypeGroupsFrom(const short *cand, int n)
+{
+    static short s_active[ENTITY_COUNT];
+    int active = 0;
+    for (int i = 0; i < TYPEGROUP_COUNT; ++i) objectTypeGroupList[i].listSize = 0;
+    for (int c = 0; c < n; ++c) {
+        int slot       = cand[c];
+        Entity *entity = &objectEntityList[slot];
+        if (processObjectFlag[slot] && entity->objectInteractions) {
+            if (entity->groupID >= OBJECT_COUNT)
+                objectTypeGroupList[entity->groupID].listSize++;
+            objectTypeGroupList[entity->type].listSize++;
+            objectTypeGroupList[GROUP_ALL].listSize++;
+            s_active[active++] = slot;
+        }
+    }
+    int offset = 0;
+    for (int i = 0; i < TYPEGROUP_COUNT; ++i) {
+        objectTypeGroupList[i].entityRefs = &s_ps1TypeGroupPool[offset];
+        offset += objectTypeGroupList[i].listSize;
+        objectTypeGroupList[i].listSize = 0;
+    }
+    for (int a = 0; a < active; ++a) {
+        int slot       = s_active[a];
+        Entity *entity = &objectEntityList[slot];
+        if (entity->groupID >= OBJECT_COUNT) {
+            TypeGroupList *listCustom                      = &objectTypeGroupList[entity->groupID];
+            listCustom->entityRefs[listCustom->listSize++] = slot;
+        }
+        TypeGroupList *listType                    = &objectTypeGroupList[entity->type];
+        listType->entityRefs[listType->listSize++] = slot;
+        TypeGroupList *listAll                   = &objectTypeGroupList[GROUP_ALL];
+        listAll->entityRefs[listAll->listSize++] = slot;
+    }
+    objectEntityPos = ENTITY_COUNT; // as upstream's loops leave it
+}
 #endif
 
 #if RETRO_PLATFORM == RETRO_PS1
@@ -132,6 +170,88 @@ extern uint32_t g_ps1VmOps;
 volatile uint32_t g_ps1ObjSlotsWalked = 0;
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 ProcessObjects (docs/30 CPU work): upstream's loop with (1) the activity bounds kept in locals, refreshed after
+// every script run (a script may move the camera or the borders), instead of re-reading five globals for each of
+// the ~400 live slots, and (2) the slots whose process flag it sets recorded in order: only this loop sets the flag,
+// so the type groups are built from that list (PS1BuildTypeGroupsFrom) instead of another walk of all slots.
+static short s_ps1Processed[ENTITY_COUNT];
+void ProcessObjects()
+{
+#if PS1_PROFILE
+    memset(g_ps1TypeTicks, 0, sizeof(g_ps1TypeTicks));
+    memset(g_ps1TypeCalls, 0, sizeof(g_ps1TypeCalls));
+    memset(g_ps1TypeOps, 0, sizeof(g_ps1TypeOps));
+#endif
+    for (int i = 0; i < DRAWLAYER_COUNT; ++i) drawListEntries[i].listSize = 0;
+
+    int processed = 0;
+    int bx1, bx2, by1, by2, sx3, sx4, sy3, sy4;
+    auto bounds = [&]() {
+        bx1 = xScrollOffset - OBJECT_BORDER_X1;
+        bx2 = xScrollOffset + OBJECT_BORDER_X2;
+        by1 = yScrollOffset - OBJECT_BORDER_Y1;
+        by2 = yScrollOffset + OBJECT_BORDER_Y2;
+        sx3 = xScrollOffset - OBJECT_BORDER_X3;
+        sx4 = OBJECT_BORDER_X4 + xScrollOffset;
+        sy3 = yScrollOffset - OBJECT_BORDER_Y3;
+        sy4 = yScrollOffset + OBJECT_BORDER_Y4;
+    };
+    bounds();
+    for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
+        processObjectFlag[objectEntityPos] = false;
+        Entity *entity = &objectEntityList[objectEntityPos];
+        // A blank slot does nothing below (the priority switch only decides whether a typed object runs; its
+        // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/28).
+        if (entity->type == OBJ_TYPE_BLANKOBJECT)
+            continue;
+        int x = entity->xpos >> 16;
+        int y = entity->ypos >> 16;
+        bool flag = false;
+        switch (entity->priority) {
+            case PRIORITY_BOUNDS: flag = x > bx1 && x < bx2 && y > by1 && y < by2; break;
+            case PRIORITY_ACTIVE:
+            case PRIORITY_ALWAYS:
+            case PRIORITY_ACTIVE_SMALL: flag = true; break;
+            case PRIORITY_XBOUNDS: flag = x > bx1 && x < bx2; break;
+            case PRIORITY_XBOUNDS_DESTROY:
+                flag = x > bx1 && x < bx2;
+                if (!flag)
+                    entity->type = OBJ_TYPE_BLANKOBJECT;
+                break;
+            case PRIORITY_INACTIVE: flag = false; break;
+            case PRIORITY_BOUNDS_SMALL: flag = x > sx3 && x < sx4 && y > sy3 && y < sy4; break;
+            default: break;
+        }
+        processObjectFlag[objectEntityPos] = flag;
+        if (flag)
+            s_ps1Processed[processed++] = objectEntityPos;
+
+        if (flag && entity->type > OBJ_TYPE_BLANKOBJECT) {
+            ObjectScript *scriptInfo = &objectScriptList[entity->type];
+#if PS1_PROFILE
+            int ps1Type     = entity->type;
+            uint32_t ps1Op0 = g_ps1VmOps;
+            uint32_t ps1T0  = PS1ProfTicks();
+#endif
+            if (scriptCode[scriptInfo->eventUpdate.scriptCodePtr] > 0) {
+                ProcessScript(scriptInfo->eventUpdate.scriptCodePtr, scriptInfo->eventUpdate.jumpTablePtr, EVENT_MAIN);
+                bounds();
+            }
+#if PS1_PROFILE
+            g_ps1TypeTicks[ps1Type] += (PS1ProfTicks() - ps1T0) & 0xFFFF;
+            g_ps1TypeCalls[ps1Type]++;
+            g_ps1TypeOps[ps1Type] += g_ps1VmOps - ps1Op0;
+#endif
+
+            if (entity->drawOrder < DRAWLAYER_COUNT)
+                drawListEntries[entity->drawOrder].entityRefs[drawListEntries[entity->drawOrder].listSize++] = objectEntityPos;
+        }
+    }
+
+    PS1BuildTypeGroupsFrom(s_ps1Processed, processed);
+}
+#else
 void ProcessObjects()
 {
 #if RETRO_PLATFORM == RETRO_PS1
@@ -230,6 +350,7 @@ void ProcessObjects()
     }
 #endif
 }
+#endif
 void ProcessPausedObjects()
 {
     for (int i = 0; i < DRAWLAYER_COUNT; ++i) drawListEntries[i].listSize = 0;
