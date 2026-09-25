@@ -1,6 +1,172 @@
 #include "RetroEngine.hpp"
 #include <cmath>
 
+#if RETRO_PLATFORM == RETRO_PS1
+#include "../ps1/video.hh"
+
+// Guards for the PS1-sized arrays and the VM (for GDB; tools/*_test.sh read them).
+volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table / big values past the PS1-sized arrays
+volatile uint32_t g_ps1ScriptDivZero   = 0; // Div / Mod / Rand by 0 (result 0 instead of a trap)
+volatile uint32_t g_ps1ScriptBadOpcode = 0; // opcode out of range: sub stopped
+volatile uint32_t g_ps1ScriptBadPtr    = 0; // sub/function pointers past the PS1 arrays (not the PC "no sub" sentinels)
+volatile uint32_t g_ps1ScriptBigCount  = 0; // big (non-int16) script values of the loaded code
+volatile uint32_t g_ps1Scene3DOverflow = 0; // Scene3D index / count past the PS1-sized buffers (clamped)
+volatile int32_t g_ps1Scene3DMaxVertex = 0; // largest vertex / face index the scripts used
+volatile int32_t g_ps1Scene3DMaxFace   = 0;
+volatile uint32_t g_ps1Prof3DTransformHbl = 0, g_ps1Prof3DSortHbl = 0, g_ps1Prof3DDrawHbl = 0; // last Draw3DScene
+
+// Script code as int16 slots + a side table of the values that don't fit (Script.hpp). The table is sorted by
+// code position: LoadBytecode stores in ascending order, and a reload at a lower position (ClearScriptData, a
+// new stage after GlobalCode) first drops the entries at or past it. The scripts also write into the code
+// area at runtime (object-type locals, SetTableValue tables: <= ~1,030 slots per stage): a slot that must hold a
+// big value is inserted once (sorted) and stays in the table, later writes update it in place.
+struct PS1ScriptBig {
+    int pos;
+    int value;
+};
+static PS1ScriptBig s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT];
+static int s_ps1ScriptBigCount = 0;
+int PS1ScriptBigValue(int pos)
+{
+    int lo = 0, hi = s_ps1ScriptBigCount - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) >> 1;
+        int p   = s_ps1ScriptBig[mid].pos;
+        if (p == pos)
+            return s_ps1ScriptBig[mid].value;
+        if (p < pos)
+            lo = mid + 1;
+        else
+            hi = mid - 1;
+    }
+    return PS1_SCRIPT_BIG; // never stored as big: the literal value
+}
+static int PS1ScriptBigFind(int pos) // index of the first entry with .pos >= pos
+{
+    int lo = 0, hi = s_ps1ScriptBigCount;
+    while (lo < hi) {
+        int mid = (lo + hi) >> 1;
+        if (s_ps1ScriptBig[mid].pos < pos)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+__attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
+{
+    if ((uint)pos >= SCRIPTCODE_COUNT)
+        return;
+    if (scriptCode.slot[pos] != PS1_SCRIPT_BIG) {
+        if (value > PS1_SCRIPT_BIG && value <= 0x7FFF) {
+            scriptCode.slot[pos] = (short)value;
+            return;
+        }
+        if (s_ps1ScriptBigCount == PS1_SCRIPTBIG_COUNT) {
+            g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
+            return;
+        }
+        int k = PS1ScriptBigFind(pos);
+        memmove(&s_ps1ScriptBig[k + 1], &s_ps1ScriptBig[k], (s_ps1ScriptBigCount - k) * sizeof(PS1ScriptBig));
+        s_ps1ScriptBig[k].pos = pos;
+        s_ps1ScriptBig[k].value = value;
+        ++s_ps1ScriptBigCount;
+        g_ps1ScriptBigCount  = s_ps1ScriptBigCount;
+        scriptCode.slot[pos] = PS1_SCRIPT_BIG;
+        return;
+    }
+    int k = PS1ScriptBigFind(pos);
+    if (k < s_ps1ScriptBigCount && s_ps1ScriptBig[k].pos == pos)
+        s_ps1ScriptBig[k].value = value;
+}
+static bool PS1ScriptStore(int pos, int value)
+{
+    while (s_ps1ScriptBigCount && s_ps1ScriptBig[s_ps1ScriptBigCount - 1].pos >= pos) --s_ps1ScriptBigCount;
+    if (value > PS1_SCRIPT_BIG && value <= 0x7FFF) {
+        scriptCode.slot[pos] = (short)value;
+        return true;
+    }
+    if (s_ps1ScriptBigCount == PS1_SCRIPTBIG_COUNT)
+        return false;
+    scriptCode.slot[pos]                         = PS1_SCRIPT_BIG;
+    s_ps1ScriptBig[s_ps1ScriptBigCount].pos      = pos;
+    s_ps1ScriptBig[s_ps1ScriptBigCount++].value = value;
+    g_ps1ScriptBigCount                          = s_ps1ScriptBigCount;
+    return true;
+}
+
+// The bytecode marks unused subs/functions with PC's last array slots (0x3FFFF / 0x3FFF): ~0.7 MB past the
+// PS1-sized arrays. Point them at the PS1 arrays' last slots (kept 0) instead.
+#define PS1_PC_SCRIPTCODE_END (0x40000 - 1)
+#define PS1_PC_JUMPTABLE_END  (0x4000 - 1)
+static void PS1FixScriptPtr(ScriptPtr *p)
+{
+    if (p->scriptCodePtr == PS1_PC_SCRIPTCODE_END)
+        p->scriptCodePtr = SCRIPTCODE_COUNT - 1;
+    else if ((uint)p->scriptCodePtr >= SCRIPTCODE_COUNT - 1) {
+        g_ps1ScriptBadPtr = g_ps1ScriptBadPtr + 1;
+        p->scriptCodePtr  = SCRIPTCODE_COUNT - 1;
+    }
+    if (p->jumpTablePtr == PS1_PC_JUMPTABLE_END)
+        p->jumpTablePtr = JUMPTABLE_COUNT - 1;
+    else if ((uint)p->jumpTablePtr >= JUMPTABLE_COUNT - 1) {
+        g_ps1ScriptBadPtr = g_ps1ScriptBadPtr + 1;
+        p->jumpTablePtr   = JUMPTABLE_COUNT - 1;
+    }
+}
+
+volatile int32_t g_ps1Scene3DMaxVertexLow = 0; // largest vertex index below 0xF00 (the half-pipe uses 4094/4095 as scratch)
+volatile int32_t g_ps1Scene3DMaxCountV = 0, g_ps1Scene3DMaxCountF = 0; // largest counts the scripts set
+static inline int PS1Scene3DIndex(int i, int size, volatile int32_t *max)
+{
+    if (i > *max)
+        *max = i;
+    if (max == &g_ps1Scene3DMaxVertex && i < 0xF00 && i > g_ps1Scene3DMaxVertexLow)
+        g_ps1Scene3DMaxVertexLow = i;
+    if ((uint)i < (uint)size)
+        return i;
+    g_ps1Scene3DOverflow = g_ps1Scene3DOverflow + 1;
+    return i < 0 ? 0 : size - 1;
+}
+// Vertex indices 0x1000 - PS1_VTX_SCRATCH .. 0x1000 (upstream's last slots, used as scratch) -> the buffer's tail.
+static inline int PS1VtxMap(int i)
+{
+    return (i >= 0x1000 - PS1_VTX_SCRATCH && i <= 0x1000) ? i - 0x1000 + VERTEXBUFFER_SIZE : i;
+}
+#define PS1_VTX(i)  PS1Scene3DIndex(PS1VtxMap(i), VERTEXBUFFER_SIZE, &g_ps1Scene3DMaxVertex)
+#define PS1_FACE(i) PS1Scene3DIndex(i, FACEBUFFER_SIZE, &g_ps1Scene3DMaxFace)
+static inline int PS1Scene3DCount(int n, int size, volatile int32_t *max)
+{
+    if (n <= 0)
+        return n;
+    return PS1Scene3DIndex(n - 1, size, max) + 1;
+}
+#define PS1_VTX_COUNT(n)  PS1Scene3DCount(PS1VtxMap(n), VERTEXBUFFER_SIZE, &g_ps1Scene3DMaxVertex)
+#define PS1_FACE_COUNT(n) PS1Scene3DCount(n, FACEBUFFER_SIZE, &g_ps1Scene3DMaxFace)
+// Entity slots from the scripts (object[x], ResetObjectEntity...): past the PS1-sized objectEntityList (Object.hpp)
+// they get a zeroed scratch entity (what upstream's blank slots there hold), counted.
+volatile uint32_t g_ps1EntityOutOfRange = 0;
+volatile int32_t g_ps1EntityOORIndex = 0, g_ps1EntityOORMax = 0, g_ps1EntityOORFrom = 0, g_ps1EntityOORType = 0; // last one
+__attribute__((noinline)) static int PS1ObjScratch(int i)
+{
+    g_ps1EntityOutOfRange = g_ps1EntityOutOfRange + 1;
+    g_ps1EntityOORIndex   = i;
+    if (i > g_ps1EntityOORMax)
+        g_ps1EntityOORMax = i;
+    g_ps1EntityOORFrom = objectEntityPos;
+    g_ps1EntityOORType = objectEntityList[objectEntityPos].type;
+    memset(&objectEntityList[ENTITY_COUNT], 0, sizeof(Entity));
+    return ENTITY_COUNT;
+}
+#define PS1_OBJ(i) objectEntityList[(uint)(i) < ENTITY_COUNT ? (i) : PS1ObjScratch(i)]
+#else
+#define PS1_VTX(i)        (i)
+#define PS1_FACE(i)       (i)
+#define PS1_VTX_COUNT(n)  (n)
+#define PS1_FACE_COUNT(n) (n)
+#define PS1_OBJ(i)        objectEntityList[i]
+#endif
+
 #if RETRO_USE_COMPILER
 #if !RETRO_REV00
 #define COMMON_SCRIPT_VAR_COUNT (34)
@@ -1070,7 +1236,11 @@ ScriptFunction scriptFunctionList[FUNCTION_COUNT];
 int scriptFunctionCount = 0;
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+PS1ScriptCode scriptCode;
+#else
 int scriptCode[SCRIPTCODE_COUNT];
+#endif
 int jumpTable[JUMPTABLE_COUNT];
 int jumpTableStack[JUMPSTACK_COUNT];
 int functionStack[FUNCSTACK_COUNT];
@@ -1085,7 +1255,13 @@ int functionStackPos  = 0;
 int foreachStackPos   = 0;
 
 ScriptEngine scriptEng = ScriptEngine();
+#if RETRO_PLATFORM == RETRO_PS1
+char scriptText[PS1_SCRIPTTEXT_SIZE];
+#define PS1_TXT(c) scriptText[(uint)(c) < PS1_SCRIPTTEXT_SIZE - 1 ? (c) : PS1_SCRIPTTEXT_SIZE - 1]
+#else
 char scriptText[0x4000];
+#define PS1_TXT(c) scriptText[c]
+#endif
 
 #if RETRO_USE_COMPILER
 void CheckAliasText(char *text)
@@ -3091,7 +3267,9 @@ void LoadBytecode(int stageListID, int scriptID)
     FileInfo info;
     if (LoadFile(scriptPath, &info)) {
         byte fileBuffer    = 0;
+#if RETRO_PLATFORM != RETRO_PS1
         int *scriptCodePtr = &scriptCode[scriptCodePos];
+#endif
         int *jumpTablePtr  = &jumpTable[jumpTablePos];
 
         FileRead(&fileBuffer, 1);
@@ -3102,7 +3280,43 @@ void LoadBytecode(int stageListID, int scriptID)
         scriptCodeSize |= fileBuffer << 16;
         FileRead(&fileBuffer, 1);
         scriptCodeSize |= fileBuffer << 24;
-
+#if RETRO_PLATFORM == RETRO_PS1
+        if (scriptCodePos + scriptCodeSize > SCRIPTCODE_COUNT - 1) { // PS1-sized array (Script.hpp); last slot = the 0 "no sub" sentinel
+            g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
+            CloseFile();
+            return;
+        }
+        while (scriptCodeSize > 0) { // as below, each int into an int16 slot or the big-value table
+            FileRead(&fileBuffer, 1);
+            int blockSize = fileBuffer & 0x7F;
+            bool wide     = fileBuffer >= 0x80;
+            while (blockSize > 0) {
+                int value = 0;
+                if (wide) {
+                    FileRead(&fileBuffer, 1);
+                    value = fileBuffer;
+                    FileRead(&fileBuffer, 1);
+                    value |= fileBuffer << 8;
+                    FileRead(&fileBuffer, 1);
+                    value |= fileBuffer << 16;
+                    FileRead(&fileBuffer, 1);
+                    value |= fileBuffer << 24;
+                }
+                else {
+                    FileRead(&fileBuffer, 1);
+                    value = fileBuffer;
+                }
+                if (!PS1ScriptStore(scriptCodePos, value)) {
+                    g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
+                    CloseFile();
+                    return;
+                }
+                ++scriptCodePos;
+                --scriptCodeSize;
+                --blockSize;
+            }
+        }
+#else
         while (scriptCodeSize > 0) {
             FileRead(&fileBuffer, 1);
             int blockSize = fileBuffer & 0x7F;
@@ -3136,6 +3350,8 @@ void LoadBytecode(int stageListID, int scriptID)
             }
         }
 
+#endif
+
         FileRead(&fileBuffer, 1);
         int jumpTableSize = fileBuffer;
         FileRead(&fileBuffer, 1);
@@ -3144,6 +3360,13 @@ void LoadBytecode(int stageListID, int scriptID)
         jumpTableSize |= fileBuffer << 16;
         FileRead(&fileBuffer, 1);
         jumpTableSize |= fileBuffer << 24;
+#if RETRO_PLATFORM == RETRO_PS1
+        if (jumpTablePos + jumpTableSize > JUMPTABLE_COUNT - 1) {
+            g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
+            CloseFile();
+            return;
+        }
+#endif
 
         while (jumpTableSize > 0) {
             FileRead(&fileBuffer, 1);
@@ -3277,13 +3500,29 @@ void LoadBytecode(int stageListID, int scriptID)
             function->ptr.jumpTablePtr |= fileBuffer << 24;
         }
 
+#if RETRO_PLATFORM == RETRO_PS1
+        for (int sc = 0; sc < scriptCount; ++sc) {
+            ObjectScript *script = &objectScriptList[scriptID + sc];
+            PS1FixScriptPtr(&script->eventUpdate);
+            PS1FixScriptPtr(&script->eventDraw);
+            PS1FixScriptPtr(&script->eventStartup);
+        }
+        for (int f = 0; f < functionCount; ++f) PS1FixScriptPtr(&scriptFunctionList[f].ptr);
+#endif
+
         CloseFile();
     }
 }
 
 void ClearScriptData()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    memset(&scriptCode, 0, sizeof(scriptCode));
+    s_ps1ScriptBigCount = 0;
+    g_ps1ScriptBigCount = 0;
+#else
     memset(scriptCode, 0, sizeof(scriptCode));
+#endif
     memset(jumpTable, 0, sizeof(jumpTable));
 
     memset(foreachStack, -1, sizeof(foreachStack));
@@ -3351,6 +3590,12 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 
     while (running) {
         int opcode           = scriptCode[scriptCodePtr++];
+#if RETRO_PLATFORM == RETRO_PS1
+        if ((uint)opcode >= FUNC_MAX_CNT) { // corrupt / desynced code: stop this sub instead of jumping wild
+            g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
+            break;
+        }
+#endif
         int opcodeSize       = functions[opcode].opcodeSize;
         int scriptCodeOffset = scriptCodePtr;
 
@@ -3420,198 +3665,198 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     case VAR_LOCAL: scriptEng.operands[i] = scriptCode[arrayVal]; break;
                     case VAR_OBJECTENTITYPOS: scriptEng.operands[i] = arrayVal; break;
                     case VAR_OBJECTGROUPID: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].groupID;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).groupID;
                         break;
                     }
                     case VAR_OBJECTTYPE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].type;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).type;
                         break;
                     }
                     case VAR_OBJECTPROPERTYVALUE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].propertyValue;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).propertyValue;
                         break;
                     }
                     case VAR_OBJECTXPOS: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].xpos;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).xpos;
                         break;
                     }
                     case VAR_OBJECTYPOS: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].ypos;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).ypos;
                         break;
                     }
                     case VAR_OBJECTIXPOS: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].xpos >> 16;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).xpos >> 16;
                         break;
                     }
                     case VAR_OBJECTIYPOS: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].ypos >> 16;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).ypos >> 16;
                         break;
                     }
                     case VAR_OBJECTXVEL: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].xvel;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).xvel;
                         break;
                     }
                     case VAR_OBJECTYVEL: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].yvel;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).yvel;
                         break;
                     }
                     case VAR_OBJECTSPEED: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].speed;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).speed;
                         break;
                     }
                     case VAR_OBJECTSTATE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].state;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).state;
                         break;
                     }
                     case VAR_OBJECTROTATION: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].rotation;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).rotation;
                         break;
                     }
                     case VAR_OBJECTSCALE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].scale;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).scale;
                         break;
                     }
                     case VAR_OBJECTPRIORITY: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].priority;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).priority;
                         break;
                     }
                     case VAR_OBJECTDRAWORDER: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].drawOrder;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).drawOrder;
                         break;
                     }
                     case VAR_OBJECTDIRECTION: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].direction;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).direction;
                         break;
                     }
                     case VAR_OBJECTINKEFFECT: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].inkEffect;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).inkEffect;
                         break;
                     }
                     case VAR_OBJECTALPHA: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].alpha;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).alpha;
                         break;
                     }
                     case VAR_OBJECTFRAME: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].frame;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).frame;
                         break;
                     }
                     case VAR_OBJECTANIMATION: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].animation;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).animation;
                         break;
                     }
                     case VAR_OBJECTPREVANIMATION: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].prevAnimation;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).prevAnimation;
                         break;
                     }
                     case VAR_OBJECTANIMATIONSPEED: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].animationSpeed;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).animationSpeed;
                         break;
                     }
                     case VAR_OBJECTANIMATIONTIMER: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].animationTimer;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).animationTimer;
                         break;
                     }
                     case VAR_OBJECTANGLE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].angle;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).angle;
                         break;
                     }
                     case VAR_OBJECTLOOKPOSX: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].lookPosX;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).lookPosX;
                         break;
                     }
                     case VAR_OBJECTLOOKPOSY: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].lookPosY;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).lookPosY;
                         break;
                     }
                     case VAR_OBJECTCOLLISIONMODE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].collisionMode;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).collisionMode;
                         break;
                     }
                     case VAR_OBJECTCOLLISIONPLANE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].collisionPlane;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).collisionPlane;
                         break;
                     }
                     case VAR_OBJECTCONTROLMODE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].controlMode;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).controlMode;
                         break;
                     }
                     case VAR_OBJECTCONTROLLOCK: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].controlLock;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).controlLock;
                         break;
                     }
                     case VAR_OBJECTPUSHING: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].pushing;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).pushing;
                         break;
                     }
                     case VAR_OBJECTVISIBLE: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].visible;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).visible;
                         break;
                     }
                     case VAR_OBJECTTILECOLLISIONS: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].tileCollisions;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).tileCollisions;
                         break;
                     }
                     case VAR_OBJECTINTERACTION: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].objectInteractions;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).objectInteractions;
                         break;
                     }
                     case VAR_OBJECTGRAVITY: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].gravity;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).gravity;
                         break;
                     }
                     case VAR_OBJECTUP: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].up;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).up;
                         break;
                     }
                     case VAR_OBJECTDOWN: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].down;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).down;
                         break;
                     }
                     case VAR_OBJECTLEFT: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].left;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).left;
                         break;
                     }
                     case VAR_OBJECTRIGHT: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].right;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).right;
                         break;
                     }
                     case VAR_OBJECTJUMPPRESS: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].jumpPress;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).jumpPress;
                         break;
                     }
                     case VAR_OBJECTJUMPHOLD: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].jumpHold;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).jumpHold;
                         break;
                     }
                     case VAR_OBJECTSCROLLTRACKING: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].scrollTracking;
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).scrollTracking;
                         break;
                     }
                     case VAR_OBJECTFLOORSENSORL: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].floorSensors[0];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).floorSensors[0];
                         break;
                     }
                     case VAR_OBJECTFLOORSENSORC: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].floorSensors[1];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).floorSensors[1];
                         break;
                     }
                     case VAR_OBJECTFLOORSENSORR: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].floorSensors[2];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).floorSensors[2];
                         break;
                     }
 #if !RETRO_REV00
                     case VAR_OBJECTFLOORSENSORLC: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].floorSensors[3];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).floorSensors[3];
                         break;
                     }
                     case VAR_OBJECTFLOORSENSORRC: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].floorSensors[4];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).floorSensors[4];
                         break;
                     }
 #endif
                     case VAR_OBJECTCOLLISIONLEFT: {
-                        AnimationFile *animFile = objectScriptList[objectEntityList[arrayVal].type].animFile;
-                        Entity *ent             = &objectEntityList[arrayVal];
+                        AnimationFile *animFile = objectScriptList[PS1_OBJ(arrayVal).type].animFile;
+                        Entity *ent             = &PS1_OBJ(arrayVal);
                         if (animFile) {
                             int h = animFrames[animationList[animFile->aniListOffset + ent->animation].frameListOffset + ent->frame].hitboxID;
 
@@ -3623,8 +3868,8 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                         break;
                     }
                     case VAR_OBJECTCOLLISIONTOP: {
-                        AnimationFile *animFile = objectScriptList[objectEntityList[arrayVal].type].animFile;
-                        Entity *ent             = &objectEntityList[arrayVal];
+                        AnimationFile *animFile = objectScriptList[PS1_OBJ(arrayVal).type].animFile;
+                        Entity *ent             = &PS1_OBJ(arrayVal);
                         if (animFile) {
                             int h = animFrames[animationList[animFile->aniListOffset + ent->animation].frameListOffset + ent->frame].hitboxID;
 
@@ -3636,8 +3881,8 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                         break;
                     }
                     case VAR_OBJECTCOLLISIONRIGHT: {
-                        AnimationFile *animFile = objectScriptList[objectEntityList[arrayVal].type].animFile;
-                        Entity *ent             = &objectEntityList[arrayVal];
+                        AnimationFile *animFile = objectScriptList[PS1_OBJ(arrayVal).type].animFile;
+                        Entity *ent             = &PS1_OBJ(arrayVal);
                         if (animFile) {
                             int h = animFrames[animationList[animFile->aniListOffset + ent->animation].frameListOffset + ent->frame].hitboxID;
 
@@ -3649,8 +3894,8 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                         break;
                     }
                     case VAR_OBJECTCOLLISIONBOTTOM: {
-                        AnimationFile *animFile = objectScriptList[objectEntityList[arrayVal].type].animFile;
-                        Entity *ent             = &objectEntityList[arrayVal];
+                        AnimationFile *animFile = objectScriptList[PS1_OBJ(arrayVal).type].animFile;
+                        Entity *ent             = &PS1_OBJ(arrayVal);
                         if (animFile) {
                             int h = animFrames[animationList[animFile->aniListOffset + ent->animation].frameListOffset + ent->frame].hitboxID;
 
@@ -3673,7 +3918,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                         int boundY3_2P = -(0x100 << 16);
                         int boundY4_2P = (0x100 << 16);
 
-                        Entity *entPtr = &objectEntityList[arrayVal];
+                        Entity *entPtr = &PS1_OBJ(arrayVal);
                         int x          = entPtr->xpos >> 16;
                         int y          = entPtr->ypos >> 16;
 
@@ -3736,8 +3981,8 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                             }
                         }
 #else
-                        int x = objectEntityList[arrayVal].xpos >> 16;
-                        int y = objectEntityList[arrayVal].ypos >> 16;
+                        int x = PS1_OBJ(arrayVal).xpos >> 16;
+                        int y = PS1_OBJ(arrayVal).ypos >> 16;
 
                         int boundL = xScrollOffset - OBJECT_BORDER_X1;
                         int boundR = xScrollOffset + OBJECT_BORDER_X2;
@@ -3749,199 +3994,199 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                         break;
                     }
                     case VAR_OBJECTSPRITESHEET: {
-                        scriptEng.operands[i] = objectScriptList[objectEntityList[arrayVal].type].spriteSheetID;
+                        scriptEng.operands[i] = objectScriptList[PS1_OBJ(arrayVal).type].spriteSheetID;
                         break;
                     }
                     case VAR_OBJECTVALUE0: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[0];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[0];
                         break;
                     }
                     case VAR_OBJECTVALUE1: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[1];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[1];
                         break;
                     }
                     case VAR_OBJECTVALUE2: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[2];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[2];
                         break;
                     }
                     case VAR_OBJECTVALUE3: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[3];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[3];
                         break;
                     }
                     case VAR_OBJECTVALUE4: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[4];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[4];
                         break;
                     }
                     case VAR_OBJECTVALUE5: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[5];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[5];
                         break;
                     }
                     case VAR_OBJECTVALUE6: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[6];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[6];
                         break;
                     }
                     case VAR_OBJECTVALUE7: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[7];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[7];
                         break;
                     }
                     case VAR_OBJECTVALUE8: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[8];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[8];
                         break;
                     }
                     case VAR_OBJECTVALUE9: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[9];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[9];
                         break;
                     }
                     case VAR_OBJECTVALUE10: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[10];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[10];
                         break;
                     }
                     case VAR_OBJECTVALUE11: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[11];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[11];
                         break;
                     }
                     case VAR_OBJECTVALUE12: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[12];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[12];
                         break;
                     }
                     case VAR_OBJECTVALUE13: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[13];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[13];
                         break;
                     }
                     case VAR_OBJECTVALUE14: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[14];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[14];
                         break;
                     }
                     case VAR_OBJECTVALUE15: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[15];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[15];
                         break;
                     }
                     case VAR_OBJECTVALUE16: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[16];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[16];
                         break;
                     }
                     case VAR_OBJECTVALUE17: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[17];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[17];
                         break;
                     }
                     case VAR_OBJECTVALUE18: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[18];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[18];
                         break;
                     }
                     case VAR_OBJECTVALUE19: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[19];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[19];
                         break;
                     }
                     case VAR_OBJECTVALUE20: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[20];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[20];
                         break;
                     }
                     case VAR_OBJECTVALUE21: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[21];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[21];
                         break;
                     }
                     case VAR_OBJECTVALUE22: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[22];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[22];
                         break;
                     }
                     case VAR_OBJECTVALUE23: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[23];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[23];
                         break;
                     }
                     case VAR_OBJECTVALUE24: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[24];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[24];
                         break;
                     }
                     case VAR_OBJECTVALUE25: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[25];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[25];
                         break;
                     }
                     case VAR_OBJECTVALUE26: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[26];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[26];
                         break;
                     }
                     case VAR_OBJECTVALUE27: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[27];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[27];
                         break;
                     }
                     case VAR_OBJECTVALUE28: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[28];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[28];
                         break;
                     }
                     case VAR_OBJECTVALUE29: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[29];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[29];
                         break;
                     }
                     case VAR_OBJECTVALUE30: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[30];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[30];
                         break;
                     }
                     case VAR_OBJECTVALUE31: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[31];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[31];
                         break;
                     }
                     case VAR_OBJECTVALUE32: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[32];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[32];
                         break;
                     }
                     case VAR_OBJECTVALUE33: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[33];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[33];
                         break;
                     }
                     case VAR_OBJECTVALUE34: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[34];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[34];
                         break;
                     }
                     case VAR_OBJECTVALUE35: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[35];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[35];
                         break;
                     }
                     case VAR_OBJECTVALUE36: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[36];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[36];
                         break;
                     }
                     case VAR_OBJECTVALUE37: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[37];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[37];
                         break;
                     }
                     case VAR_OBJECTVALUE38: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[38];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[38];
                         break;
                     }
                     case VAR_OBJECTVALUE39: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[39];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[39];
                         break;
                     }
                     case VAR_OBJECTVALUE40: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[40];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[40];
                         break;
                     }
                     case VAR_OBJECTVALUE41: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[41];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[41];
                         break;
                     }
                     case VAR_OBJECTVALUE42: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[42];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[42];
                         break;
                     }
                     case VAR_OBJECTVALUE43: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[43];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[43];
                         break;
                     }
                     case VAR_OBJECTVALUE44: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[44];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[44];
                         break;
                     }
                     case VAR_OBJECTVALUE45: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[45];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[45];
                         break;
                     }
                     case VAR_OBJECTVALUE46: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[46];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[46];
                         break;
                     }
                     case VAR_OBJECTVALUE47: {
-                        scriptEng.operands[i] = objectEntityList[arrayVal].values[47];
+                        scriptEng.operands[i] = PS1_OBJ(arrayVal).values[47];
                         break;
                     }
                     case VAR_STAGESTATE: scriptEng.operands[i] = stageMode; break;
@@ -4080,17 +4325,17 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     case VAR_SCENE3DFOGCOLOR: scriptEng.operands[i] = fogColor; break;
                     case VAR_SCENE3DFOGSTRENGTH: scriptEng.operands[i] = fogStrength; break;
 #endif
-                    case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[arrayVal].x; break;
-                    case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[arrayVal].y; break;
-                    case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[arrayVal].z; break;
-                    case VAR_VERTEXBUFFERU: scriptEng.operands[i] = vertexBuffer[arrayVal].u; break;
-                    case VAR_VERTEXBUFFERV: scriptEng.operands[i] = vertexBuffer[arrayVal].v; break;
-                    case VAR_FACEBUFFERA: scriptEng.operands[i] = faceBuffer[arrayVal].a; break;
-                    case VAR_FACEBUFFERB: scriptEng.operands[i] = faceBuffer[arrayVal].b; break;
-                    case VAR_FACEBUFFERC: scriptEng.operands[i] = faceBuffer[arrayVal].c; break;
-                    case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[arrayVal].d; break;
-                    case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[arrayVal].flag; break;
-                    case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[arrayVal].color; break;
+                    case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].x; break;
+                    case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].y; break;
+                    case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].z; break;
+                    case VAR_VERTEXBUFFERU: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].u; break;
+                    case VAR_VERTEXBUFFERV: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].v; break;
+                    case VAR_FACEBUFFERA: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].a; break;
+                    case VAR_FACEBUFFERB: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].b; break;
+                    case VAR_FACEBUFFERC: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].c; break;
+                    case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].d; break;
+                    case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].flag; break;
+                    case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].color; break;
                     case VAR_SAVERAM: scriptEng.operands[i] = saveRAM[arrayVal]; break;
                     case VAR_ENGINESTATE: scriptEng.operands[i] = Engine.gameMode; break;
 #if RETRO_REV00
@@ -4160,23 +4405,23 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             }
             else if (opcodeType == SCRIPTVAR_STRCONST) { // string constant
                 int strLen         = scriptCode[scriptCodePtr++];
-                scriptText[strLen] = 0;
+                PS1_TXT(strLen) = 0;
                 for (int c = 0; c < strLen; ++c) {
                     switch (c % 4) {
                         case 0: 
-                            scriptText[c] = scriptCode[scriptCodePtr] >> 24;
+                            PS1_TXT(c) = scriptCode[scriptCodePtr] >> 24;
                             break;
 
                         case 1: 
-                            scriptText[c] = (0xFFFFFF & scriptCode[scriptCodePtr]) >> 16;
+                            PS1_TXT(c) = (0xFFFFFF & scriptCode[scriptCodePtr]) >> 16;
                             break;
 
                         case 2: 
-                            scriptText[c] = (0xFFFF & scriptCode[scriptCodePtr]) >> 8;
+                            PS1_TXT(c) = (0xFFFF & scriptCode[scriptCodePtr]) >> 8;
                             break;
 
                         case 3: 
-                            scriptText[c] = scriptCode[scriptCodePtr++];
+                            PS1_TXT(c) = scriptCode[scriptCodePtr++];
                             break;
 
                         default: break;
@@ -4200,13 +4445,31 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_INC: ++scriptEng.operands[0]; break;
             case FUNC_DEC: --scriptEng.operands[0]; break;
             case FUNC_MUL: scriptEng.operands[0] *= scriptEng.operands[1]; break;
-            case FUNC_DIV: scriptEng.operands[0] /= scriptEng.operands[1]; break;
+            case FUNC_DIV:
+#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/09)
+                if (!scriptEng.operands[1]) {
+                    g_ps1ScriptDivZero    = g_ps1ScriptDivZero + 1;
+                    scriptEng.operands[0] = 0;
+                    break;
+                }
+#endif
+                scriptEng.operands[0] /= scriptEng.operands[1];
+                break;
             case FUNC_SHR: scriptEng.operands[0] >>= scriptEng.operands[1]; break;
             case FUNC_SHL: scriptEng.operands[0] <<= scriptEng.operands[1]; break;
             case FUNC_AND: scriptEng.operands[0] &= scriptEng.operands[1]; break;
             case FUNC_OR: scriptEng.operands[0] |= scriptEng.operands[1]; break;
             case FUNC_XOR: scriptEng.operands[0] ^= scriptEng.operands[1]; break;
-            case FUNC_MOD: scriptEng.operands[0] %= scriptEng.operands[1]; break;
+            case FUNC_MOD:
+#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/09)
+                if (!scriptEng.operands[1]) {
+                    g_ps1ScriptDivZero    = g_ps1ScriptDivZero + 1;
+                    scriptEng.operands[0] = 0;
+                    break;
+                }
+#endif
+                scriptEng.operands[0] %= scriptEng.operands[1];
+                break;
             case FUNC_FLIPSIGN: scriptEng.operands[0] = -scriptEng.operands[0]; break;
             case FUNC_CHECKEQUAL:
                 scriptEng.checkResult = scriptEng.operands[0] == scriptEng.operands[1];
@@ -4409,7 +4672,16 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 --jumpTableStackPos;
                 break;
-            case FUNC_RAND: scriptEng.operands[0] = rand() % scriptEng.operands[1]; break;
+            case FUNC_RAND:
+#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/09)
+                if (!scriptEng.operands[1]) {
+                    g_ps1ScriptDivZero    = g_ps1ScriptDivZero + 1;
+                    scriptEng.operands[0] = 0;
+                    break;
+                }
+#endif
+                scriptEng.operands[0] = rand() % scriptEng.operands[1];
+                break;
             case FUNC_SIN: {
                 scriptEng.operands[0] = Sin512(scriptEng.operands[1]);
                 break;
@@ -4941,7 +5213,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             case FUNC_RESETOBJECTENTITY: {
                 opcodeSize     = 0;
-                Entity *newEnt = &objectEntityList[scriptEng.operands[0]];
+                Entity *newEnt = &PS1_OBJ(scriptEng.operands[0]);
                 memset(newEnt, 0, sizeof(Entity));
                 newEnt->type               = scriptEng.operands[1];
                 newEnt->propertyValue      = scriptEng.operands[2];
@@ -4962,23 +5234,23 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 switch (scriptEng.operands[0]) {
                     default: break;
                     case C_TOUCH:
-                        TouchCollision(&objectEntityList[scriptEng.operands[1]], scriptEng.operands[2], scriptEng.operands[3], scriptEng.operands[4],
-                                       scriptEng.operands[5], &objectEntityList[scriptEng.operands[6]], scriptEng.operands[7], scriptEng.operands[8],
+                        TouchCollision(&PS1_OBJ(scriptEng.operands[1]), scriptEng.operands[2], scriptEng.operands[3], scriptEng.operands[4],
+                                       scriptEng.operands[5], &PS1_OBJ(scriptEng.operands[6]), scriptEng.operands[7], scriptEng.operands[8],
                                        scriptEng.operands[9], scriptEng.operands[10]);
                         break;
                     case C_SOLID:
-                        BoxCollision(&objectEntityList[scriptEng.operands[1]], scriptEng.operands[2], scriptEng.operands[3], scriptEng.operands[4],
-                                     scriptEng.operands[5], &objectEntityList[scriptEng.operands[6]], scriptEng.operands[7], scriptEng.operands[8],
+                        BoxCollision(&PS1_OBJ(scriptEng.operands[1]), scriptEng.operands[2], scriptEng.operands[3], scriptEng.operands[4],
+                                     scriptEng.operands[5], &PS1_OBJ(scriptEng.operands[6]), scriptEng.operands[7], scriptEng.operands[8],
                                      scriptEng.operands[9], scriptEng.operands[10]);
                         break;
                     case C_SOLID2:
-                        BoxCollision2(&objectEntityList[scriptEng.operands[1]], scriptEng.operands[2], scriptEng.operands[3], scriptEng.operands[4],
-                                      scriptEng.operands[5], &objectEntityList[scriptEng.operands[6]], scriptEng.operands[7], scriptEng.operands[8],
+                        BoxCollision2(&PS1_OBJ(scriptEng.operands[1]), scriptEng.operands[2], scriptEng.operands[3], scriptEng.operands[4],
+                                      scriptEng.operands[5], &PS1_OBJ(scriptEng.operands[6]), scriptEng.operands[7], scriptEng.operands[8],
                                       scriptEng.operands[9], scriptEng.operands[10]);
                         break;
                     case C_PLATFORM:
-                        PlatformCollision(&objectEntityList[scriptEng.operands[1]], scriptEng.operands[2], scriptEng.operands[3],
-                                          scriptEng.operands[4], scriptEng.operands[5], &objectEntityList[scriptEng.operands[6]],
+                        PlatformCollision(&PS1_OBJ(scriptEng.operands[1]), scriptEng.operands[2], scriptEng.operands[3],
+                                          scriptEng.operands[4], scriptEng.operands[5], &PS1_OBJ(scriptEng.operands[6]),
                                           scriptEng.operands[7], scriptEng.operands[8], scriptEng.operands[9], scriptEng.operands[10]);
                         break;
                 }
@@ -5078,8 +5350,8 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     case CSIDE_ROOF: ObjectRoofCollision(scriptEng.operands[1], scriptEng.operands[2] - 1, scriptEng.operands[3]); break;
 #if RETRO_REV03
                     // Yes, the right side also calls for LWall
-                    case CSIDE_LENTITY: ObjectLWallCollision(scriptEng.operands[2], 0, objectEntityList[scriptEng.operands[1]].collisionPlane); break;
-                    case CSIDE_RENTITY: ObjectLWallCollision(scriptEng.operands[2] - 1, 0, objectEntityList[scriptEng.operands[1]].collisionPlane); break;
+                    case CSIDE_LENTITY: ObjectLWallCollision(scriptEng.operands[2], 0, PS1_OBJ(scriptEng.operands[1]).collisionPlane); break;
+                    case CSIDE_RENTITY: ObjectLWallCollision(scriptEng.operands[2] - 1, 0, PS1_OBJ(scriptEng.operands[1]).collisionPlane); break;
 #endif
                 }
                 break;
@@ -5100,9 +5372,23 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
             case FUNC_DRAW3DSCENE:
                 opcodeSize = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+            {
+                uint32_t t0 = PS1Hblanks();
+                TransformVertexBuffer();
+                uint32_t t1 = PS1Hblanks();
+                Sort3DDrawList();
+                uint32_t t2 = PS1Hblanks();
+                Draw3DScene(scriptInfo->spriteSheetID);
+                g_ps1Prof3DTransformHbl = (uint16_t)(t1 - t0);
+                g_ps1Prof3DSortHbl      = (uint16_t)(t2 - t1);
+                g_ps1Prof3DDrawHbl      = PS1HblanksSince(t2);
+            }
+#else
                 TransformVertexBuffer();
                 Sort3DDrawList();
                 Draw3DScene(scriptInfo->spriteSheetID);
+#endif
                 break;
             case FUNC_SETIDENTITYMATRIX:
                 opcodeSize = 0;
@@ -5199,9 +5485,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_TRANSFORMVERTICES:
                 opcodeSize = 0;
                 switch (scriptEng.operands[0]) {
-                    case MAT_WORLD: TransformVertices(&matWorld, scriptEng.operands[1], scriptEng.operands[2]); break;
-                    case MAT_VIEW: TransformVertices(&matView, scriptEng.operands[1], scriptEng.operands[2]); break;
-                    case MAT_TEMP: TransformVertices(&matTemp, scriptEng.operands[1], scriptEng.operands[2]); break;
+                    case MAT_WORLD: TransformVertices(&matWorld, PS1_VTX(scriptEng.operands[1]), PS1_VTX_COUNT(scriptEng.operands[2])); break;
+                    case MAT_VIEW: TransformVertices(&matView, PS1_VTX(scriptEng.operands[1]), PS1_VTX_COUNT(scriptEng.operands[2])); break;
+                    case MAT_TEMP: TransformVertices(&matTemp, PS1_VTX(scriptEng.operands[1]), PS1_VTX_COUNT(scriptEng.operands[2])); break;
                 }
                 break;
             case FUNC_CALLFUNCTION: {
@@ -5296,7 +5582,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 switch (scriptEng.operands[3]) {
                     case TILEINFO_INDEX:
                         tiles128x128.tileIndex[scriptEng.operands[6]]  = scriptEng.operands[0];
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: derived from tileIndex by the renderer
                         tiles128x128.gfxDataPos[scriptEng.operands[6]] = scriptEng.operands[0] << 8;
+#endif
                         break;
                     case TILEINFO_DIRECTION: tiles128x128.direction[scriptEng.operands[6]] = scriptEng.operands[0]; break;
                     case TILEINFO_VISUALPLANE: tiles128x128.visualPlane[scriptEng.operands[6]] = scriptEng.operands[0]; break;
@@ -5395,7 +5683,11 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     int pos     = scriptEng.operands[2];
                     int arrSize = scriptCode[pos];
                     if (arrPos < arrSize)
+#if RETRO_PLATFORM == RETRO_PS1
+                        PS1ScriptWrite(pos + arrPos + 1, scriptEng.operands[0]);
+#else
                         scriptCode[pos + arrPos + 1] = scriptEng.operands[0];
+#endif
                 }
                 break;
             }
@@ -5474,7 +5766,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 // scriptEng.operands[2] = entitySlot
 
                 if (scriptEng.operands[1] < 48)
-                    scriptEng.operands[0] = objectEntityList[scriptEng.operands[2]].values[scriptEng.operands[1]];
+                    scriptEng.operands[0] = PS1_OBJ(scriptEng.operands[2]).values[scriptEng.operands[1]];
                 break;
             }
             case FUNC_SETOBJECTVALUE: {
@@ -5485,7 +5777,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 
                 opcodeSize = 0;
                 if (scriptEng.operands[1] < 48)
-                    objectEntityList[scriptEng.operands[2]].values[scriptEng.operands[1]] = scriptEng.operands[0];
+                    PS1_OBJ(scriptEng.operands[2]).values[scriptEng.operands[1]] = scriptEng.operands[0];
                 break;
             }
             case FUNC_COPYOBJECT: {
@@ -5494,8 +5786,8 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 // scriptEng.operands[1] = srcSlot
                 // scriptEng.operands[2] = count
 
-                Entity *dstList = &objectEntityList[scriptEng.operands[0]];
-                Entity *srcList = &objectEntityList[scriptEng.operands[1]];
+                Entity *dstList = &PS1_OBJ(scriptEng.operands[0]);
+                Entity *srcList = &PS1_OBJ(scriptEng.operands[1]);
                 for (int i = 0; i < scriptEng.operands[2]; ++i) memcpy(&dstList[i], &srcList[i], sizeof(Entity));
                 break;
             }
@@ -5702,195 +5994,199 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     case VAR_ARRAYPOS6: scriptEng.arrayPosition[6] = scriptEng.operands[i]; break;
                     case VAR_ARRAYPOS7: scriptEng.arrayPosition[7] = scriptEng.operands[i]; break;
                     case VAR_GLOBAL: globalVariables[arrayVal] = scriptEng.operands[i]; break;
+#if RETRO_PLATFORM == RETRO_PS1
+                    case VAR_LOCAL: PS1ScriptWrite(arrayVal, scriptEng.operands[i]); break;
+#else
                     case VAR_LOCAL: scriptCode[arrayVal] = scriptEng.operands[i]; break;
+#endif
                     case VAR_OBJECTENTITYPOS: break;
                     case VAR_OBJECTGROUPID: {
-                        objectEntityList[arrayVal].groupID = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).groupID = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTTYPE: {
-                        objectEntityList[arrayVal].type = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).type = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTPROPERTYVALUE: {
-                        objectEntityList[arrayVal].propertyValue = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).propertyValue = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTXPOS: {
-                        objectEntityList[arrayVal].xpos = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).xpos = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTYPOS: {
-                        objectEntityList[arrayVal].ypos = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).ypos = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTIXPOS: {
-                        objectEntityList[arrayVal].xpos = scriptEng.operands[i] << 16;
+                        PS1_OBJ(arrayVal).xpos = scriptEng.operands[i] << 16;
                         break;
                     }
                     case VAR_OBJECTIYPOS: {
-                        objectEntityList[arrayVal].ypos = scriptEng.operands[i] << 16;
+                        PS1_OBJ(arrayVal).ypos = scriptEng.operands[i] << 16;
                         break;
                     }
                     case VAR_OBJECTXVEL: {
-                        objectEntityList[arrayVal].xvel = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).xvel = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTYVEL: {
-                        objectEntityList[arrayVal].yvel = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).yvel = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTSPEED: {
-                        objectEntityList[arrayVal].speed = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).speed = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTSTATE: {
-                        objectEntityList[arrayVal].state = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).state = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTROTATION: {
-                        objectEntityList[arrayVal].rotation = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).rotation = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTSCALE: {
-                        objectEntityList[arrayVal].scale = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).scale = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTPRIORITY: {
-                        objectEntityList[arrayVal].priority = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).priority = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTDRAWORDER: {
-                        objectEntityList[arrayVal].drawOrder = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).drawOrder = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTDIRECTION: {
-                        objectEntityList[arrayVal].direction = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).direction = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTINKEFFECT: {
-                        objectEntityList[arrayVal].inkEffect = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).inkEffect = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTALPHA: {
-                        objectEntityList[arrayVal].alpha = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).alpha = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTFRAME: {
-                        objectEntityList[arrayVal].frame = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).frame = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTANIMATION: {
-                        objectEntityList[arrayVal].animation = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).animation = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTPREVANIMATION: {
-                        objectEntityList[arrayVal].prevAnimation = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).prevAnimation = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTANIMATIONSPEED: {
-                        objectEntityList[arrayVal].animationSpeed = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).animationSpeed = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTANIMATIONTIMER: {
-                        objectEntityList[arrayVal].animationTimer = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).animationTimer = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTANGLE: {
-                        objectEntityList[arrayVal].angle = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).angle = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTLOOKPOSX: {
-                        objectEntityList[arrayVal].lookPosX = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).lookPosX = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTLOOKPOSY: {
-                        objectEntityList[arrayVal].lookPosY = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).lookPosY = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTCOLLISIONMODE: {
-                        objectEntityList[arrayVal].collisionMode = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).collisionMode = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTCOLLISIONPLANE: {
-                        objectEntityList[arrayVal].collisionPlane = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).collisionPlane = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTCONTROLMODE: {
-                        objectEntityList[arrayVal].controlMode = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).controlMode = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTCONTROLLOCK: {
-                        objectEntityList[arrayVal].controlLock = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).controlLock = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTPUSHING: {
-                        objectEntityList[arrayVal].pushing = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).pushing = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVISIBLE: {
-                        objectEntityList[arrayVal].visible = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).visible = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTTILECOLLISIONS: {
-                        objectEntityList[arrayVal].tileCollisions = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).tileCollisions = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTINTERACTION: {
-                        objectEntityList[arrayVal].objectInteractions = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).objectInteractions = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTGRAVITY: {
-                        objectEntityList[arrayVal].gravity = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).gravity = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTUP: {
-                        objectEntityList[arrayVal].up = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).up = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTDOWN: {
-                        objectEntityList[arrayVal].down = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).down = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTLEFT: {
-                        objectEntityList[arrayVal].left = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).left = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTRIGHT: {
-                        objectEntityList[arrayVal].right = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).right = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTJUMPPRESS: {
-                        objectEntityList[arrayVal].jumpPress = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).jumpPress = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTJUMPHOLD: {
-                        objectEntityList[arrayVal].jumpHold = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).jumpHold = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTSCROLLTRACKING: {
-                        objectEntityList[arrayVal].scrollTracking = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).scrollTracking = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTFLOORSENSORL: {
-                        objectEntityList[arrayVal].floorSensors[0] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).floorSensors[0] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTFLOORSENSORC: {
-                        objectEntityList[arrayVal].floorSensors[1] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).floorSensors[1] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTFLOORSENSORR: {
-                        objectEntityList[arrayVal].floorSensors[2] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).floorSensors[2] = scriptEng.operands[i];
                         break;
                     }
 #if !RETRO_REV00
                     case VAR_OBJECTFLOORSENSORLC: {
-                        objectEntityList[arrayVal].floorSensors[3] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).floorSensors[3] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTFLOORSENSORRC: {
-                        objectEntityList[arrayVal].floorSensors[4] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).floorSensors[4] = scriptEng.operands[i];
                         break;
                     }
 #endif
@@ -5910,199 +6206,199 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                         break;
                     }
                     case VAR_OBJECTSPRITESHEET: {
-                        objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
+                        objectScriptList[PS1_OBJ(arrayVal).type].spriteSheetID = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE0: {
-                        objectEntityList[arrayVal].values[0] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[0] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE1: {
-                        objectEntityList[arrayVal].values[1] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[1] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE2: {
-                        objectEntityList[arrayVal].values[2] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[2] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE3: {
-                        objectEntityList[arrayVal].values[3] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[3] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE4: {
-                        objectEntityList[arrayVal].values[4] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[4] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE5: {
-                        objectEntityList[arrayVal].values[5] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[5] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE6: {
-                        objectEntityList[arrayVal].values[6] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[6] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE7: {
-                        objectEntityList[arrayVal].values[7] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[7] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE8: {
-                        objectEntityList[arrayVal].values[8] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[8] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE9: {
-                        objectEntityList[arrayVal].values[9] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[9] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE10: {
-                        objectEntityList[arrayVal].values[10] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[10] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE11: {
-                        objectEntityList[arrayVal].values[11] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[11] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE12: {
-                        objectEntityList[arrayVal].values[12] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[12] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE13: {
-                        objectEntityList[arrayVal].values[13] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[13] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE14: {
-                        objectEntityList[arrayVal].values[14] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[14] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE15: {
-                        objectEntityList[arrayVal].values[15] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[15] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE16: {
-                        objectEntityList[arrayVal].values[16] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[16] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE17: {
-                        objectEntityList[arrayVal].values[17] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[17] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE18: {
-                        objectEntityList[arrayVal].values[18] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[18] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE19: {
-                        objectEntityList[arrayVal].values[19] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[19] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE20: {
-                        objectEntityList[arrayVal].values[20] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[20] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE21: {
-                        objectEntityList[arrayVal].values[21] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[21] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE22: {
-                        objectEntityList[arrayVal].values[22] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[22] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE23: {
-                        objectEntityList[arrayVal].values[23] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[23] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE24: {
-                        objectEntityList[arrayVal].values[24] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[24] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE25: {
-                        objectEntityList[arrayVal].values[25] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[25] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE26: {
-                        objectEntityList[arrayVal].values[26] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[26] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE27: {
-                        objectEntityList[arrayVal].values[27] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[27] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE28: {
-                        objectEntityList[arrayVal].values[28] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[28] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE29: {
-                        objectEntityList[arrayVal].values[29] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[29] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE30: {
-                        objectEntityList[arrayVal].values[30] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[30] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE31: {
-                        objectEntityList[arrayVal].values[31] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[31] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE32: {
-                        objectEntityList[arrayVal].values[32] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[32] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE33: {
-                        objectEntityList[arrayVal].values[33] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[33] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE34: {
-                        objectEntityList[arrayVal].values[34] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[34] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE35: {
-                        objectEntityList[arrayVal].values[35] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[35] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE36: {
-                        objectEntityList[arrayVal].values[36] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[36] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE37: {
-                        objectEntityList[arrayVal].values[37] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[37] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE38: {
-                        objectEntityList[arrayVal].values[38] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[38] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE39: {
-                        objectEntityList[arrayVal].values[39] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[39] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE40: {
-                        objectEntityList[arrayVal].values[40] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[40] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE41: {
-                        objectEntityList[arrayVal].values[41] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[41] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE42: {
-                        objectEntityList[arrayVal].values[42] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[42] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE43: {
-                        objectEntityList[arrayVal].values[43] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[43] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE44: {
-                        objectEntityList[arrayVal].values[44] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[44] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE45: {
-                        objectEntityList[arrayVal].values[45] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[45] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE46: {
-                        objectEntityList[arrayVal].values[46] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[46] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_OBJECTVALUE47: {
-                        objectEntityList[arrayVal].values[47] = scriptEng.operands[i];
+                        PS1_OBJ(arrayVal).values[47] = scriptEng.operands[i];
                         break;
                     }
                     case VAR_STAGESTATE: stageMode = scriptEng.operands[i]; break;
@@ -6362,25 +6658,38 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                     case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                     case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
-                    case VAR_SCENE3DVERTEXCOUNT: vertexCount = scriptEng.operands[i]; break;
-                    case VAR_SCENE3DFACECOUNT: faceCount = scriptEng.operands[i]; break;
+#if RETRO_PLATFORM == RETRO_PS1
+                    case VAR_SCENE3DVERTEXCOUNT:
+                        if (scriptEng.operands[i] > g_ps1Scene3DMaxCountV)
+                            g_ps1Scene3DMaxCountV = scriptEng.operands[i];
+                        vertexCount = PS1_VTX_COUNT(scriptEng.operands[i]);
+                        break;
+                    case VAR_SCENE3DFACECOUNT:
+                        if (scriptEng.operands[i] > g_ps1Scene3DMaxCountF)
+                            g_ps1Scene3DMaxCountF = scriptEng.operands[i];
+                        faceCount = PS1_FACE_COUNT(scriptEng.operands[i]);
+                        break;
+#else
+                    case VAR_SCENE3DVERTEXCOUNT: vertexCount = PS1_VTX_COUNT(scriptEng.operands[i]); break;
+                    case VAR_SCENE3DFACECOUNT: faceCount = PS1_FACE_COUNT(scriptEng.operands[i]); break;
+#endif
                     case VAR_SCENE3DPROJECTIONX: projectionX = scriptEng.operands[i]; break;
                     case VAR_SCENE3DPROJECTIONY: projectionY = scriptEng.operands[i]; break;
 #if !RETRO_REV00
                     case VAR_SCENE3DFOGCOLOR: fogColor = scriptEng.operands[i]; break;
                     case VAR_SCENE3DFOGSTRENGTH: fogStrength = scriptEng.operands[i]; break;
 #endif
-                    case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERY: vertexBuffer[arrayVal].y = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERZ: vertexBuffer[arrayVal].z = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERU: vertexBuffer[arrayVal].u = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERV: vertexBuffer[arrayVal].v = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERA: faceBuffer[arrayVal].a = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERB: faceBuffer[arrayVal].b = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERC: faceBuffer[arrayVal].c = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flag = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].color = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERX: vertexBuffer[PS1_VTX(arrayVal)].x = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERY: vertexBuffer[PS1_VTX(arrayVal)].y = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERZ: vertexBuffer[PS1_VTX(arrayVal)].z = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERU: vertexBuffer[PS1_VTX(arrayVal)].u = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERV: vertexBuffer[PS1_VTX(arrayVal)].v = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERA: faceBuffer[PS1_FACE(arrayVal)].a = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERB: faceBuffer[PS1_FACE(arrayVal)].b = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERC: faceBuffer[PS1_FACE(arrayVal)].c = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERD: faceBuffer[PS1_FACE(arrayVal)].d = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERFLAG: faceBuffer[PS1_FACE(arrayVal)].flag = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERCOLOR: faceBuffer[PS1_FACE(arrayVal)].color = scriptEng.operands[i]; break;
                     case VAR_SAVERAM: saveRAM[arrayVal] = scriptEng.operands[i]; break;
                     case VAR_ENGINESTATE: Engine.gameMode = scriptEng.operands[i]; break;
 #if RETRO_REV00

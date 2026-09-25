@@ -115,7 +115,7 @@ void InitDevMenu()
     SetPaletteEntry(-1, 0xFF, 0xFF, 0xFF, 0xFF);
     SetTextMenu(DEVMENU_MAIN);
     drawStageGFXHQ = false;
-#if !RETRO_USE_ORIGINAL_CODE
+#if !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM != RETRO_PS1 // no native objects on PS1
     RemoveNativeObjectType(PauseMenu_Create, PauseMenu_Main);
 #endif
 #if RETRO_HARDWARE_RENDER
@@ -148,7 +148,7 @@ void InitErrorMessage()
     gameMenu[1].visibleRowOffset = 0;
     stageMode                    = DEVMENU_SCRIPTERROR;
     drawStageGFXHQ               = false;
-#if !RETRO_USE_ORIGINAL_CODE
+#if !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM != RETRO_PS1 // no native objects on PS1
     RemoveNativeObjectType(PauseMenu_Create, PauseMenu_Main);
 #endif
 #if RETRO_HARDWARE_RENDER
@@ -263,13 +263,17 @@ void ProcessStageSelect()
                         stageMode         = STAGEMODE_LOAD;
                         Engine.gameMode   = ENGINE_MAINGAME;
                         stageListPosition = 0;
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: RetroEngine::RunFrame is the game loop (no native objects)
                         CREATE_ENTITY(RetroGameLoop);
                         if (Engine.gameDeviceType == RETRO_MOBILE)
                             CREATE_ENTITY(VirtualDPad);
+#endif
                     }
                     else {
 #endif
+#if RETRO_PLATFORM != RETRO_PS1
                         CREATE_ENTITY(SegaSplash);
+#endif
 #if !RETRO_USE_ORIGINAL_CODE
                     }
 #endif

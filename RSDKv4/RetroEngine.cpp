@@ -1,5 +1,10 @@
 #include "RetroEngine.hpp"
 
+#if RETRO_PLATFORM == RETRO_PS1
+// GameConfig stage entries / names that did not fit the PS1-sized stageList (Scene.hpp); for GDB.
+volatile uint32_t g_ps1StageListClamped = 0;
+#endif
+
 #if !RETRO_USE_ORIGINAL_CODE
 bool usingCWD        = false;
 bool engineDebugMode = false;
@@ -334,7 +339,14 @@ void RetroEngine::Init()
     gameMode = ENGINE_MAINGAME;
     running  = false;
 #if !RETRO_USE_ORIGINAL_CODE
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1 (docs/30): the scripted Title (the decomp's skipStartMenu path); the 2D PS1 menus come in phase 4.
+    skipStartMenu  = true;
+    bool skipStart = true;
+    onlineActive   = false; // no online services on a PS1 (the scripts check it)
+#else
     bool skipStart = skipStartMenu;
+#endif
 #endif
     SaveGame *saveGame = (SaveGame *)saveRAM;
 
@@ -522,6 +534,69 @@ void RetroEngine::Init()
 #endif
 }
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 pause requests (engine.state = ENGINE_INITPAUSE) seen before the phase 4 pause menu exists; for GDB.
+volatile uint32_t g_ps1PauseRequests = 0;
+
+// PS1: psyqo owns the frame loop (RSDKv4/main.cpp frame() -> RunFrame, flip by psyqo), so this is one pass of
+// Run()'s loop without the SDL timing, focus handling and window swap. The native objects are not built on
+// PS1 (docs/30: scripted Title + 2D PS1 menus), so the work of RetroGameLoop_Main (NativeObjects/RetroGameLoop.cpp)
+// is done here, on its skipStartMenu paths.
+void RetroEngine::RunFrame()
+{
+    for (int s = 0; s < gameSpeed; ++s) {
+        ProcessInput();
+
+        if (!masterPaused || frameStep) {
+            switch (gameMode) {
+                case ENGINE_DEVMENU: ProcessStageSelect(); break;
+
+                case ENGINE_MAINGAME: ProcessStage(); break;
+
+                case ENGINE_INITDEVMENU:
+                    LoadGameConfig("Data/Game/GameConfig.bin");
+                    InitDevMenu();
+                    ResetCurrentStageFolder();
+                    break;
+
+                case ENGINE_WAIT: break;
+
+                case ENGINE_SCRIPTERROR:
+                    LoadGameConfig("Data/Game/GameConfig.bin");
+                    InitErrorMessage();
+                    ResetCurrentStageFolder();
+                    break;
+
+                case ENGINE_INITPAUSE: // the PS1 pause menu arrives in phase 4: resume at once until then
+                    g_ps1PauseRequests = g_ps1PauseRequests + 1;
+                    gameMode           = ENGINE_MAINGAME;
+                    break;
+
+                case ENGINE_EXITPAUSE:
+                    gameMode = ENGINE_MAINGAME;
+                    ResumeSound();
+                    break;
+
+                case ENGINE_ENDGAME:
+                case ENGINE_RESETGAME:
+                default: // back to the Title (RetroGameLoop's skipStartMenu paths)
+                    ClearScreen(1);
+                    activeStageList   = 0;
+                    stageListPosition = 0;
+                    stageMode         = STAGEMODE_LOAD;
+                    gameMode          = ENGINE_MAINGAME;
+                    break;
+            }
+        }
+    }
+
+    FlipScreen();
+    frameStep = false;
+#if RETRO_REV00
+    Engine.message = MESSAGE_NONE;
+#endif
+}
+#else
 void RetroEngine::Run()
 {
     Engine.deltaTime = 0.0f;
@@ -617,6 +692,8 @@ void RetroEngine::Run()
     SDL_Quit();
 #endif
 }
+#endif // RETRO_PLATFORM == RETRO_PS1
+
 
 #if RETRO_USE_MOD_LOADER
 const tinyxml2::XMLElement *FirstXMLChildElement(tinyxml2::XMLDocument *doc, const tinyxml2::XMLElement *elementPtr, const char *name)
@@ -1213,6 +1290,33 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
             stageListCount[cat] = 0;
             FileRead(&fileBuffer, 1);
             stageListCount[cat] = fileBuffer;
+#if RETRO_PLATFORM == RETRO_PS1
+            // PS1: stageList is sized from the data (Scene.hpp); clamp instead of overflowing.
+            int count = stageListCount[cat];
+            if (count > STAGELIST_ENTRY_COUNT) {
+                stageListCount[cat]   = STAGELIST_ENTRY_COUNT;
+                g_ps1StageListClamped = g_ps1StageListClamped + 1;
+            }
+            for (int s = 0; s < count; ++s) {
+                SceneInfo scratch;
+                SceneInfo *info = s < STAGELIST_ENTRY_COUNT ? &stageList[cat][s] : &scratch;
+                char str[0x100];
+                char *dst[3] = { info->folder, info->id, info->name };
+                int size[3]  = { sizeof(info->folder), sizeof(info->id), sizeof(info->name) };
+                for (int f = 0; f < 3; ++f) { // folder, id, name
+                    FileRead(&fileBuffer, 1);
+                    FileRead(str, fileBuffer);
+                    str[fileBuffer] = 0;
+                    if (fileBuffer >= size[f]) {
+                        str[size[f] - 1]      = 0;
+                        g_ps1StageListClamped = g_ps1StageListClamped + 1;
+                    }
+                    StrCopy(dst[f], str);
+                }
+                FileRead(&fileBuffer, 1);
+                info->highlighted = fileBuffer;
+            }
+#else
             for (byte s = 0; s < stageListCount[cat]; ++s) {
 
                 // Read Stage Folder
@@ -1234,6 +1338,7 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
                 FileRead(&fileBuffer, 1);
                 stageList[cat][s].highlighted = fileBuffer;
             }
+#endif
         }
 
         CloseFile();
@@ -1319,6 +1424,26 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
 #endif
 
 #if !RETRO_USE_ORIGINAL_CODE
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1 `make BOOT=<folder> [BOOT_ID=] [BOOT_PLAYER=]`: start at the scene's real list position (the first entry
+    // of the folder unless an id is given); the PC slot 0xFE is past the PS1-sized list.
+    if (strlen(Engine.startSceneFolder)) {
+        for (int l = 0; l < STAGELIST_MAX; ++l) {
+            for (int p = 0; p < stageListCount[l]; ++p) {
+                if (StrComp(stageList[l][p].folder, Engine.startSceneFolder)
+                    && (!Engine.startSceneID[0] || StrComp(stageList[l][p].id, Engine.startSceneID))) {
+                    startList_Game  = l;
+                    startStage_Game = p;
+                    l               = STAGELIST_MAX;
+                    break;
+                }
+            }
+        }
+#ifdef PS1_BOOT_PLAYER
+        startPlayer = PS1_BOOT_PLAYER; // stage.playerListPos: 0 Sonic, 1 Tails, 2 Knuckles, 3 Sonic & Tails
+#endif
+    }
+#else
     if (strlen(Engine.startSceneFolder) && strlen(Engine.startSceneID)) {
         SceneInfo *scene = &stageList[STAGELIST_BONUS][0xFE]; // slot 0xFF is used for "none" startStage
         strcpy(scene->name, "_RSDK_SCENE");
@@ -1327,6 +1452,7 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
         startList_Game  = STAGELIST_BONUS;
         startStage_Game = 0xFE;
     }
+#endif
 
 #if RETRO_REV03
     Engine.usingOrigins = GetGlobalVariableID("game.playMode") != 0xFF;

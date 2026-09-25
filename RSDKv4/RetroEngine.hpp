@@ -53,12 +53,21 @@ typedef unsigned int uint;
 // Custom Platforms start here
 #define RETRO_UWP   (7)
 #define RETRO_LINUX (8)
+#define RETRO_PS1   (10) // PlayStation port (docs/30)
 
 // Platform types (Game manages platform-specific code such as HUD position using this rather than the above)
 #define RETRO_STANDARD (0)
 #define RETRO_MOBILE   (1)
 
-#if defined _WIN32
+#if defined RETRO_PS1_HOST_TOOL
+// Host-side PS1 build tools: engine code compiled for the Mac with the PS1 configuration (same array
+// sizes, SDL off) so outputs match the console.
+#define RETRO_PLATFORM   (RETRO_PS1)
+#define RETRO_DEVICETYPE (RETRO_STANDARD)
+#elif defined __mips__
+#define RETRO_PLATFORM   (RETRO_PS1)
+#define RETRO_DEVICETYPE (RETRO_STANDARD)
+#elif defined _WIN32
 
 #if defined WINAPI_FAMILY
 #if WINAPI_FAMILY != WINAPI_FAMILY_APP
@@ -96,10 +105,20 @@ typedef unsigned int uint;
 #define RETRO_DEVICETYPE (RETRO_STANDARD)
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 port: 320 px (user decision, docs/30; the Mega Drive original was 320x224). No mouse / touch.
+#define DEFAULT_SCREEN_XSIZE 320
+#define DEFAULT_FULLSCREEN   false
+#define RETRO_USING_OPENGL   (0) // the PS1 GPU backend is ours (ps1/)
+// Hosted builds get these transitively; the freestanding libc shims (ps1/libc) need them named.
+#include <ctype.h>
+#include <algorithm>
+#else
 #define DEFAULT_SCREEN_XSIZE 424
 #define DEFAULT_FULLSCREEN   false
 #define RETRO_USING_MOUSE
 #define RETRO_USING_TOUCH
+#endif
 
 #ifndef BASE_PATH
 #define BASE_PATH ""
@@ -202,7 +221,11 @@ typedef unsigned int uint;
 #endif
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+#define RETRO_USE_HAPTICS (0)
+#else
 #define RETRO_USE_HAPTICS (1)
+#endif
 
 // NOTE: This is only used for rev00 stuff, it was removed in rev01 and later builds
 #if RETRO_PLATFORM <= RETRO_WP7
@@ -210,7 +233,7 @@ typedef unsigned int uint;
 #else
 
 // use *this* macro to determine what platform the game thinks its running on (since only the first 7 platforms are supported natively by scripts)
-#if RETRO_PLATFORM == RETRO_LINUX
+#if RETRO_PLATFORM == RETRO_LINUX || RETRO_PLATFORM == RETRO_PS1 // scripts take their PC/console paths
 #define RETRO_GAMEPLATFORMID (RETRO_WIN)
 #elif RETRO_PLATFORM == RETRO_UWP
 #define RETRO_GAMEPLATFORMID (UAP_GetRetroGamePlatformId())
@@ -370,7 +393,11 @@ public:
     bool usingOrigins = false;
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+    char dataFile[RETRO_PACK_COUNT][0x80]; // indexed by pack (upstream sizes it by RETRO_PACKFILE_COUNT: 512 KB)
+#else
     char dataFile[RETRO_PACKFILE_COUNT][0x80];
+#endif
 
     bool initialised = false;
     bool running     = false;
@@ -427,6 +454,9 @@ public:
 
     void Init();
     void Run();
+#if RETRO_PLATFORM == RETRO_PS1
+    void RunFrame(); // one pass of Run()'s game loop; psyqo's frame() calls it (RSDKv4/main.cpp)
+#endif
 
     bool LoadGameConfig(const char *filepath);
 #if RETRO_USE_MOD_LOADER

@@ -19,11 +19,60 @@ NativeEntity objectEntityBackupS[NATIVEENTITY_COUNT];
 // Game Objects
 int objectEntityPos = 0;
 int curObjectType   = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: no "storage" half (Sonic 2's scripts never CopyObject into it); slot ENTITY_COUNT is the blank scratch
+// entity script accesses past the array get (Script.cpp PS1_OBJ).
+Entity objectEntityList[ENTITY_COUNT + 1];
+#else
 Entity objectEntityList[ENTITY_COUNT * 2]; //"regular" list & "storage" list
+#endif
 int processObjectFlag[ENTITY_COUNT];
 TypeGroupList objectTypeGroupList[TYPEGROUP_COUNT];
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (docs/30 phase 2): the type/group lists share one pool instead of ENTITY_COUNT refs each (0x103 lists x
+// 4.7 KB = 1.2 MB upstream). Every interacting entity joins at most 3 lists (its custom group, its type, "all"),
+// so the pool holds 3 x ENTITY_COUNT refs. Two passes (count, then place) give each list the same entities in
+// the same (ascending slot) order as upstream's single pass.
+static short s_ps1TypeGroupPool[3 * ENTITY_COUNT];
+static void PS1BuildTypeGroups()
+{
+    for (int i = 0; i < TYPEGROUP_COUNT; ++i) objectTypeGroupList[i].listSize = 0;
+    for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
+        Entity *entity = &objectEntityList[objectEntityPos];
+        if (processObjectFlag[objectEntityPos] && entity->objectInteractions) {
+            if (entity->groupID >= OBJECT_COUNT)
+                objectTypeGroupList[entity->groupID].listSize++;
+            objectTypeGroupList[entity->type].listSize++;
+            objectTypeGroupList[GROUP_ALL].listSize++;
+        }
+    }
+    int offset = 0;
+    for (int i = 0; i < TYPEGROUP_COUNT; ++i) {
+        objectTypeGroupList[i].entityRefs = &s_ps1TypeGroupPool[offset];
+        offset += objectTypeGroupList[i].listSize;
+        objectTypeGroupList[i].listSize = 0;
+    }
+    for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
+        Entity *entity = &objectEntityList[objectEntityPos];
+        if (processObjectFlag[objectEntityPos] && entity->objectInteractions) {
+            if (entity->groupID >= OBJECT_COUNT) {
+                TypeGroupList *listCustom                      = &objectTypeGroupList[entity->groupID];
+                listCustom->entityRefs[listCustom->listSize++] = objectEntityPos;
+            }
+            TypeGroupList *listType                    = &objectTypeGroupList[entity->type];
+            listType->entityRefs[listType->listSize++] = objectEntityPos;
+            TypeGroupList *listAll                   = &objectTypeGroupList[GROUP_ALL];
+            listAll->entityRefs[listAll->listSize++] = objectEntityPos;
+        }
+    }
+}
+#endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+char typeNames[OBJECT_COUNT][0x20];
+#else
 char typeNames[OBJECT_COUNT][0x40];
+#endif
 
 int OBJECT_BORDER_X1 = 0x80;
 int OBJECT_BORDER_X2 = SCREEN_XSIZE + 0x80;
@@ -121,6 +170,9 @@ void ProcessObjects()
         }
     }
 
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1BuildTypeGroups();
+#else
     for (int i = 0; i < TYPEGROUP_COUNT; ++i) objectTypeGroupList[i].listSize = 0;
 
     for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
@@ -141,6 +193,7 @@ void ProcessObjects()
             listAll->entityRefs[listAll->listSize++] = objectEntityPos;
         }
     }
+#endif
 }
 void ProcessPausedObjects()
 {
@@ -212,6 +265,9 @@ void ProcessFrozenObjects()
         }
     }
 
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1BuildTypeGroups();
+#else
     for (int i = 0; i < TYPEGROUP_COUNT; ++i) objectTypeGroupList[i].listSize = 0;
 
     for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
@@ -222,6 +278,7 @@ void ProcessFrozenObjects()
                 TypeGroupList *listCustom                      = &objectTypeGroupList[objectEntityList[objectEntityPos].groupID];
                 listCustom->entityRefs[listCustom->listSize++] = objectEntityPos;
             }
+
             // Type-Specific list
             TypeGroupList *listType                    = &objectTypeGroupList[objectEntityList[objectEntityPos].type];
             listType->entityRefs[listType->listSize++] = objectEntityPos;
@@ -231,6 +288,7 @@ void ProcessFrozenObjects()
             listAll->entityRefs[listAll->listSize++] = objectEntityPos;
         }
     }
+#endif
 }
 #if !RETRO_REV00
 void Process2PObjects()
@@ -313,6 +371,9 @@ void Process2PObjects()
         }
     }
 
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1BuildTypeGroups();
+#else
     for (int i = 0; i < TYPEGROUP_COUNT; ++i) objectTypeGroupList[i].listSize = 0;
 
     for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
@@ -323,6 +384,7 @@ void Process2PObjects()
                 TypeGroupList *listCustom                      = &objectTypeGroupList[objectEntityList[objectEntityPos].groupID];
                 listCustom->entityRefs[listCustom->listSize++] = objectEntityPos;
             }
+
             // Type-Specific list
             TypeGroupList *listType                    = &objectTypeGroupList[objectEntityList[objectEntityPos].type];
             listType->entityRefs[listType->listSize++] = objectEntityPos;
@@ -332,6 +394,7 @@ void Process2PObjects()
             listAll->entityRefs[listAll->listSize++] = objectEntityPos;
         }
     }
+#endif
 }
 #endif
 
@@ -427,6 +490,9 @@ void InitNativeObjectSystem()
 
     Engine.globalBoxRegion = saveGame->boxRegion;
     SetGameVolumes(saveGame->musVolume, saveGame->sfxVolume);
+#if RETRO_PLATFORM == RETRO_PS1
+    // No native objects on PS1: RetroEngine::RunFrame does RetroGameLoop's work (skipStartMenu path).
+#else
 #if !RETRO_USE_ORIGINAL_CODE
     if (skipStartMenu) {
         CREATE_ENTITY(RetroGameLoop);
@@ -436,6 +502,7 @@ void InitNativeObjectSystem()
     else
 #endif
         CREATE_ENTITY(SegaSplash);
+#endif
 }
 NativeEntity *CreateNativeObject(void (*create)(void *objPtr), void (*main)(void *objPtr))
 {

@@ -1,7 +1,13 @@
 #ifndef STRING_H
 #define STRING_H
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: the localized StringList.txt feeds only the native menus, which are not built (docs/30: 2D PS1 menus with
+// build-time strings, phase 4). 2 MB upstream.
+#define STRSTORAGE_SIZE (1)
+#else
 #define STRSTORAGE_SIZE (1000)
+#endif
 #define STRING_SIZE     (0x400)
 
 #define CREDITS_LIST_COUNT (0x200)

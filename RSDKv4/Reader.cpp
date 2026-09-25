@@ -24,6 +24,9 @@ FileIO *cFileHandle = nullptr;
 
 bool CheckRSDKFile(const char *filePath)
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    return false; // loose files only (RETRO_PACKFILE_COUNT, Reader.hpp): Data/ + Bytecode/ on the disc
+#endif
     FileInfo info;
 
     char filePathBuffer[0x100];

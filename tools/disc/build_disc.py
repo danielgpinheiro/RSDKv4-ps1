@@ -3,7 +3,7 @@
 
 A MODE2/2352 BIN/CUE is needed for CD-XA music and STR files with XA audio (2336-byte mixed
 sectors, which an hdiutil ISO can't carry). The image boots through the BIOS too:
-SYSTEM.CNF (BOOT = cdrom:\\PSX.EXE;1) + PSX.EXE (the current rsdkv3.ps-exe) + the Sony
+SYSTEM.CNF (BOOT = cdrom:\\PSX.EXE;1) + PSX.EXE (the current rsdkv4.ps-exe) + the Sony
 license sectors, taken from the workspace's LICENSE.DAT (never copied into the repo; build/ is
 git-ignored).
 
@@ -33,7 +33,7 @@ the second image and reading the index back).
 
 Usage: build_disc.py [ISO_ROOT] [EXE] [LICENSE|none] [OUT_PREFIX]
   LICENSE none = no license data (the disc boots in emulators, on ODEs and modded consoles only)
-  defaults: build/iso rsdkv3.ps-exe ../LICENSE.DAT build/game
+  defaults: build/iso rsdkv4.ps-exe ../LICENSE.DAT build/game
 """
 import os, struct, subprocess, sys
 from xml.sax.saxutils import quoteattr
@@ -166,7 +166,7 @@ def emit_file(rel, iso_root, out, counts):
 def main():
     args = sys.argv[1:]
     iso_root = os.path.abspath(args[0] if len(args) > 0 else os.path.join(REPO, 'build', 'iso'))
-    exe = os.path.abspath(args[1] if len(args) > 1 else os.path.join(REPO, 'rsdkv3.ps-exe'))
+    exe = os.path.abspath(args[1] if len(args) > 1 else os.path.join(REPO, 'rsdkv4.ps-exe'))
     lic = args[2] if len(args) > 2 else os.path.join(REPO, '..', 'LICENSE.DAT')
     lic = None if lic.lower() == 'none' else os.path.abspath(lic)  # none: blank license sectors
     out = os.path.abspath(args[3] if len(args) > 3 else os.path.join(REPO, 'build', 'game'))

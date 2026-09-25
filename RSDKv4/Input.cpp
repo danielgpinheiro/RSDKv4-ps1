@@ -1,5 +1,13 @@
 #include "RetroEngine.hpp"
 
+#if RETRO_PLATFORM == RETRO_PS1
+#include <psyqo/advancedpad.hh>
+extern psyqo::AdvancedPad *g_ps1Pad; // main.cpp (initialized in start())
+volatile uint16_t g_ps1PadTestMask  = 0; // GDB-injected input, bit = INPUT_* index (test harness)
+volatile uint16_t g_ps1PadButtons   = 0; // last input mask (bit = INPUT_* index)
+volatile uint32_t g_ps1PadConnected = 0; // pad 1 seen by the BIOS driver
+#endif
+
 InputData keyPress = InputData();
 InputData keyDown  = InputData();
 
@@ -208,6 +216,7 @@ bool getControllerButton(byte buttonID)
 }
 #endif //! RETRO_USING_SDL2
 
+#if RETRO_PLATFORM != RETRO_PS1 // SDL controller hot-plug (the PS1 pad: psyqo AdvancedPad, phase 4)
 void controllerInit(int controllerID)
 {
     for (int i = 0; i < controllers.size(); ++i) {
@@ -271,6 +280,11 @@ void controllerClose(int controllerID)
     if (controllers.empty())
         inputType = 0;
 }
+
+#else
+void controllerInit(int controllerID) {}
+void controllerClose(int controllerID) {}
+#endif
 
 void InitInputDevices()
 {
@@ -471,6 +485,34 @@ void ProcessInput()
     if (!flag && inputType == 1) {
         inputDevice[INPUT_ANY].setReleased();
     }
+#elif RETRO_PLATFORM == RETRO_PS1
+    // psyqo::AdvancedPad, port 1 (as the Sonic CD port) + GDB-injected input (g_ps1PadTestMask, bit = INPUT_*
+    // index); the SDL2 branch's held / pressed / INPUT_ANY handling. Phase 4 revisits the mapping with the menus.
+    using Pad = psyqo::AdvancedPad;
+    static const Pad::Button map[INPUT_ANY] = { Pad::Up,       Pad::Down,   Pad::Left,   Pad::Right, Pad::Cross,
+                                                Pad::Circle,   Pad::Square, Pad::Triangle, Pad::L2,  Pad::R2,
+                                                Pad::L1,       Pad::R1,     Pad::Start,  Pad::Select };
+    uint16_t held  = g_ps1PadTestMask;
+    bool connected = g_ps1Pad && g_ps1Pad->isPadConnected(Pad::Pad::Pad1a);
+    if (connected) {
+        for (int i = 0; i < INPUT_ANY; i++)
+            if (g_ps1Pad->isButtonPressed(Pad::Pad::Pad1a, map[i]))
+                held |= 1 << i;
+    }
+    g_ps1PadConnected = connected;
+    g_ps1PadButtons   = held;
+    for (int i = 0; i < INPUT_ANY; i++) {
+        if (held & (1 << i)) {
+            inputDevice[i].setHeld();
+            if (!inputDevice[INPUT_ANY].hold)
+                inputDevice[INPUT_ANY].setHeld();
+        }
+        else if (inputDevice[i].hold) {
+            inputDevice[i].setReleased();
+        }
+    }
+    if (!held)
+        inputDevice[INPUT_ANY].setReleased();
 #endif //! RETRO_USING_SDL2
 }
 #endif //! !RETRO_USE_ORIGINAL_CODE

@@ -9,13 +9,13 @@ Sector format and codes from psx-spx "CDROM Sector Encoding" (cdromformat.md):
 - system area: LICENSE.DAT is 12 records of 2336 bytes (sub-header + user data + EDC/ECC area)
   for sectors 0..11; its data must equal the image's (mkpsxiso recomputes EDC/ECC, checked
   above), sectors 12..15 are zero-filled Form 2;
-- ISO9660: every file equals its source (build/iso, SYSTEM.CNF, rsdkv3.ps-exe); mixed files
+- ISO9660: every file equals its source (build/iso, SYSTEM.CNF, rsdkv4.ps-exe); mixed files
   (CD-XA/STR) compared sector by sector as 2336-byte records (sub-header + data; mkpsxiso fills in
   the EDC/ECC the encoder leaves zero); no source-only file
   (build_disc.SOURCE_ONLY) on the disc; SYSTEM.CNF boots cdrom:\\PSX.EXE;1; PSX.EXE is a PS-X EXE.
 
 Usage: verify_disc.py [BIN] [ISO_ROOT] [EXE] [LICENSE|none]
-  defaults: build/game.bin build/iso rsdkv3.ps-exe ../LICENSE.DAT
+  defaults: build/game.bin build/iso rsdkv4.ps-exe ../LICENSE.DAT
 Exit status 0 = everything checks out.
 """
 import os, struct, sys
@@ -112,7 +112,7 @@ def main():
     a = sys.argv[1:]
     binp = a[0] if len(a) > 0 else os.path.join(REPO, 'build', 'game.bin')
     iso_root = a[1] if len(a) > 1 else os.path.join(REPO, 'build', 'iso')
-    exe = a[2] if len(a) > 2 else os.path.join(REPO, 'rsdkv3.ps-exe')
+    exe = a[2] if len(a) > 2 else os.path.join(REPO, 'rsdkv4.ps-exe')
     lic = a[3] if len(a) > 3 else os.path.join(REPO, '..', 'LICENSE.DAT')
     img = open(binp, 'rb').read()
     n = len(img) // RAW

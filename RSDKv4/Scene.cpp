@@ -1,5 +1,40 @@
 #include "RetroEngine.hpp"
 
+#if RETRO_PLATFORM == RETRO_PS1
+#include "../ps1/loading.hh"
+#include "../ps1/video.hh"
+
+// Headless CPU profile of the NORMAL stage mode (hblanks of the last frame; GDB, tools/*_test.sh).
+volatile uint32_t g_ps1ProfObjectsHbl = 0; // ProcessObjects: main + player-interaction subs
+volatile uint32_t g_ps1ProfDrawHbl    = 0; // DrawStageGFX: draw subs (+ drawing from phase 3)
+#define PS1_PROF(var, call)                  \
+    {                                         \
+        uint32_t ps1ProfT0 = PS1Hblanks();    \
+        call;                                 \
+        var = PS1HblanksSince(ps1ProfT0);     \
+    }
+
+// Layer rows past the PS1-sized buffers (Scene.hpp) are read into a scratch row so the file position stays
+// right; line-scroll bytes past TILELAYER_LINESCROLL_COUNT are dropped. Both counted for GDB.
+volatile uint32_t g_ps1LayerRowsClamped   = 0;
+volatile uint32_t g_ps1LineScrollClamped  = 0;
+volatile uint32_t g_ps1Copy16x16Tile      = 0;
+volatile uint32_t g_ps1TileAttrClamped    = 0; // chunk tile attributes past a nibble (Scene.hpp Tiles128x128)
+static ushort s_ps1LayerScratchRow[TILELAYER_CHUNK_W];
+static inline int PS1LayerChunkRows(int layer) { return layer ? TILELAYER_CHUNK_H : PS1_LAYER0_CHUNK_H; }
+static ushort *PS1LayerRow(int layer, int y)
+{
+    if (y < PS1LayerChunkRows(layer))
+        return &stageLayouts[layer].tiles[y * TILELAYER_CHUNK_W];
+    g_ps1LayerRowsClamped = g_ps1LayerRowsClamped + 1;
+    return s_ps1LayerScratchRow;
+}
+#define PS1_LAYER_ROW(layer, y) PS1LayerRow(layer, y)
+#else
+#define PS1_PROF(var, call)     call
+#define PS1_LAYER_ROW(layer, y) (&stageLayouts[layer].tiles[(y)*TILELAYER_CHUNK_W])
+#endif
+
 int stageListCount[STAGELIST_MAX];
 char stageListNames[STAGELIST_MAX][0x20] = {
     "Presentation Stages",
@@ -7,7 +42,7 @@ char stageListNames[STAGELIST_MAX][0x20] = {
     "Bonus Stages",
     "Special Stages",
 };
-SceneInfo stageList[STAGELIST_MAX][0x100];
+SceneInfo stageList[STAGELIST_MAX][STAGELIST_ENTRY_COUNT];
 
 int stageMode = STAGEMODE_LOAD;
 
@@ -63,6 +98,17 @@ byte titleCardWord2 = 0;
 byte activeTileLayers[4];
 byte tLayerMidPoint;
 TileLayer stageLayouts[LAYER_COUNT];
+#if RETRO_PLATFORM == RETRO_PS1
+static ushort s_ps1Layer0Tiles[TILELAYER_CHUNK_W * PS1_LAYER0_CHUNK_H];
+static ushort s_ps1LayerTiles[LAYER_COUNT - 1][TILELAYER_CHUNK_COUNT];
+static struct PS1LayerTiles {
+    PS1LayerTiles()
+    {
+        stageLayouts[0].tiles = s_ps1Layer0Tiles;
+        for (int i = 1; i < LAYER_COUNT; ++i) stageLayouts[i].tiles = s_ps1LayerTiles[i - 1];
+    }
+} s_ps1LayerTilesInit;
+#endif
 
 int bgDeformationData0[DEFORM_COUNT];
 int bgDeformationData1[DEFORM_COUNT];
@@ -75,9 +121,11 @@ LineScroll vParallax;
 Tiles128x128 tiles128x128;
 CollisionMasks collisionMasks[2];
 
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: tile pixels live only in VRAM (phase 3); no software 3D floor
 byte tilesetGFXData[TILESET_SIZE];
 
 ushort tile3DFloorBuffer[0x100 * 0x100];
+#endif
 bool drawStageGFXHQ = false;
 
 #if RETRO_USE_MOD_LOADER
@@ -170,7 +218,13 @@ void ProcessStage(void)
             for (int m = 0; m < modList.size(); ++m) ScanModFolder(&modList[m]);
 #endif
             ResetBackgroundSettings();
+#if RETRO_PLATFORM == RETRO_PS1
+            PS1LoadingBegin(); // loading icon if the load takes > 250 ms (ps1/loading)
             LoadStageFiles();
+            PS1LoadingEnd();
+#else
+            LoadStageFiles();
+#endif
 
 #if RETRO_HARDWARE_RENDER
             texBufferMode = 0;
@@ -245,7 +299,7 @@ void ProcessStage(void)
             }
 
             // Update
-            ProcessObjects();
+            PS1_PROF(g_ps1ProfObjectsHbl, ProcessObjects());
 
             if (cameraTarget > -1) {
                 if (cameraEnabled == 1) {
@@ -264,7 +318,7 @@ void ProcessStage(void)
             }
 
             ProcessParallaxAutoScroll();
-            DrawStageGFX();
+            PS1_PROF(g_ps1ProfDrawHbl, DrawStageGFX());
             break;
 
         case STAGEMODE_PAUSED:
@@ -825,7 +879,9 @@ void LoadStageFiles(void)
             CloseFile();
         }
 
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: tiles are pre-converted to VRAM pages at build time (phase 3), never decoded here
         LoadStageGIFFile(stageListPosition);
+#endif
         LoadStageCollisions();
         LoadStageBackground();
     }
@@ -908,11 +964,16 @@ void LoadActLayout()
         newXBoundary2 = stageLayouts[0].xsize << 7;
         newYBoundary2 = stageLayouts[0].ysize << 7;
 
+#if RETRO_PLATFORM == RETRO_PS1
+        memset(stageLayouts[0].tiles, 0, TILELAYER_CHUNK_W * PS1_LAYER0_CHUNK_H * sizeof(ushort));
+        memset(stageLayouts[0].lineScroll, 0, sizeof(stageLayouts[0].lineScroll));
+#else
         memset(stageLayouts[0].tiles, 0, TILELAYER_CHUNK_COUNT * sizeof(ushort));
         memset(stageLayouts[0].lineScroll, 0, 0x7FFF);
+#endif
 
         for (int y = 0; y < stageLayouts[0].ysize; ++y) {
-            ushort *tiles = &stageLayouts[0].tiles[(y * TILELAYER_CHUNK_H)];
+            ushort *tiles = PS1_LAYER_ROW(0, y); // upstream: tiles[y * TILELAYER_CHUNK_H] (= the 0x100 stride on PC)
             for (int x = 0; x < stageLayouts[0].xsize; ++x) {
                 FileRead(&fileBuffer[0], 1);
                 tiles[x] = fileBuffer[0];
@@ -1088,9 +1149,29 @@ void LoadStageBackground()
             stageLayouts[i].scrollSpeed = fileBuffer << 10;
             stageLayouts[i].scrollPos   = 0;
 
+#if RETRO_PLATFORM == RETRO_PS1
+            memset(stageLayouts[i].tiles, 0, TILELAYER_CHUNK_W * PS1LayerChunkRows(i) * sizeof(ushort));
+#else
             memset(stageLayouts[i].tiles, 0, TILELAYER_CHUNK_COUNT * sizeof(ushort));
+#endif
             byte *lineScrollPtr = stageLayouts[i].lineScroll;
+#if RETRO_PLATFORM == RETRO_PS1
+            byte *lineScrollEnd = stageLayouts[i].lineScroll + TILELAYER_LINESCROLL_COUNT;
+#define PS1_LINESCROLL_PUT(v)                                   \
+    {                                                            \
+        if (lineScrollPtr < lineScrollEnd)                       \
+            *lineScrollPtr++ = (v);                              \
+        else                                                     \
+            g_ps1LineScrollClamped = g_ps1LineScrollClamped + 1; \
+    }
+#else
+#define PS1_LINESCROLL_PUT(v) *lineScrollPtr++ = (v);
+#endif
+#if RETRO_PLATFORM == RETRO_PS1
+            memset(stageLayouts[i].lineScroll, 0, sizeof(stageLayouts[i].lineScroll));
+#else
             memset(stageLayouts[i].lineScroll, 0, 0x7FFF);
+#endif
 
             // Read Line Scroll
             byte buf[3];
@@ -1106,17 +1187,17 @@ void LoadStageBackground()
                         FileRead(&buf[2], 1);
                         int index = buf[1];
                         int cnt   = buf[2] - 1;
-                        for (int c = 0; c < cnt; ++c) *lineScrollPtr++ = index;
+                        for (int c = 0; c < cnt; ++c) PS1_LINESCROLL_PUT(index)
                     }
                 }
                 else {
-                    *lineScrollPtr++ = buf[0];
+                    PS1_LINESCROLL_PUT(buf[0])
                 }
             }
 
             // Read Layout
             for (int y = 0; y < stageLayouts[i].ysize; ++y) {
-                ushort *chunks = &stageLayouts[i].tiles[y * TILELAYER_CHUNK_H];
+                ushort *chunks = PS1_LAYER_ROW(i, y); // upstream: tiles[y * TILELAYER_CHUNK_H]
                 for (int x = 0; x < stageLayouts[i].xsize; ++x) {
                     FileRead(&fileBuffer, 1);
                     *chunks = fileBuffer;
@@ -1147,7 +1228,7 @@ void LoadStageChunks()
             entry[0] -= 4 * (entry[0] >> 2);
 
             tiles128x128.tileIndex[i] = entry[1] + (entry[0] << 8);
-#if RETRO_SOFTWARE_RENDER
+#if RETRO_SOFTWARE_RENDER && RETRO_PLATFORM != RETRO_PS1
             tiles128x128.gfxDataPos[i] = tiles128x128.tileIndex[i] << 8;
 #endif
 #if RETRO_HARDWARE_RENDER
@@ -1330,6 +1411,7 @@ void LoadStageCollisions()
         CloseFile();
     }
 }
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: pre-converted tile pages (phase 3)
 void LoadStageGIFFile(int stageID)
 {
     FileInfo info;
@@ -1386,6 +1468,7 @@ void LoadStageGIFFile(int stageID)
         CloseFile();
     }
 }
+#endif
 
 void ResetBackgroundSettings()
 {

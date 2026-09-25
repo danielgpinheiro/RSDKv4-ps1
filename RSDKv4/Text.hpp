@@ -1,11 +1,22 @@
 #ifndef TEXTSYSTEM_H
 #define TEXTSYSTEM_H
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: Sonic 2's script menus (LSelect, Special's messages) and the dev menu's stage lists hold short entries;
+// no script loads a text file into a menu. Additions past these are dropped and counted (g_ps1TextMenuClamped).
+#define TEXTDATA_COUNT  (0x800)
+#define TEXTENTRY_COUNT (0x80)
+#else
 #define TEXTDATA_COUNT  (0x2800)
 #define TEXTENTRY_COUNT (0x200)
+#endif
 #define TEXTMENU_COUNT  (0x2)
 
+#if RETRO_PLATFORM == RETRO_PS1
+#define FONTLIST_CHAR_COUNT (0x4) // PS1: the bitmap fonts serve the native menus only (not built); 590 KB upstream
+#else
 #define FONTLIST_CHAR_COUNT (0x1000)
+#endif
 #define FONTLIST_COUNT      (0x4)
 
 enum TextInfoTypes { TEXTINFO_TEXTDATA = 0, TEXTINFO_TEXTSIZE = 1, TEXTINFO_ROWCOUNT = 2 };

@@ -1,5 +1,9 @@
 #include "RetroEngine.hpp"
 
+#if RETRO_PLATFORM == RETRO_PS1
+volatile uint32_t g_ps1AnimFrameOverflow = 0; // .ani frames past the PS1-sized animFrames (GDB)
+#endif
+
 AnimationFile animationFileList[ANIFILE_COUNT];
 int animationFileCount = 0;
 
@@ -45,7 +49,16 @@ void LoadAnimationFile(char *filePath)
         animFile->aniListOffset = animationCount;
 
         for (int a = 0; a < animCount; ++a) {
+#if RETRO_PLATFORM == RETRO_PS1
+            static SpriteAnimation s_ps1ScratchAnim;
+            SpriteAnimation *anim = &s_ps1ScratchAnim;
+            if (animationCount < ANIMATION_COUNT)
+                anim = &animationList[animationCount++];
+            else
+                g_ps1AnimFrameOverflow = g_ps1AnimFrameOverflow + 1;
+#else
             SpriteAnimation *anim = &animationList[animationCount++];
+#endif
             anim->frameListOffset = animFrameCount;
             FileRead(&fileBuffer, 1);
             FileRead(anim->name, fileBuffer);
@@ -56,7 +69,16 @@ void LoadAnimationFile(char *filePath)
             FileRead(&anim->rotationStyle, 1);
 
             for (int j = 0; j < anim->frameCount; ++j) {
+#if RETRO_PLATFORM == RETRO_PS1 // PS1-sized animFrames (Animation.hpp): past it, read into a scratch frame, counted
+                static SpriteFrame s_ps1ScratchFrame;
+                SpriteFrame *frame = &s_ps1ScratchFrame;
+                if (animFrameCount < SPRITEFRAME_COUNT)
+                    frame = &animFrames[animFrameCount++];
+                else
+                    g_ps1AnimFrameOverflow = g_ps1AnimFrameOverflow + 1;
+#else
                 SpriteFrame *frame = &animFrames[animFrameCount++];
+#endif
                 FileRead(&frame->sheetID, 1);
                 frame->sheetID = sheetIDs[frame->sheetID];
                 FileRead(&frame->hitboxID, 1);

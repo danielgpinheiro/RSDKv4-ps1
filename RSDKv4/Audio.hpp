@@ -1,6 +1,22 @@
 #ifndef AUDIO_H
 #define AUDIO_H
 
+#include <stdlib.h>
+
+// PS1 port: no Ogg/SDL at runtime (music is CD-XA, SFX are SPU-ADPCM; docs/30 phase 5). These stand-ins
+// keep the data structures and the inline helpers compiling (as in the Sonic CD port).
+#if RETRO_PLATFORM == RETRO_PS1
+#include <stdint.h>
+typedef int16_t Sint16;
+typedef int32_t Sint32;
+typedef uint8_t Uint8;
+typedef uint16_t Uint16;
+typedef struct {
+    int unused;
+} OggVorbis_File;
+#define ov_clear(f) ((void)0)
+#endif
+
 #define TRACK_COUNT (0x10)
 #define SFX_COUNT   (0x100)
 #if !RETRO_USE_ORIGINAL_CODE
@@ -99,7 +115,11 @@ extern StreamFile *streamFilePtr;
 extern StreamInfo *streamInfoPtr;
 
 extern SFXInfo sfxList[SFX_COUNT];
+#if RETRO_PLATFORM == RETRO_PS1
+extern char sfxNames[SFX_COUNT][0x20]; // PS1: Sonic 2's longest SFX name has 16 chars
+#else
 extern char sfxNames[SFX_COUNT][0x40];
+#endif
 
 extern ChannelInfo sfxChannels[CHANNEL_COUNT];
 
@@ -139,9 +159,10 @@ inline void FreeMusInfo()
 }
 #endif
 #else
-void ProcessMusicStream() {}
-void ProcessAudioPlayback() {}
-void ProcessAudioMixing() {}
+// inline: defined in a header (upstream had plain definitions here, one per including file).
+inline void ProcessMusicStream() {}
+inline void ProcessAudioPlayback() {}
+inline void ProcessAudioMixing() {}
 
 #if !RETRO_USE_ORIGINAL_CODE
 inline void FreeMusInfo() { ov_clear(&streamInfo[currentStreamIndex].vorbisFile); }

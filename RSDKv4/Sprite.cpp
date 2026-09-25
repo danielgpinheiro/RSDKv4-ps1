@@ -1,5 +1,6 @@
 #include "RetroEngine.hpp"
 
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: images are converted at build time (tools/atlas, tools/tiles); no GIF decoder
 struct GifDecoder {
     int depth;
     int clearCode;
@@ -200,6 +201,8 @@ void ReadGifPictureData(int width, int height, bool interlaced, byte *gfxData, i
     }
 }
 
+#endif
+
 int AddGraphicsFile(const char *filePath)
 {
     char sheetPath[0x100];
@@ -213,17 +216,35 @@ int AddGraphicsFile(const char *filePath)
         if (++sheetID == SURFACE_COUNT) // Max Sheet cnt
             return 0;
     }
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1: sprite pixels live only in VRAM (the per-stage atlas, tools/atlas; bound in phase 3). Register the
+    // name; never decode an image at runtime (golden rule).
+    StrCopy(gfxSurface[sheetID].fileName, sheetPath);
+#else
     byte fileExtension = (byte)sheetPath[(StrLength(sheetPath) - 1) & 0xFF];
     switch (fileExtension) {
         case 'f': LoadGIFFile(sheetPath, sheetID); break;
         case 'p': LoadBMPFile(sheetPath, sheetID); break;
         case 'r': LoadPVRFile(sheetPath, sheetID); break;
     }
+#endif
 
     return sheetID;
 }
 void RemoveGraphicsFile(const char *filePath, int sheetID)
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1: no pixel data in RAM to compact. Forget the name(s) only (upstream: the last matching sheet).
+    if (sheetID < 0) {
+        for (int i = 0; i < SURFACE_COUNT; ++i) {
+            if (StrLength(gfxSurface[i].fileName) > 0 && StrComp(gfxSurface[i].fileName, filePath))
+                sheetID = i;
+        }
+    }
+    if (sheetID >= 0)
+        StrCopy(gfxSurface[sheetID].fileName, "");
+    return;
+#endif
     if (sheetID < 0) {
         for (int i = 0; i < SURFACE_COUNT; ++i) {
             if (StrLength(gfxSurface[i].fileName) > 0 && StrComp(gfxSurface[i].fileName, filePath))
@@ -244,6 +265,10 @@ void RemoveGraphicsFile(const char *filePath, int sheetID)
     }
 }
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: the dev menu's LoadGIFFile("Data/Game/SystemText.gif") has no atlas: nothing to load.
+int LoadGIFFile(const char *filePath, byte sheetID) { return false; }
+#else
 int LoadBMPFile(const char *filePath, byte sheetID)
 {
     FileInfo info;
@@ -437,3 +462,4 @@ int LoadPVRFile(const char *filePath, byte sheetID)
     }
     return false;
 }
+#endif // RETRO_PLATFORM != RETRO_PS1

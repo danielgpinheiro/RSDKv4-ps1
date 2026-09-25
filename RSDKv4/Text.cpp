@@ -239,6 +239,18 @@ void LoadTextFile(TextMenu *menu, const char *filePath, byte mapCode)
         CloseFile();
     }
 }
+#if RETRO_PLATFORM == RETRO_PS1
+volatile uint32_t g_ps1TextMenuClamped = 0; // text menu characters / rows past the PS1-sized TextMenu (Text.hpp)
+#define PS1_TEXTMENU_PUT(menu, ch)                                   \
+    {                                                                \
+        if ((menu)->textDataPos < TEXTDATA_COUNT)                    \
+            (menu)->textData[(menu)->textDataPos++] = (ch);          \
+        else                                                         \
+            g_ps1TextMenuClamped = g_ps1TextMenuClamped + 1;         \
+    }
+#else
+#define PS1_TEXTMENU_PUT(menu, ch) (menu)->textData[(menu)->textDataPos++] = (ch);
+#endif
 void SetupTextMenu(TextMenu *menu, int rowCount)
 {
     menu->textDataPos = 0;
@@ -246,12 +258,18 @@ void SetupTextMenu(TextMenu *menu, int rowCount)
 }
 void AddTextMenuEntry(TextMenu *menu, const char *text)
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    if (menu->rowCount >= TEXTENTRY_COUNT) {
+        g_ps1TextMenuClamped = g_ps1TextMenuClamped + 1;
+        return;
+    }
+#endif
     menu->entryStart[menu->rowCount]     = menu->textDataPos;
     menu->entrySize[menu->rowCount]      = 0;
     int textLength                       = StrLength(text);
     for (int i = 0; i < textLength;) {
         if (text[i] != '\0') {
-            menu->textData[menu->textDataPos++] = text[i];
+            PS1_TEXTMENU_PUT(menu, text[i]);
             menu->entrySize[menu->rowCount]++;
             ++i;
         }
@@ -263,12 +281,18 @@ void AddTextMenuEntry(TextMenu *menu, const char *text)
 }
 void AddTextMenuEntryW(TextMenu *menu, const ushort *text)
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    if (menu->rowCount >= TEXTENTRY_COUNT) {
+        g_ps1TextMenuClamped = g_ps1TextMenuClamped + 1;
+        return;
+    }
+#endif
     menu->entryStart[menu->rowCount]     = menu->textDataPos;
     menu->entrySize[menu->rowCount]      = 0;
     int textLength                       = StrLengthW(text);
     for (int i = 0; i < textLength;) {
         if (text[i] != '\0') {
-            menu->textData[menu->textDataPos++] = text[i];
+            PS1_TEXTMENU_PUT(menu, text[i]);
             menu->entrySize[menu->rowCount]++;
             ++i;
         }
@@ -285,7 +309,7 @@ void SetTextMenuEntry(TextMenu *menu, const char *text, int rowID)
     int textLength                       = StrLength(text);
     for (int i = 0; i < textLength;) {
         if (text[i] != '\0') {
-            menu->textData[menu->textDataPos++] = text[i];
+            PS1_TEXTMENU_PUT(menu, text[i]);
             menu->entrySize[rowID]++;
             ++i;
         }
@@ -301,7 +325,7 @@ void SetTextMenuEntryW(TextMenu *menu, const ushort *text, int rowID)
     int textLength                       = StrLengthW(text);
     for (int i = 0; i < textLength;) {
         if (text[i] != '\0') {
-            menu->textData[menu->textDataPos++] = text[i];
+            PS1_TEXTMENU_PUT(menu, text[i]);
             menu->entrySize[rowID]++;
             ++i;
         }
@@ -448,6 +472,9 @@ void LoadBitmapFont(const char *filePath, int index, char textureID)
 {
     FileInfo info;
 
+#if RETRO_PLATFORM == RETRO_PS1
+    return; // native-menu fonts: not on PS1 (FONTLIST_CHAR_COUNT, Text.hpp)
+#endif
     BitmapFont *entry = &fontList[index];
     if (!entry->count)
         entry->count = 2;
@@ -667,7 +694,11 @@ float GetTextWidth(ushort *text, int fontID, float scaleX)
         character = *text++;
     }
 
+#if RETRO_PLATFORM == RETRO_PS1
+    width = w > lineMax ? w : lineMax; // no fmaxf in the PS1 libc shims
+#else
     width = fmaxf(w, lineMax);
+#endif
     return width * scaleX;
 }
 

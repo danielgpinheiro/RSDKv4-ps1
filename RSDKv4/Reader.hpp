@@ -34,7 +34,11 @@
 
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+#define RETRO_PACKFILE_COUNT (0x1) // PS1: loose files on the disc only (the datapack is extracted at build time)
+#else
 #define RETRO_PACKFILE_COUNT (0x1000)
+#endif
 #define RETRO_PACK_COUNT     (0x4)
 
 struct FileInfo {

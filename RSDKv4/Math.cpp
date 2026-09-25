@@ -2,6 +2,13 @@
 #include <math.h>
 #include <time.h>
 
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL) // host tools compute them natively
+// PS1: the tables below are computed at build time (tools/trig/gen_trig.c runs this function's loops on the
+// host; the atan table alone is 65,536 atan2f = ~26 s of soft-float at boot, docs/28 phase 2.2).
+#include "trig_tables.inc"
+
+void CalculateTrigAngles() { srand(time(NULL)); }
+#else
 int sinM7LookupTable[0x200];
 int cosM7LookupTable[0x200];
 
@@ -61,6 +68,7 @@ void CalculateTrigAngles()
         }
     }
 }
+#endif
 
 byte ArcTanLookup(int X, int Y)
 {

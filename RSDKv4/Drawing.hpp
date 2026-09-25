@@ -2,7 +2,11 @@
 #define DRAWING_H
 
 #define SURFACE_COUNT (24)
+#if RETRO_PLATFORM == RETRO_PS1
+#define GFXDATA_SIZE (0x10) // PS1: sprite pixels are in VRAM (atlas), never in RAM
+#else
 #define GFXDATA_SIZE  (0x800 * 0x800)
+#endif
 
 #if RETRO_REV03
 #define DRAWLAYER_COUNT (8)
@@ -15,7 +19,11 @@ enum InkFlags { INK_NONE, INK_BLEND, INK_ALPHA, INK_ADD, INK_SUB };
 enum DrawFXFlags { FX_SCALE, FX_ROTATE, FX_ROTOZOOM, FX_INK, FX_TINT, FX_FLIP };
 
 struct DrawListEntry {
+#if RETRO_PLATFORM == RETRO_PS1
+    short entityRefs[ENTITY_COUNT]; // PS1: entity slots (< ENTITY_COUNT) -> half the size
+#else
     int entityRefs[ENTITY_COUNT];
+#endif
     int listSize;
 };
 

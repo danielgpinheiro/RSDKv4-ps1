@@ -13,8 +13,17 @@
 #define TILE_DATASIZE (TILE_SIZE * TILE_SIZE)
 #define TILESET_SIZE  (TILE_COUNT * TILE_DATASIZE)
 
-#define TILELAYER_CHUNK_W          (0x100)
+#define TILELAYER_CHUNK_W          (0x100) // the row stride (y << 8) is hard-coded in the engine: keep it
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (2 MB, docs/30 phase 2): Sonic 2's background layers are <= 16 chunks tall (without Egg Gauntlet) and
+// the FG (layer 0) <= 133 (Special; story zones <= 32, Credits 52). TileLayer::tiles is a pointer on PS1, layer 0
+// into a taller buffer (Scene.cpp). Rows past a buffer are read into a scratch row and counted
+// (g_ps1LayerRowsClamped). Line scroll: the BG layers' ysize * 128 lines; the FG's is only cleared.
+#define TILELAYER_CHUNK_H      (0x10)
+#define PS1_LAYER0_CHUNK_H     (0x88)
+#else
 #define TILELAYER_CHUNK_H          (0x100)
+#endif
 #define TILELAYER_CHUNK_COUNT      (TILELAYER_CHUNK_W * TILELAYER_CHUNK_H)
 #define TILELAYER_LINESCROLL_COUNT (TILELAYER_CHUNK_H * CHUNK_SIZE)
 
@@ -84,12 +93,25 @@ enum CameraStyles {
     CAMERASTYLE_HLOCKED,
 };
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: sized from Sonic 2's GameConfig (lists of 6 / 22 / 8 / 12 stages; folder <= 8, id <= 1, name <= 21
+// chars): 12 KB instead of 197 KB. LoadGameConfig clamps (g_ps1StageListClamped).
+#define STAGELIST_ENTRY_COUNT (0x40)
+struct SceneInfo {
+    char name[0x20];
+    char folder[0x10];
+    char id[0x10];
+    bool highlighted;
+};
+#else
+#define STAGELIST_ENTRY_COUNT (0x100)
 struct SceneInfo {
     char name[0x40];
     char folder[0x40];
     char id[0x40];
     bool highlighted;
 };
+#endif
 
 struct CollisionMasks {
     sbyte floorMasks[TILE_COUNT * TILE_SIZE];
@@ -101,7 +123,11 @@ struct CollisionMasks {
 };
 
 struct TileLayer {
+#if RETRO_PLATFORM == RETRO_PS1
+    ushort *tiles; // TILELAYER_CHUNK_W x (layer 0: PS1_LAYER0_CHUNK_H, others TILELAYER_CHUNK_H) rows, Scene.cpp
+#else
     ushort tiles[TILELAYER_CHUNK_COUNT];
+#endif
     byte lineScroll[TILELAYER_LINESCROLL_COUNT];
     int parallaxFactor;
     int scrollSpeed;
@@ -126,6 +152,60 @@ struct LineScroll {
     byte entryCount;
 };
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (docs/30 phase 2): a chunk tile's index (0-1023), direction (0-3) and visual plane (0-1) share one ushort (bits
+// 0-9, 10-11, 12-15) and its two collision flags (0-4 in Sonic 2's data) are the nibbles of one byte: three bytes per
+// tile instead of six (saves 96 KB). The engine's `tiles128x128.tileIndex[i]`, `.direction[i]`, `.visualPlane[i]` and
+// `.collisionFlags[path][i]` read and assign through these views unchanged; a script value past a field is clamped
+// and counted (g_ps1TileAttrClamped, Scene.cpp).
+extern volatile uint32_t g_ps1TileAttrClamped;
+struct PS1Nibble {
+    byte *b;
+    int shift;
+    inline operator byte() const { return (*b >> shift) & 0xF; }
+    inline PS1Nibble &operator=(int v)
+    {
+        if ((uint)v > 0xF) {
+            g_ps1TileAttrClamped = g_ps1TileAttrClamped + 1;
+            v &= 0xF;
+        }
+        *b = (byte)((*b & ~(0xF << shift)) | (v << shift));
+        return *this;
+    }
+};
+struct PS1NibbleView {
+    byte *base;
+    int shift;
+    inline PS1Nibble operator[](int i) const { return PS1Nibble{ &base[i], shift }; }
+};
+struct PS1Field16 {
+    ushort *w;
+    int shift, mask;
+    inline operator ushort() const { return (*w >> shift) & mask; }
+    inline PS1Field16 &operator=(int v)
+    {
+        if ((uint)v > (uint)mask) {
+            g_ps1TileAttrClamped = g_ps1TileAttrClamped + 1;
+            v &= mask;
+        }
+        *w = (ushort)((*w & ~(mask << shift)) | (v << shift));
+        return *this;
+    }
+};
+struct PS1Field16View {
+    ushort *base;
+    int shift, mask;
+    inline PS1Field16 operator[](int i) const { return PS1Field16{ &base[i], shift, mask }; }
+};
+struct Tiles128x128 {
+    ushort ps1Tile[CHUNKTILE_COUNT];    // bits 0-9: tileIndex, 10-11: direction, 12-15: visualPlane
+    byte ps1Collision[CHUNKTILE_COUNT]; // low nibble: collisionFlags[0], high: collisionFlags[1]
+    PS1Field16View tileIndex{ ps1Tile, 0, 0x3FF };
+    PS1Field16View direction{ ps1Tile, 10, 0x3 };
+    PS1Field16View visualPlane{ ps1Tile, 12, 0xF };
+    PS1NibbleView collisionFlags[CPATH_COUNT] = { { ps1Collision, 0 }, { ps1Collision, 4 } };
+};
+#else
 struct Tiles128x128 {
     int gfxDataPos[CHUNKTILE_COUNT];
     ushort tileIndex[CHUNKTILE_COUNT];
@@ -133,10 +213,11 @@ struct Tiles128x128 {
     byte visualPlane[CHUNKTILE_COUNT];
     byte collisionFlags[CPATH_COUNT][CHUNKTILE_COUNT];
 };
+#endif
 
 extern int stageListCount[STAGELIST_MAX];
 extern char stageListNames[STAGELIST_MAX][0x20];
-extern SceneInfo stageList[STAGELIST_MAX][0x100];
+extern SceneInfo stageList[STAGELIST_MAX][STAGELIST_ENTRY_COUNT];
 
 extern int stageMode;
 
@@ -240,6 +321,12 @@ void LoadStageChunks();
 void LoadStageCollisions();
 void LoadStageGIFFile(int stageID);
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: no software 3D floor (v4 Sonic 2 has no 3D floor layer) and no tile pixels in RAM (VRAM, phase 3).
+extern volatile uint32_t g_ps1Copy16x16Tile; // Scene.cpp: calls until the phase 3 VRAM tile copy
+inline void Init3DFloorBuffer(int layerID) {}
+inline void Copy16x16Tile(ushort dest, ushort src) { g_ps1Copy16x16Tile = g_ps1Copy16x16Tile + 1; }
+#else
 inline void Init3DFloorBuffer(int layerID)
 {
     for (int y = 0; y < TILELAYER_CHUNK_H; ++y) {
@@ -258,6 +345,7 @@ inline void Copy16x16Tile(ushort dest, ushort src)
     int cnt       = TILE_DATASIZE;
     while (cnt--) *destPtr++ = *srcPtr++;
 }
+#endif
 
 void SetLayerDeformation(int selectedDef, int waveLength, int waveWidth, int waveType, int YPos, int waveSize);
 

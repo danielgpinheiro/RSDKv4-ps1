@@ -241,6 +241,10 @@ void GenerateMD5FromString(const char *string, int len, uint *hash0, uint *hash1
 
 void InitLocalizedStrings()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    stringStorePos = 0; // see STRSTORAGE_SIZE (String.hpp)
+    return;
+#endif
     memset(stringStorage, 0, STRING_SIZE * STRSTORAGE_SIZE * sizeof(ushort));
     stringStorePos = 0;
 

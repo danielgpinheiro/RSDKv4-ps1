@@ -1,9 +1,22 @@
 #ifndef OBJECT_H
 #define OBJECT_H
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: the native menu objects are not built (docs/30: scripted Title + 2D PS1 menus), so nothing creates
+// native entities; 3 banks x 0x100 x 1,040 B upstream = 800 KB.
+#define NATIVEENTITY_COUNT (0x4)
+#else
 #define NATIVEENTITY_COUNT (0x100)
+#endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (docs/30 phase 2): sized from the data: 728 placed objects at most (Special; story zones <= 652) from
+// slot 32 + 128 temp slots. Script accesses past it (Zone09 / Special loop over all 0x4A0 slots) read a blank
+// scratch entity and are counted (Script.cpp PS1_OBJ, g_ps1EntityOutOfRange).
+#define ENTITY_COUNT     (0x380)
+#else
 #define ENTITY_COUNT     (0x4A0)
+#endif
 #define TEMPENTITY_START (ENTITY_COUNT - 0x80)
 #define OBJECT_COUNT     (0x100)
 #define TYPEGROUP_COUNT  (0x103)
@@ -14,7 +27,11 @@ enum ObjectControlModes {
 };
 
 struct TypeGroupList {
+#if RETRO_PLATFORM == RETRO_PS1
+    short *entityRefs; // into a shared pool, rebuilt with the lists (Object.cpp PS1BuildTypeGroups)
+#else
     int entityRefs[ENTITY_COUNT];
+#endif
     int listSize;
 };
 
@@ -125,11 +142,19 @@ extern NativeEntity objectEntityBackupS[NATIVEENTITY_COUNT];
 // Game Objects
 extern int objectEntityPos;
 extern int curObjectType;
+#if RETRO_PLATFORM == RETRO_PS1
+extern Entity objectEntityList[ENTITY_COUNT + 1];
+#else
 extern Entity objectEntityList[ENTITY_COUNT * 2];
+#endif
 extern int processObjectFlag[ENTITY_COUNT];
 extern TypeGroupList objectTypeGroupList[TYPEGROUP_COUNT];
 
+#if RETRO_PLATFORM == RETRO_PS1
+extern char typeNames[OBJECT_COUNT][0x20]; // PS1: Sonic 2's longest object name has 18 chars
+#else
 extern char typeNames[OBJECT_COUNT][0x40];
+#endif
 
 extern int OBJECT_BORDER_X1;
 extern int OBJECT_BORDER_X2;

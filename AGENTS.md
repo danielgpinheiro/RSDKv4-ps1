@@ -25,7 +25,16 @@ upstream RSDKModding (read-only), `fork` = github.com/danielgpinheiro/RSDKv4-ps1
 
 ## Build / run / debug
 ```bash
-make -j8                        # rsdkv4.ps-exe (+ .elf, .map); must fit 2 MB. Phase 0: the smoke-test app
+make -j8                        # rsdkv4.ps-exe (+ .elf, .map): the engine (headless until phase 3); must fit 2 MB
+make -j8 BOOT=Zone01 [BOOT_ID=2] [BOOT_PLAYER=0..3]   # start in a stage (0 Sonic, 1 Tails, 2 Knuckles, 3 Sonic & Tails);
+                                # touch RSDKv4/main.cpp RSDKv4/RetroEngine.cpp when switching
+make PLATFORM_TEST=1            # the phase 0 smoke-test app (ps1/platform_test.cpp)
+tools/data_disc.sh              # game disc from ../Sonic2_Extracted (Data/ + Bytecode/, no sources / menus / ZoneM)
+tools/boot_test.sh [OUT] [F1] [F2]            # headless boot over GDB: loads, fps, heap, VM/array guards
+tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, land (g_ps1PadTestMask) + dumps
+python3 tools/tiles_check.py ../Sonic2_Extracted/Data/Stages/Zone01 OUT     # packed chunk tiles == file
+python3 tools/script16_check.py ../Sonic2_Extracted/Bytecode Zone01 OUT     # int16 script code == bytecode
+tools/scene3d/sort3d_check.sh   # host: the PS1 3D draw-list merge sort == upstream's bubble sort
 tools/smoke_disc.sh             # phase 0 test disc (Sonic 2 subset: Zone01 + Jump.vag) + make disc
 tools/smoke_test.sh [OUT]       # phase 0 smoke test over GDB (file CRCs, SPU, loading icon, pad)
 python3 tools/loading/check_icon.py VRAM FRAME Y     # loading icon pixel check on a VRAM dump
@@ -39,9 +48,9 @@ than watchpoints. GDB convenience variables must not be register names (`$v0`, `
 ## Layout
 | Path | Role |
 |---|---|
-| `RSDKv4/` | the engine (upstream decompilation); PS1 code arrives in phase 2 behind `RETRO_PLATFORM == RETRO_PS1` |
+| `RSDKv4/` | the engine (upstream decompilation) + PS1 code behind `RETRO_PLATFORM == RETRO_PS1` (`main.cpp` = the psyqo app, `RetroEngine::RunFrame`; arrays sized from the data, `../docs/30` phase 2 appendix) |
 | `RSDKv4/NativeObjects/` | the 2013 menus as native C++ objects (drawn by `RSDKv4/Renderer.cpp`): phase 1 research |
-| `ps1/` | PS1 platform layer (see `ps1/README.md`); `ps1/platform_test.cpp` = phase 0 app |
+| `ps1/` | PS1 platform layer (see `ps1/README.md`); `render_headless.cpp` / `audio_headless.cpp` = phase 2 stand-ins; `platform_test.cpp` = phase 0 app; `render`, `tileset`, `sprite_atlas`, `fmv` (from Sonic CD) join in phase 3 |
 | `tools/disc/` | mkpsxiso BIN/CUE builder (file index, two mastering passes) + byte-level verifier |
 | `tools/loading/`, `tools/memcard/` | loading / save icon builders and checks |
 | `tools/smoke_*.sh`, `vramshot.py`, `pad.lua`, `frame_capture.sh`, `boot_test.sh` | harness |
@@ -55,6 +64,12 @@ than watchpoints. GDB convenience variables must not be register names (`$v0`, `
 - **Pads = `psyqo::AdvancedPad`**. **One CD action at a time** (stop the load stream first).
 - CLUT index 0 = transparent (0x0000); visible black = 0x8000.
 - Hardware access in `start()` / `frame()`, not `prepare()`.
+- **v4 RAM layout (phase 2)**: script code is **int16 slots + a sorted big-value table** (`Script.hpp`
+  `PS1ScriptCode`): read `scriptCode[i]` freely, write only through `PS1ScriptWrite`. Script entity accesses go through
+  `PS1_OBJ(i)` (blank scratch past `ENTITY_COUNT` 0x380, counted). `tiles128x128` fields are packed views
+  (`Scene.hpp`: assign/read only, no pointers). Type groups share one pool (`Object.cpp PS1BuildTypeGroups`).
+  Scene3D vertex indices 0xFF0-0xFFF map to the buffer's tail. Every clamp has a `g_ps1*` counter that tests read.
+- No native objects on PS1: `RetroEngine::RunFrame` does `RetroGameLoop`'s work (scripted Title path).
 
 ## Definition of done for a step
 Builds cleanly · fits 2 MB · verified in PCSX-Redux with evidence · `../docs/30` status updated · commit
