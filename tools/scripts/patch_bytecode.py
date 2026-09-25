@@ -11,6 +11,7 @@ natively, leaving the same temps and table / local writes behind.
   log: not patched).
 - Lose Ring (GlobalCode object "Lose Ring": its update sub, the rings scattered on a hit) -> PS1LoseRing / End
   when it is exactly LOSERING_SIG.
+- Metropolis's Horizontal Door (stage object: its update sub) -> PS1HorizontalDoor / End when exactly HDOOR_SIG.
 - Ring (GlobalCode object "Ring": its update sub, ~21 VM instructions a frame per ring) -> PS1Ring / End, only
   when the sub is exactly RING_SIG (the instructions RSDKv4/Script.cpp PS1RingUpdate transcribes, constants
   included).
@@ -442,6 +443,52 @@ LOSERING_SIG = [
 ]
 
 
+HDOOR_SIG = [
+    'Equal TEMP0 0',
+    'Equal TEMP1 OBJECTXPOS',
+    'Equal OBJECTXPOS OBJECTVALUE1',
+    'ForEachActive 0 256 ARRAYPOS6',
+    'IfEqual 2 OBJECTDIRECTION 0',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -32 -16 96 64 ARRAYPOS6 -1 -1 1 1',
+    'IfEqual 4 CHECKRESULT 1',
+    'Equal TEMP0 1',
+    'endif',
+    'else',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -160 -16 -32 64 ARRAYPOS6 -1 -1 1 1',
+    'IfEqual 6 CHECKRESULT 1',
+    'Equal TEMP0 1',
+    'endif',
+    'endif',
+    'next',
+    'Equal OBJECTXPOS TEMP1',
+    'IfEqual 8 TEMP0 1',
+    'IfLower 10 OBJECTVALUE0 4',
+    'Inc OBJECTVALUE0',
+    'IfEqual 12 OBJECTDIRECTION 0',
+    'Sub OBJECTXPOS 1048576',
+    'else',
+    'Add OBJECTXPOS 1048576',
+    'endif',
+    'endif',
+    'else',
+    'IfGreater 14 OBJECTVALUE0 0',
+    'Dec OBJECTVALUE0',
+    'IfEqual 16 OBJECTDIRECTION 0',
+    'Add OBJECTXPOS 1048576',
+    'else',
+    'Sub OBJECTXPOS 1048576',
+    'endif',
+    'endif',
+    'endif',
+    'ForEachActive 18 256 ARRAYPOS6',
+    'IfGreaterOrEqual 20 OBJECTYVEL[1,1,6] 0',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -32 -12 32 12 ARRAYPOS6 65536 65536 65536 65536',
+    'endif',
+    'next',
+    'End',
+]
+
+
 def patch_global_sub(bcdir, obj_name, sub, sig, op_name):
     """GlobalCode object `obj_name`'s sub `sub` (0 update, 1 draw) -> op / End when it is exactly `sig`."""
     names, vars_ = bs.tables(3)
@@ -528,7 +575,8 @@ def main():
     only = os.environ.get('PS1_PATCH_ONLY')  # tests: e.g. "oscillate" (a comma list of the patch names below)
     for name, fn in (('oscillate', patch_oscillate), ('ring', patch_ring),
                      ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
-                     ('losering', lambda d: patch_global_sub(d, 'Lose Ring', 0, LOSERING_SIG, 'PS1LoseRing'))):
+                     ('losering', lambda d: patch_global_sub(d, 'Lose Ring', 0, LOSERING_SIG, 'PS1LoseRing')),
+                     ('hdoor', lambda d: patch_stage_sub(d, 'Horizontal Door', 0, HDOOR_SIG, 'PS1HorizontalDoor'))):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 

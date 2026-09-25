@@ -747,6 +747,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1Ring", 0),
     FunctionInfo("PS1BridgeDraw", 0),
     FunctionInfo("PS1LoseRing", 0),
+    FunctionInfo("PS1HorizontalDoor", 0),
 #endif
 };
 
@@ -1254,6 +1255,7 @@ enum ScrFunc {
     FUNC_PS1RING,
     FUNC_PS1BRIDGEDRAW,
     FUNC_PS1LOSERING,
+    FUNC_PS1HORIZONTALDOOR,
 #endif
     FUNC_MAX_CNT
 };
@@ -5984,6 +5986,57 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 PS1LoseRingUpdate();
                 break;
+            case FUNC_PS1HORIZONTALDOOR: {
+                // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
+                // one statement per script instruction, in order; patched in only when it matches HDOOR_SIG exactly.
+                opcodeSize             = 0;
+                int *t                 = scriptEng.temp, *ap = scriptEng.arrayPosition;
+                int &cr                = scriptEng.checkResult;
+                int self               = objectEntityPos;
+                Entity &me             = PS1_OBJ(self);
+                TypeGroupList &players = objectTypeGroupList[256];
+                t[0]                   = 0;
+                t[1]                   = me.xpos;
+                me.xpos                = me.values[1];
+                for (int loop = 0; loop < players.listSize; ++loop) {
+                    ap[6] = players.entityRefs[loop];
+                    if (me.direction == 0) {
+                        TouchCollision(&PS1_OBJ(self), -32, -16, 96, 64, &PS1_OBJ(ap[6]), -1, -1, 1, 1);
+                        if (cr == 1)
+                            t[0] = 1;
+                    }
+                    else {
+                        TouchCollision(&PS1_OBJ(self), -160, -16, -32, 64, &PS1_OBJ(ap[6]), -1, -1, 1, 1);
+                        if (cr == 1)
+                            t[0] = 1;
+                    }
+                }
+                me.xpos = t[1];
+                if (t[0] == 1) {
+                    if (me.values[0] < 4) {
+                        me.values[0]++;
+                        if (me.direction == 0)
+                            me.xpos -= 1048576;
+                        else
+                            me.xpos += 1048576;
+                    }
+                }
+                else {
+                    if (me.values[0] > 0) {
+                        me.values[0]--;
+                        if (me.direction == 0)
+                            me.xpos += 1048576;
+                        else
+                            me.xpos -= 1048576;
+                    }
+                }
+                for (int loop = 0; loop < players.listSize; ++loop) {
+                    ap[6] = players.entityRefs[loop];
+                    if (PS1_OBJ(ap[6]).yvel >= 0)
+                        BoxCollision(&PS1_OBJ(self), -32, -12, 32, 12, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                }
+                break;
+            }
             case FUNC_PS1BRIDGEDRAW: {
                 // Emerald Hill's Bridge draw sub (stage object "Bridge"), natively: the logs of a sagging bridge, a
                 // sine curve on each side of the log the player stands on (~170 VM instructions a frame, 45 hblanks).

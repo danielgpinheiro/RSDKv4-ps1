@@ -13,6 +13,8 @@ cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/rsdkv4_logic}; S0=${2:-240}; S1=${3:-420}; S2=${4:-432}; S3=${5:-600}
 # HOLD_RIGHT=1: hold Right from S0 to the end, no jump (the obj_profile.sh input: runs into enemies in Emerald Hill).
 M1=0x18; M2=0
+# INJECT_S0="gdb commands": run at frame S0 (tests: e.g. move the player next to an object whose branch must run).
+INJECT_S0=${INJECT_S0:-}
 if [ "${HOLD_RIGHT:-0}" = 1 ]; then M1=0x08; M2=0x08; fi
 PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
 cat > "$OUT.gdb" <<GDBEOF
@@ -39,6 +41,7 @@ if g_ps1PerfFrames == $S0
   dump binary memory ${OUT}_code.bin &scriptCode.slot[0] &scriptCode.slot[scriptCodePos]
   dump binary memory ${OUT}_big.bin &'Script.cpp'::s_ps1ScriptBig[0] &'Script.cpp'::s_ps1ScriptBig['Script.cpp'::s_ps1ScriptBigCount]
   set var g_ps1PadTestMask = 0x08
+  $INJECT_S0
 end
 if g_ps1PerfFrames == $S1
   set var g_ps1PadTestMask = $M1
