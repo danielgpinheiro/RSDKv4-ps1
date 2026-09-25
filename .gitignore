@@ -291,3 +291,18 @@ android/local.properties
 .flatpak-builder
 flatpak/*.apk
 build-dir
+
+# --- PS1 port build artifacts ---
+*.o
+*.dep
+rsdkv4.ps-exe
+rsdkv4.elf
+rsdkv4.map
+build/
+__pycache__/
+tools/rsdkmanifest/rsdkmanifest
+*.dSYM/
+# game data never goes into this repo
+*.rsdk
+*.ogv
+.DS_Store
