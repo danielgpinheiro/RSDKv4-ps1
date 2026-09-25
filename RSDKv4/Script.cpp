@@ -744,6 +744,7 @@ const FunctionInfo functions[] = {
     // PS1 extensions, only in bytecode rewritten by tools/scripts/patch_bytecode.py (docs/30): hot script loops run
     // natively, with every side effect of the script (temps, table / local writes).
     FunctionInfo("PS1Oscillate", 4),
+    FunctionInfo("PS1Ring", 0),
 #endif
 };
 
@@ -1248,6 +1249,7 @@ enum ScrFunc {
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
     FUNC_PS1OSCILLATE,
+    FUNC_PS1RING,
 #endif
     FUNC_MAX_CNT
 };
@@ -3610,6 +3612,151 @@ void ClearScriptData()
     SetObjectTypeName("Blank Object", OBJ_TYPE_BLANKOBJECT);
 }
 
+#if RETRO_PLATFORM == RETRO_PS1
+// Sonic 2's Ring update sub (GlobalCode object "Ring"), natively (docs/30 CPU work): the most common object, ~21
+// VM instructions a frame each (4.6 hblanks on the emulator; 11-16 on screen in several zones). The patcher
+// (tools/scripts/patch_bytecode.py) replaces the sub with `PS1Ring / End` only when its instructions match this
+// transcription exactly, constants included. Every statement below is one script instruction, in order, with the
+// same variables (this = objectEntityPos, p = arrayPos6: each player of group 256), so temps, checkResult, array
+// positions and every entity / global write end as the script leaves them.
+static void PS1ResetObjectEntity(int slot, int type, int prop, int x, int y) // FUNC_RESETOBJECTENTITY's body
+{
+    Entity *newEnt = &PS1_OBJ(slot);
+    memset(newEnt, 0, sizeof(Entity));
+    newEnt->type               = type;
+    newEnt->propertyValue      = prop;
+    newEnt->xpos               = x;
+    newEnt->ypos               = y;
+    newEnt->direction          = FLIP_NONE;
+    newEnt->priority           = PRIORITY_BOUNDS;
+    newEnt->drawOrder          = 3;
+    newEnt->scale              = 512;
+    newEnt->inkEffect          = INK_NONE;
+    newEnt->objectInteractions = true;
+    newEnt->visible            = true;
+    newEnt->tileCollisions     = true;
+}
+static void PS1RingUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr = scriptEng.checkResult;
+    int *G  = globalVariables;
+    int self = objectEntityPos;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) { // ForEachActive 256, ARRAYPOS6
+        ap[6]    = players.entityRefs[loop];
+        Entity &me = PS1_OBJ(self);
+        cr   = PS1_OBJ(0).state == 27; // CheckEqual OBJECTSTATE[0], 27
+        t[0] = cr;
+        cr   = PS1_OBJ(ap[6]).state == 27;
+        t[0] = cr;
+        cr   = PS1_OBJ(ap[6]).state == 26;
+        t[0] |= cr;
+        if (t[0] == 0) {
+            TouchCollision(&PS1_OBJ(self), -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 1) {
+                me.type      = 12;
+                me.drawOrder = PS1_OBJ(ap[6]).values[18];
+                if (PS1_OBJ(ap[6]).values[16] == 1) {
+                    PS1_OBJ(0).values[0]++;
+                    if (PS1_OBJ(0).values[0] > 999)
+                        PS1_OBJ(0).values[0] = 999;
+                }
+                else {
+                    PS1_OBJ(ap[6]).values[0]++;
+                    if (PS1_OBJ(ap[6]).values[0] > 999)
+                        PS1_OBJ(ap[6]).values[0] = 999;
+                }
+                if (PS1_OBJ(0).values[0] >= G[21]) {
+                    if (G[0] != 2) {
+                        G[25]++;
+                        PlaySfx(24, 0);
+                        PauseSound();
+                        PS1ResetObjectEntity(25, 34, 2, 0, 0);
+                        PS1_OBJ(25).priority = 1;
+                    }
+                    G[21] += 100;
+                    if (G[21] > 300)
+                        G[21] = 1000;
+                }
+                if (G[13] == 1) {
+                    if (G[108] == 0) {
+                        if (ap[6] == 0)
+                            G[119]++;
+                        else
+                            G[125]++;
+                    }
+                    else {
+                        if (ap[6] == 1)
+                            G[119]++;
+                        else
+                            G[125]++;
+                    }
+                }
+                if (G[20] == 0) {
+                    PlaySfx(1, 0);
+                    SetSfxAttributes(1, -1, -100);
+                    G[20] = 1;
+                }
+                else {
+                    PlaySfx(2, 0);
+                    SetSfxAttributes(2, -1, 100);
+                    G[20] = 0;
+                }
+            }
+            else {
+                if (PS1_OBJ(self).state == 0) {
+                    if (PS1_OBJ(ap[6]).values[37] == 4) {
+                        TouchCollision(&PS1_OBJ(self), -64, -64, 64, 64, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                        if (cr == 1) {
+                            PS1_OBJ(self).state     = 1;
+                            PS1_OBJ(self).values[1] = ap[6];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Entity &me = PS1_OBJ(self);
+    if (me.state == 1) {
+        ap[0] = me.values[1];
+        if (PS1_OBJ(ap[0]).values[37] != 4) {
+            me.type           = 11;
+            me.animationSpeed = 128;
+            me.alpha          = 256;
+        }
+        else {
+            ap[0] = me.values[1];
+            if (me.xpos > PS1_OBJ(ap[0]).xpos) {
+                if (me.xvel > 0)
+                    me.xvel -= 49152;
+                else
+                    me.xvel -= 12288;
+            }
+            else {
+                if (me.xvel < 0)
+                    me.xvel += 49152;
+                else
+                    me.xvel += 12288;
+            }
+            if (me.ypos > PS1_OBJ(ap[0]).ypos) {
+                if (me.yvel > 0)
+                    me.yvel -= 49152;
+                else
+                    me.yvel -= 12288;
+            }
+            else {
+                if (me.yvel < 0)
+                    me.yvel += 49152;
+                else
+                    me.yvel += 12288;
+            }
+            me.xpos += me.xvel;
+            me.ypos += me.yvel;
+        }
+    }
+}
+#endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
 // variables read it. The same value, evaluated where it is read (arrayVal is the operand's, in scope there).
@@ -5721,6 +5868,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             }
 #if RETRO_PLATFORM == RETRO_PS1
+            case FUNC_PS1RING:
+                opcodeSize = 0;
+                PS1RingUpdate();
+                break;
             case FUNC_PS1OSCILLATE: {
                 // Sonic 2's Stage Setup oscillators (GlobalCode function 71, ~390 VM instructions a frame): for
                 // each of `count` oscillators, a velocity / position pair in `state` (a script table) moves towards
