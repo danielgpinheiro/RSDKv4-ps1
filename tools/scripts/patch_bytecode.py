@@ -6,6 +6,9 @@ natively, leaving the same temps and table / local writes behind.
 
 - Oscillators (GlobalCode, the function Stage Setup calls every frame; ~390 VM instructions, ~90 hblanks a frame
   on the emulator): its body -> PS1Oscillate state, params, bits, count / return.
+- Emerald Hill's Bridge (stage object "Bridge": its draw sub, ~170 VM instructions a frame) -> PS1BridgeDraw / End
+  in every stage file whose Bridge draw sub is exactly BRIDGE_SIG (Hidden Palace's calls a script function per
+  log: not patched).
 - Ring (GlobalCode object "Ring": its update sub, ~21 VM instructions a frame per ring) -> PS1Ring / End, only
   when the sub is exactly RING_SIG (the instructions RSDKv4/Script.cpp PS1RingUpdate transcribes, constants
   included).
@@ -252,6 +255,93 @@ def global_objects(bcdir):
     return object_sheets.game_config(os.path.join(bcdir, '..', 'Data'))[0]
 
 
+BRIDGE_SIG = [
+    'Equal TEMP0 0',
+    'Equal TEMP1 OBJECTVALUE6',
+    'Add TEMP1 524288',
+    'Equal TEMP4 524288',
+    'Equal TEMP5 OBJECTVALUE2',
+    'ShR TEMP5 20',
+    'WLower 0 TEMP0 TEMP5',
+    'Equal TEMP3 TEMP4',
+    'ShL TEMP3 7',
+    'Div TEMP3 OBJECTVALUE2',
+    'Sin TEMP2 TEMP3',
+    'Mul TEMP2 OBJECTVALUE4',
+    'ShR TEMP2 9',
+    'Add TEMP2 OBJECTYPOS',
+    'DrawSpriteXY 0 TEMP1 TEMP2',
+    'Add TEMP1 1048576',
+    'Add TEMP4 1048576',
+    'Inc TEMP0',
+    'loop',
+    'Equal TEMP2 OBJECTVALUE4',
+    'Add TEMP2 OBJECTYPOS',
+    'DrawSpriteXY 0 TEMP1 TEMP2',
+    'Add TEMP1 1048576',
+    'Inc TEMP0',
+    'Equal TEMP5 OBJECTVALUE7',
+    'Sub TEMP5 OBJECTVALUE6',
+    'Sub TEMP5 OBJECTVALUE2',
+    'Equal TEMP1 OBJECTVALUE7',
+    'Sub TEMP1 524288',
+    'Equal TEMP4 524288',
+    'WLower 2 TEMP0 OBJECTPROPERTYVALUE',
+    'Equal TEMP3 TEMP4',
+    'ShL TEMP3 7',
+    'Div TEMP3 TEMP5',
+    'Sin TEMP2 TEMP3',
+    'Mul TEMP2 OBJECTVALUE4',
+    'ShR TEMP2 9',
+    'Add TEMP2 OBJECTYPOS',
+    'DrawSpriteXY 0 TEMP1 TEMP2',
+    'Sub TEMP1 1048576',
+    'Add TEMP4 1048576',
+    'Inc TEMP0',
+    'loop',
+    'End',
+]
+
+
+def patch_stage_sub(bcdir, obj_name, sub, sig, op_name):
+    """Every stage file whose object `obj_name` has sub `sub` (0 update, 1 draw) equal to `sig` -> op / End."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index(op_name), fn.index('End')
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    data = os.path.join(bcdir, '..', 'Data')
+    glen = len(bs.load(os.path.join(bcdir, 'GlobalCode.bin'))[0])
+    done, already = [], []
+    for f in sorted(os.listdir(bcdir)):
+        folder = f[:-4]
+        if not f.endswith('.bin') or folder == 'GlobalCode':
+            continue
+        cfg = os.path.join(data, 'Stages', folder, 'StageConfig.bin')
+        if not os.path.exists(cfg):
+            continue
+        load_globals, _, objs = object_sheets.stage_config(data, folder)
+        if obj_name not in objs:
+            continue
+        path = os.path.join(bcdir, f)
+        raw = open(path, 'rb').read()
+        own, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        full = bs.full_code(path)[0]
+        ptr = bs.load(path)[2][objs.index(obj_name)][sub]
+        base = glen if len(full) > len(own) else 0
+        if full[ptr] == op:
+            already.append(folder)
+            continue
+        if listing(instructions(full, ptr, names, vars_)) != sig:
+            continue
+        own[ptr - base:ptr - base + 2] = [op, end]
+        open(path, 'wb').write(encode(own) + rest)
+        assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+        done.append(folder)
+    return '%s native in %s%s' % (op_name, ' '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def patch_ring(bcdir):
     names, vars_ = bs.tables(3)
     fn = [n for n, _ in names]
@@ -316,9 +406,10 @@ def patch_oscillate(bcdir):
 def main():
     bcdir = sys.argv[1]
     only = os.environ.get('PS1_PATCH_ONLY')  # tests: e.g. "oscillate" (a comma list of the patch names below)
-    for name, fn in (('oscillate', patch_oscillate), ('ring', patch_ring)):
+    for name, fn in (('oscillate', patch_oscillate), ('ring', patch_ring),
+                     ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw'))):
         if not only or name in only.split(','):
-            print('GlobalCode.bin: ' + fn(bcdir))
+            print('%s: %s' % (name, fn(bcdir)))
 
 
 if __name__ == '__main__':

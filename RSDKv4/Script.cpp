@@ -745,6 +745,7 @@ const FunctionInfo functions[] = {
     // natively, with every side effect of the script (temps, table / local writes).
     FunctionInfo("PS1Oscillate", 4),
     FunctionInfo("PS1Ring", 0),
+    FunctionInfo("PS1BridgeDraw", 0),
 #endif
 };
 
@@ -1250,6 +1251,7 @@ enum ScrFunc {
 #if RETRO_PLATFORM == RETRO_PS1
     FUNC_PS1OSCILLATE,
     FUNC_PS1RING,
+    FUNC_PS1BRIDGEDRAW,
 #endif
     FUNC_MAX_CNT
 };
@@ -5872,6 +5874,74 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 PS1RingUpdate();
                 break;
+            case FUNC_PS1BRIDGEDRAW: {
+                // Emerald Hill's Bridge draw sub (stage object "Bridge"), natively: the logs of a sagging bridge, a
+                // sine curve on each side of the log the player stands on (~170 VM instructions a frame, 45 hblanks).
+                // Each statement is one script instruction, in order (t = temps; v = this entity's values), so the
+                // temps end as the script leaves them; `draw` is FUNC_DRAWSPRITEXY with frame 0, `div` FUNC_DIV with
+                // the PS1 zero guard. Patched in only when the sub matches BRIDGE_SIG (tools/scripts/patch_bytecode.py).
+                opcodeSize      = 0;
+                int *t          = scriptEng.temp;
+                Entity &self    = objectEntityList[objectEntityPos];
+                int *v          = self.values;
+                ObjectScript *o = scriptInfo;
+                auto draw       = [o](int x, int y) {
+                    SpriteFrame *f = &scriptFrames[o->frameListOffset + 0];
+                    DrawSprite((x >> 16) - xScrollOffset + f->pivotX, (y >> 16) - yScrollOffset + f->pivotY, f->width, f->height, f->sprX,
+                               f->sprY, o->spriteSheetID);
+                };
+                auto div = [](int a, int b) {
+                    if (!b) {
+                        g_ps1ScriptDivZero = g_ps1ScriptDivZero + 1;
+                        return 0;
+                    }
+                    return a / b;
+                };
+                t[0] = 0;
+                t[1] = v[6];
+                t[1] += 524288;
+                t[4] = 524288;
+                t[5] = v[2];
+                t[5] >>= 20;
+                while (t[0] < t[5]) {
+                    t[3] = t[4];
+                    t[3] <<= 7;
+                    t[3] = div(t[3], v[2]);
+                    t[2] = Sin512(t[3]);
+                    t[2] *= v[4];
+                    t[2] >>= 9;
+                    t[2] += self.ypos;
+                    draw(t[1], t[2]);
+                    t[1] += 1048576;
+                    t[4] += 1048576;
+                    t[0]++;
+                }
+                t[2] = v[4];
+                t[2] += self.ypos;
+                draw(t[1], t[2]);
+                t[1] += 1048576;
+                t[0]++;
+                t[5] = v[7];
+                t[5] -= v[6];
+                t[5] -= v[2];
+                t[1] = v[7];
+                t[1] -= 524288;
+                t[4] = 524288;
+                while (t[0] < self.propertyValue) {
+                    t[3] = t[4];
+                    t[3] <<= 7;
+                    t[3] = div(t[3], t[5]);
+                    t[2] = Sin512(t[3]);
+                    t[2] *= v[4];
+                    t[2] >>= 9;
+                    t[2] += self.ypos;
+                    draw(t[1], t[2]);
+                    t[1] -= 1048576;
+                    t[4] += 1048576;
+                    t[0]++;
+                }
+                break;
+            }
             case FUNC_PS1OSCILLATE: {
                 // Sonic 2's Stage Setup oscillators (GlobalCode function 71, ~390 VM instructions a frame): for
                 // each of `count` oscillators, a velocity / position pair in `state` (a script table) moves towards

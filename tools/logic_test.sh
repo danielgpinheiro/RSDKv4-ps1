@@ -26,6 +26,7 @@ end
 break PS1PerfTick if g_ps1PerfFrames == 1 || g_ps1PerfFrames == $S0 || g_ps1PerfFrames == $S1 || g_ps1PerfFrames == $S2 || g_ps1PerfFrames == $S3
 commands
 silent
+printf "DRAW F%u hash=%08x sprites=%u\n", g_ps1PerfFrames, g_ps1DrawHashLast, g_ps1DrawCountLast
 printf "F%u vbl=%u mask=%04x P0 type=%d x=%d y=%d xv=%d yv=%d speed=%d gravity=%d ctrl=%d | P1 type=%d | time %d:%02d.%02d enabled=%d stageMode=%d | lastHbl=%u maxHbl=%u objects=%u drawSubs=%u\n", g_ps1PerfFrames, g_ps1GPU->m_frameCount, g_ps1PadButtons, objectEntityList[0].type, objectEntityList[0].xpos >> 16, objectEntityList[0].ypos >> 16, objectEntityList[0].xvel, objectEntityList[0].yvel, objectEntityList[0].speed, objectEntityList[0].gravity, objectEntityList[0].controlMode, objectEntityList[1].type, stageMinutes, stageSeconds, stageMilliseconds, timeEnabled, stageMode, g_ps1PerfLastHbl, g_ps1PerfMaxHbl, g_ps1ProfObjectsHbl, g_ps1ProfDrawHbl
 if g_ps1PerfFrames == $S0
   printf "ENTSIZE %d\n", sizeof(Entity)
@@ -60,7 +61,7 @@ pkill -f PCSX-Redux 2>/dev/null; sleep 1
 $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv4.ps-exe \
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
 sleep 4
-timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|STATE|ENTSIZE|OOR) .*" | tee "$OUT.txt"
+timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|STATE|ENTSIZE|OOR|DRAW) .*" | tee "$OUT.txt"
 pkill -f PCSX-Redux
 ES=$(grep -oE "ENTSIZE [0-9]+" "$OUT.txt" | awk '{print $2}')
 [ -f "${OUT}_ents.bin" ] && [ -n "$ES" ] && /usr/bin/python3 - "${OUT}_ents.bin" "$ES" <<'PYEOF'

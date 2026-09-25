@@ -8,6 +8,9 @@
 #include "RetroEngine.hpp"
 #include "../ps1/video.hh"
 
+// Headless evidence for draw-sub changes (native opcodes): a hash of every DrawSprite call of the frame and their count.
+volatile uint32_t g_ps1DrawHash = 0, g_ps1DrawCount = 0, g_ps1DrawHashLast = 0, g_ps1DrawCountLast = 0;
+
 int SCREEN_XSIZE_CONFIG = DEFAULT_SCREEN_XSIZE;
 int SCREEN_XSIZE        = DEFAULT_SCREEN_XSIZE; // 320 (user decision; PC 424)
 int SCREEN_CENTERX      = DEFAULT_SCREEN_XSIZE / 2;
@@ -64,6 +67,10 @@ void DrawStageGFX()
 {
     memset(g_ps1TypeDrawTicks, 0, sizeof(g_ps1TypeDrawTicks));
     memset(g_ps1TypeDrawCalls, 0, sizeof(g_ps1TypeDrawCalls));
+    g_ps1DrawHashLast  = g_ps1DrawHash; // the previous frame's
+    g_ps1DrawCountLast = g_ps1DrawCount;
+    g_ps1DrawHash      = 0;
+    g_ps1DrawCount     = 0;
     waterDrawPos = waterLevel - yScrollOffset;
     if (waterDrawPos < 0)
         waterDrawPos = 0;
@@ -103,7 +110,13 @@ void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivot
 {
 }
 
-void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID) {}
+void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
+{
+    uint32_t h = g_ps1DrawHash;
+    for (int a : { XPos, YPos, width, height, sprX, sprY, sheetID }) h = h * 31 + (uint32_t)a;
+    g_ps1DrawHash  = h;
+    g_ps1DrawCount = g_ps1DrawCount + 1;
+}
 void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID) {}
 void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                       int sheetID)
