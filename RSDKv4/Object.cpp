@@ -36,6 +36,8 @@ TypeGroupList objectTypeGroupList[TYPEGROUP_COUNT];
 static short s_ps1TypeGroupPool[3 * ENTITY_COUNT];
 static void PS1BuildTypeGroups()
 {
+    static short s_active[ENTITY_COUNT]; // pass 1's qualifying slots, ascending: pass 2 walks only these
+    int active = 0;
     for (int i = 0; i < TYPEGROUP_COUNT; ++i) objectTypeGroupList[i].listSize = 0;
     for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
         Entity *entity = &objectEntityList[objectEntityPos];
@@ -44,6 +46,7 @@ static void PS1BuildTypeGroups()
                 objectTypeGroupList[entity->groupID].listSize++;
             objectTypeGroupList[entity->type].listSize++;
             objectTypeGroupList[GROUP_ALL].listSize++;
+            s_active[active++] = objectEntityPos;
         }
     }
     int offset = 0;
@@ -52,19 +55,19 @@ static void PS1BuildTypeGroups()
         offset += objectTypeGroupList[i].listSize;
         objectTypeGroupList[i].listSize = 0;
     }
-    for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
-        Entity *entity = &objectEntityList[objectEntityPos];
-        if (processObjectFlag[objectEntityPos] && entity->objectInteractions) {
-            if (entity->groupID >= OBJECT_COUNT) {
-                TypeGroupList *listCustom                      = &objectTypeGroupList[entity->groupID];
-                listCustom->entityRefs[listCustom->listSize++] = objectEntityPos;
-            }
-            TypeGroupList *listType                    = &objectTypeGroupList[entity->type];
-            listType->entityRefs[listType->listSize++] = objectEntityPos;
-            TypeGroupList *listAll                   = &objectTypeGroupList[GROUP_ALL];
-            listAll->entityRefs[listAll->listSize++] = objectEntityPos;
+    for (int a = 0; a < active; ++a) {
+        int slot       = s_active[a];
+        Entity *entity = &objectEntityList[slot];
+        if (entity->groupID >= OBJECT_COUNT) {
+            TypeGroupList *listCustom                      = &objectTypeGroupList[entity->groupID];
+            listCustom->entityRefs[listCustom->listSize++] = slot;
         }
+        TypeGroupList *listType                    = &objectTypeGroupList[entity->type];
+        listType->entityRefs[listType->listSize++] = slot;
+        TypeGroupList *listAll                   = &objectTypeGroupList[GROUP_ALL];
+        listAll->entityRefs[listAll->listSize++] = slot;
     }
+    objectEntityPos = ENTITY_COUNT; // as upstream's loops leave it
 }
 #endif
 
@@ -142,6 +145,12 @@ void ProcessObjects()
         processObjectFlag[objectEntityPos] = false;
         int x = 0, y = 0;
         Entity *entity = &objectEntityList[objectEntityPos];
+#if RETRO_PLATFORM == RETRO_PS1
+        // A blank slot does nothing below (the priority switch only decides whether a typed object runs; its
+        // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/28).
+        if (entity->type == OBJ_TYPE_BLANKOBJECT)
+            continue;
+#endif
         x              = entity->xpos >> 16;
         y              = entity->ypos >> 16;
 
