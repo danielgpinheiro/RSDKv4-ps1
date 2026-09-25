@@ -37,9 +37,11 @@ end
 end
 continue
 GDBEOF
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
+# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
+pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
 $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv4.ps-exe \
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
+EMU=$!
 sleep 4
 timeout ${TIMEOUT:-240} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|FRAME|STATE|PROF|GUARDS) .*|rror.*" | tee "$OUT.txt"
-pkill -f PCSX-Redux
+kill $EMU 2>/dev/null; wait $EMU 2>/dev/null

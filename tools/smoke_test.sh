@@ -41,12 +41,14 @@ shell curl -s 'http://localhost:8080/api/v1/lua/pad?release=Cross' >/dev/null
 GDBEOF
 echo "shell python3 tools/vramshot.py ${OUT}_f130" >> "$OUT.gdb"
 echo "detach" >> "$OUT.gdb"
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
+# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
+pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
 $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -exec "dofile('$PWD/tools/pad.lua')" \
       -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
+EMU=$!
 sleep 4
 timeout 600 /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -E "^(ICON|LOAD|RESULT|FILE|PAD)" | tee "$OUT.log"
-pkill -f PCSX-Redux
+kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
 python3 - "$OUT.log" <<'PYEOF'
 import re, sys, zlib
 files = ['Data/Game/GameConfig.bin', 'Data/Stages/Zone01/StageConfig.bin', 'Data/Stages/Zone01/Act1.bin',

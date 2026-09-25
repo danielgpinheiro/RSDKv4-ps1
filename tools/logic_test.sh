@@ -15,6 +15,8 @@ OUT=${1:-/tmp/rsdkv4_logic}; S0=${2:-240}; S1=${3:-420}; S2=${4:-432}; S3=${5:-6
 M1=0x18; M2=0
 # INJECT_S0="gdb commands": run at frame S0 (tests: e.g. move the player next to an object whose branch must run).
 INJECT_S0=${INJECT_S0:-}
+# INJECT_AT=frame + INJECT="gdb commands": a second injection at that frame (e.g. onto an object once it has moved).
+INJECT_AT=${INJECT_AT:-0}; INJECT=${INJECT:-}
 if [ "${HOLD_RIGHT:-0}" = 1 ]; then M1=0x08; M2=0x08; fi
 PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
 cat > "$OUT.gdb" <<GDBEOF
@@ -28,7 +30,7 @@ silent
 printf "LOAD vbl=%u sectors=%u list=%d pos=%d folder=%s player=%d\n", g_ps1GPU->m_frameCount, g_ps1FsSectors, activeStageList, stageListPosition, stageList[activeStageList][stageListPosition].folder, playerListPos
 continue
 end
-break PS1PerfTick if g_ps1PerfFrames == 1 || g_ps1PerfFrames == $S0 || g_ps1PerfFrames == $S1 || g_ps1PerfFrames == $S2 || g_ps1PerfFrames == $S3
+break PS1PerfTick if g_ps1PerfFrames == 1 || g_ps1PerfFrames == $INJECT_AT || g_ps1PerfFrames == $S0 || g_ps1PerfFrames == $S1 || g_ps1PerfFrames == $S2 || g_ps1PerfFrames == $S3
 commands
 silent
 printf "DRAW F%u hash=%08x sprites=%u\n", g_ps1PerfFrames, g_ps1DrawHashLast, g_ps1DrawCountLast
@@ -42,6 +44,9 @@ if g_ps1PerfFrames == $S0
   dump binary memory ${OUT}_big.bin &'Script.cpp'::s_ps1ScriptBig[0] &'Script.cpp'::s_ps1ScriptBig['Script.cpp'::s_ps1ScriptBigCount]
   set var g_ps1PadTestMask = 0x08
   $INJECT_S0
+end
+if g_ps1PerfFrames == $INJECT_AT
+  $INJECT
 end
 if g_ps1PerfFrames == $S1
   set var g_ps1PadTestMask = $M1
@@ -63,12 +68,14 @@ end
 end
 continue
 GDBEOF
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
+# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
+pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
 $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv4.ps-exe \
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
+EMU=$!
 sleep 4
 timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|STATE|ENTSIZE|OOR|DRAW) .*" | tee "$OUT.txt"
-pkill -f PCSX-Redux
+kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
 ES=$(grep -oE "ENTSIZE [0-9]+" "$OUT.txt" | awk '{print $2}')
 [ -f "${OUT}_ents.bin" ] && [ -n "$ES" ] && /usr/bin/python3 - "${OUT}_ents.bin" "$ES" <<'PYEOF'
 import sys, collections

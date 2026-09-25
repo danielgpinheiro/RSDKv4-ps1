@@ -29,8 +29,10 @@ printf "SLOTS %u %u %u %u wait=%u slowTiles=%u prims=%u\n", g_ps1ProfSlot[0], g_
 printf "LAYERS uniform=%u lines=%u tiles=%u strips=%u (hblanks) calls=%u bands tiles=%u strips=%u stripRegions=%u objects=%u drawSubs=%u | ink pieces=%u clutFades=%u fadeMode=%d fadeA=%d | banks regions=%u mask=%x water=%d\n", g_ps1ProfLayer[0], g_ps1ProfLayer[1], g_ps1ProfLayer[2], g_ps1ProfLayer[3], g_ps1ProfLayer[4], g_ps1TileBandCount, g_ps1StripBandCount, g_ps1StripRegions, g_ps1ProfObjectsHbl, g_ps1ProfDrawHbl, g_ps1InkPieces, g_ps1ClutFades, fadeMode, fadeA, g_ps1BankRegions, g_ps1BankMask, waterDrawPos
 detach
 GDBEOF
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
+# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
+pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
 $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
+EMU=$!
 sleep 4
 timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(FRAME|LAYERS|ACTIVE|SLOTS|MISS|FACES|FLOOR) .*"
-pkill -f PCSX-Redux
+kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
