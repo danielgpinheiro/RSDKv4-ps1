@@ -1,0 +1,10 @@
+#pragma once
+#include <EASTL/utility.h>
+#include <EASTL/map.h>
+
+namespace std {
+using eastl::map;
+using eastl::multimap;
+using eastl::pair;
+using eastl::make_pair;
+} // namespace std

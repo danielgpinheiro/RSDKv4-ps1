@@ -1,0 +1,32 @@
+#pragma once
+#include <EASTL/algorithm.h>
+#include <EASTL/sort.h>
+#include <EASTL/iterator.h>
+#include <EASTL/utility.h>
+
+namespace std {
+using eastl::find;
+using eastl::find_if;
+using eastl::begin;
+using eastl::end;
+using eastl::copy;
+using eastl::remove;
+using eastl::remove_if;
+using eastl::min;
+using eastl::max;
+using eastl::swap;
+using eastl::sort;
+using eastl::stable_sort;
+using eastl::lower_bound;
+using eastl::upper_bound;
+using eastl::fill;
+using eastl::equal;
+using eastl::distance;
+using eastl::reverse;
+using eastl::for_each;
+using eastl::count;
+using eastl::transform;
+using eastl::all_of;
+using eastl::any_of;
+using eastl::none_of;
+} // namespace std

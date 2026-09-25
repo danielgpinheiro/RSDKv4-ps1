@@ -1,0 +1,6 @@
+#pragma once
+#include <EASTL/vector.h>
+
+namespace std {
+using eastl::vector;
+} // namespace std

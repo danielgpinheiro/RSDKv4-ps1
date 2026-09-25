@@ -1,0 +1,29 @@
+#pragma once
+#include "math.h"
+
+namespace std {
+using ::sin;
+using ::cos;
+using ::tan;
+using ::sqrt;
+using ::fabs;
+using ::floor;
+using ::ceil;
+using ::pow;
+using ::log;
+using ::exp;
+using ::fmod;
+using ::atan2;
+using ::sinf;
+using ::cosf;
+using ::tanf;
+using ::sqrtf;
+using ::fabsf;
+using ::floorf;
+using ::ceilf;
+using ::powf;
+using ::logf;
+using ::expf;
+using ::fmodf;
+using ::atan2f;
+} // namespace std

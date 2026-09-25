@@ -1,0 +1,6 @@
+#pragma once
+#include <EASTL/string.h>
+
+namespace std {
+using eastl::string;
+} // namespace std

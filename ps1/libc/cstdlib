@@ -1,0 +1,25 @@
+#pragma once
+#include "stdlib.h"
+
+namespace std {
+using ::malloc;
+using ::calloc;
+using ::realloc;
+using ::free;
+using ::abs;
+using ::labs;
+using ::llabs;
+using ::atoi;
+using ::atol;
+using ::atoll;
+using ::atof;
+using ::strtol;
+using ::strtoul;
+using ::strtod;
+using ::rand;
+using ::srand;
+using ::qsort;
+using ::bsearch;
+using ::abort;
+using ::exit;
+} // namespace std

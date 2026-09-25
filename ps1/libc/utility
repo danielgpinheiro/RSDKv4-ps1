@@ -1,0 +1,7 @@
+#pragma once
+#include <EASTL/utility.h>
+
+namespace std {
+using eastl::pair;
+using eastl::make_pair;
+} // namespace std
