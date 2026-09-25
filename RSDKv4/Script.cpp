@@ -3609,6 +3609,11 @@ void ClearScriptData()
 // variables read it. The same value, evaluated where it is read (arrayVal is the operand's, in scope there).
 #define inputCheck (!(forceUseScripts || Engine.usingOrigins) || arrayVal <= 1)
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+#define PS1_RAW(p) scriptCode.raw(p) // always-small fields (Script.hpp PS1ScriptCode::raw)
+#else
+#define PS1_RAW(p) scriptCode[p]
+#endif
 void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 {
     bool running      = true;
@@ -3618,7 +3623,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
     foreachStackPos   = 0;
 
     while (running) {
-        int opcode           = scriptCode[scriptCodePtr++];
+        int opcode           = PS1_RAW(scriptCodePtr++);
 #if RETRO_PLATFORM == RETRO_PS1
         ++g_ps1VmOps;
         if ((uint)opcode >= FUNC_MAX_CNT) { // corrupt / desynced code: stop this sub instead of jumping wild
@@ -3633,30 +3638,30 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 
         // Get Values
         for (int i = 0; i < opcodeSize; ++i) {
-            int opcodeType = scriptCode[scriptCodePtr++];
+            int opcodeType = PS1_RAW(scriptCodePtr++);
 
             if (opcodeType == SCRIPTVAR_VAR) {
                 int arrayVal = 0;
-                switch (scriptCode[scriptCodePtr++]) {
+                switch (PS1_RAW(scriptCodePtr++)) {
                     case VARARR_NONE: arrayVal = objectEntityPos; break;
 
                     case VARARR_ARRAY:
-                        if (scriptCode[scriptCodePtr++] == 1)
-                            arrayVal = scriptEng.arrayPosition[scriptCode[scriptCodePtr++]];
+                        if (PS1_RAW(scriptCodePtr++) == 1)
+                            arrayVal = scriptEng.arrayPosition[PS1_RAW(scriptCodePtr++)];
                         else
                             arrayVal = scriptCode[scriptCodePtr++];
                         break;
 
                     case VARARR_ENTNOPLUS1:
-                        if (scriptCode[scriptCodePtr++] == 1)
-                            arrayVal = scriptEng.arrayPosition[scriptCode[scriptCodePtr++]] + objectEntityPos;
+                        if (PS1_RAW(scriptCodePtr++) == 1)
+                            arrayVal = scriptEng.arrayPosition[PS1_RAW(scriptCodePtr++)] + objectEntityPos;
                         else
                             arrayVal = scriptCode[scriptCodePtr++] + objectEntityPos;
                         break;
 
                     case VARARR_ENTNOMINUS1:
-                        if (scriptCode[scriptCodePtr++] == 1)
-                            arrayVal = objectEntityPos - scriptEng.arrayPosition[scriptCode[scriptCodePtr++]];
+                        if (PS1_RAW(scriptCodePtr++) == 1)
+                            arrayVal = objectEntityPos - scriptEng.arrayPosition[PS1_RAW(scriptCodePtr++)];
                         else
                             arrayVal = objectEntityPos - scriptCode[scriptCodePtr++];
                         break;
@@ -3672,7 +3677,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 #endif
 
                 // Variables
-                switch (scriptCode[scriptCodePtr++]) {
+                switch (PS1_RAW(scriptCodePtr++)) {
                     default: break;
                     case VAR_TEMP0: scriptEng.operands[i] = scriptEng.temp[0]; break;
                     case VAR_TEMP1: scriptEng.operands[i] = scriptEng.temp[1]; break;
@@ -6029,29 +6034,29 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
         if (opcodeSize > 0)
             scriptCodePtr -= scriptCodePtr - scriptCodeOffset;
         for (int i = 0; i < opcodeSize; ++i) {
-            int opcodeType = scriptCode[scriptCodePtr++];
+            int opcodeType = PS1_RAW(scriptCodePtr++);
             if (opcodeType == SCRIPTVAR_VAR) {
                 int arrayVal = 0;
-                switch (scriptCode[scriptCodePtr++]) { // variable
+                switch (PS1_RAW(scriptCodePtr++)) { // variable
                     case VARARR_NONE: arrayVal = objectEntityPos; break;
 
                     case VARARR_ARRAY:
-                        if (scriptCode[scriptCodePtr++] == 1)
-                            arrayVal = scriptEng.arrayPosition[scriptCode[scriptCodePtr++]];
+                        if (PS1_RAW(scriptCodePtr++) == 1)
+                            arrayVal = scriptEng.arrayPosition[PS1_RAW(scriptCodePtr++)];
                         else
                             arrayVal = scriptCode[scriptCodePtr++];
                         break;
 
                     case VARARR_ENTNOPLUS1:
-                        if (scriptCode[scriptCodePtr++] == 1)
-                            arrayVal = objectEntityPos + scriptEng.arrayPosition[scriptCode[scriptCodePtr++]];
+                        if (PS1_RAW(scriptCodePtr++) == 1)
+                            arrayVal = objectEntityPos + scriptEng.arrayPosition[PS1_RAW(scriptCodePtr++)];
                         else
                             arrayVal = objectEntityPos + scriptCode[scriptCodePtr++];
                         break;
 
                     case VARARR_ENTNOMINUS1:
-                        if (scriptCode[scriptCodePtr++] == 1)
-                            arrayVal = objectEntityPos - scriptEng.arrayPosition[scriptCode[scriptCodePtr++]];
+                        if (PS1_RAW(scriptCodePtr++) == 1)
+                            arrayVal = objectEntityPos - scriptEng.arrayPosition[PS1_RAW(scriptCodePtr++)];
                         else
                             arrayVal = objectEntityPos - scriptCode[scriptCodePtr++];
                         break;
@@ -6067,7 +6072,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 #endif
 
                 // Variables
-                switch (scriptCode[scriptCodePtr++]) {
+                switch (PS1_RAW(scriptCodePtr++)) {
                     default: break;
                     case VAR_TEMP0: scriptEng.temp[0] = scriptEng.operands[i]; break;
                     case VAR_TEMP1: scriptEng.temp[1] = scriptEng.operands[i]; break;

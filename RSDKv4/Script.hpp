@@ -72,6 +72,9 @@ struct PS1ScriptCode {
         int v = slot[i];
         return v != PS1_SCRIPT_BIG ? v : PS1ScriptBigValue(i);
     }
+    // Fields that are always small in valid bytecode (opcodes, operand kinds, array modes, index kinds, variable
+    // ids, array position registers): never stored big, read without the check.
+    inline int raw(int i) const { return slot[i]; }
 };
 extern PS1ScriptCode scriptCode; // written by LoadBytecode and PS1ScriptWrite (the compiler is off on PS1)
 void PS1ScriptWrite(int pos, int value); // Script.cpp: runtime writes (VAR_LOCAL, SetTableValue)
