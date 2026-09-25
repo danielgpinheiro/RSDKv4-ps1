@@ -9,6 +9,8 @@ natively, leaving the same temps and table / local writes behind.
 - Emerald Hill's Bridge (stage object "Bridge": its draw sub, ~170 VM instructions a frame) -> PS1BridgeDraw / End
   in every stage file whose Bridge draw sub is exactly BRIDGE_SIG (Hidden Palace's calls a script function per
   log: not patched).
+- Lose Ring (GlobalCode object "Lose Ring": its update sub, the rings scattered on a hit) -> PS1LoseRing / End
+  when it is exactly LOSERING_SIG.
 - Ring (GlobalCode object "Ring": its update sub, ~21 VM instructions a frame per ring) -> PS1Ring / End, only
   when the sub is exactly RING_SIG (the instructions RSDKv4/Script.cpp PS1RingUpdate transcribes, constants
   included).
@@ -342,6 +344,124 @@ def patch_stage_sub(bcdir, obj_name, sub, sig, op_name):
     return '%s native in %s%s' % (op_name, ' '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
 
 
+LOSERING_SIG = [
+    'Add OBJECTYVEL 6144',
+    'Add OBJECTXPOS OBJECTXVEL',
+    'Add OBJECTYPOS OBJECTYVEL',
+    'IfGreaterOrEqual 0 OBJECTYVEL 0',
+    'ObjectTileCollision 0 0 8 0',
+    'IfEqual 2 CHECKRESULT 1',
+    'Equal TEMP0 OBJECTYVEL',
+    'ShR TEMP0 2',
+    'Sub OBJECTYVEL TEMP0',
+    'FlipSign OBJECTYVEL',
+    'IfGreater 4 OBJECTYVEL -65536',
+    'Equal OBJECTYVEL -65536',
+    'endif',
+    'endif',
+    'endif',
+    'Inc OBJECTVALUE0',
+    'IfEqual 6 OBJECTVALUE0 256',
+    'Equal OBJECTTYPE 0',
+    'Equal OBJECTXVEL 0',
+    'Equal OBJECTYVEL 0',
+    'Equal OBJECTVALUE0 0',
+    'else',
+    'Add OBJECTANIMATIONTIMER OBJECTANIMATIONSPEED',
+    'IfGreater 8 OBJECTANIMATIONTIMER 255',
+    'Sub OBJECTANIMATIONTIMER 256',
+    'Inc OBJECTFRAME',
+    'IfEqual 10 OBJECTFRAME 8',
+    'Equal OBJECTFRAME 0',
+    'IfGreater 12 OBJECTANIMATIONSPEED 16',
+    'Sub OBJECTANIMATIONSPEED 16',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreaterOrEqual 14 OBJECTVALUE0 240',
+    'Sub OBJECTALPHA 16',
+    'endif',
+    'endif',
+    'IfGreater 16 OBJECTVALUE0 63',
+    'ForEachActive 18 256 ARRAYPOS6',
+    'CheckEqual OBJECTSTATE[1,1,6] 27',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTSTATE[1,1,6] 26',
+    'Or TEMP0 CHECKRESULT',
+    'IfEqual 20 TEMP0 0',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 22 CHECKRESULT 1',
+    'Equal OBJECTTYPE 12',
+    'IfEqual 24 OBJECTPROPERTYVALUE 0',
+    'Equal OBJECTDRAWORDER 4',
+    'else',
+    'Equal OBJECTDRAWORDER 2',
+    'endif',
+    'Equal OBJECTVALUE0 0',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTVALUE0 0',
+    'Equal OBJECTFRAME 0',
+    'IfEqual 26 OBJECTVALUE16[1,1,6] 1',
+    'Inc OBJECTVALUE0[1,0,0]',
+    'IfGreater 28 OBJECTVALUE0[1,0,0] 999',
+    'Equal OBJECTVALUE0[1,0,0] 999',
+    'endif',
+    'else',
+    'Inc OBJECTVALUE0[1,1,6]',
+    'IfGreater 30 OBJECTVALUE0[1,1,6] 999',
+    'Equal OBJECTVALUE0[1,1,6] 999',
+    'endif',
+    'endif',
+    'IfGreaterOrEqual 32 OBJECTVALUE0[1,0,0] GLOBAL[1,0,21]',
+    'IfNotEqual 34 GLOBAL[1,0,0] 2',
+    'Inc GLOBAL[1,0,25]',
+    'PlaySfx 24 0',
+    'PauseMusic',
+    'ResetObjectEntity 25 34 2 0 0',
+    'Equal OBJECTPRIORITY[1,0,25] 1',
+    'Add GLOBAL[1,0,21] 100',
+    'IfGreater 36 GLOBAL[1,0,21] 300',
+    'Equal GLOBAL[1,0,21] 1000',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 38 GLOBAL[1,0,20] 0',
+    'PlaySfx 1 0',
+    'SetSfxAttributes 1 -1 -100',
+    'Equal GLOBAL[1,0,20] 1',
+    'else',
+    'PlaySfx 2 0',
+    'SetSfxAttributes 2 -1 100',
+    'Equal GLOBAL[1,0,20] 0',
+    'endif',
+    'endif',
+    'endif',
+    'next',
+    'endif',
+    'End',
+]
+
+
+def patch_global_sub(bcdir, obj_name, sub, sig, op_name):
+    """GlobalCode object `obj_name`'s sub `sub` (0 update, 1 draw) -> op / End when it is exactly `sig`."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index(op_name), fn.index('End')
+    path = os.path.join(bcdir, 'GlobalCode.bin')
+    raw = open(path, 'rb').read()
+    code, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    start = bs.load(path)[2][global_objects(bcdir).index(obj_name)][sub]
+    if code[start] == op:
+        return '%s already native' % obj_name
+    if listing(instructions(code, start, names, vars_)) != sig:
+        sys.exit('ERROR patch_bytecode: %s sub %d is not the one %s transcribes' % (obj_name, sub, op_name))
+    code[start:start + 2] = [op, end]
+    open(path, 'wb').write(encode(code) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+    return '%s native (%s sub at %d, %d instructions)' % (obj_name, ('update', 'draw')[sub], start, len(sig))
+
+
 def patch_ring(bcdir):
     names, vars_ = bs.tables(3)
     fn = [n for n, _ in names]
@@ -407,7 +527,8 @@ def main():
     bcdir = sys.argv[1]
     only = os.environ.get('PS1_PATCH_ONLY')  # tests: e.g. "oscillate" (a comma list of the patch names below)
     for name, fn in (('oscillate', patch_oscillate), ('ring', patch_ring),
-                     ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw'))):
+                     ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
+                     ('losering', lambda d: patch_global_sub(d, 'Lose Ring', 0, LOSERING_SIG, 'PS1LoseRing'))):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 

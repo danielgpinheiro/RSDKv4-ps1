@@ -746,6 +746,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1Oscillate", 4),
     FunctionInfo("PS1Ring", 0),
     FunctionInfo("PS1BridgeDraw", 0),
+    FunctionInfo("PS1LoseRing", 0),
 #endif
 };
 
@@ -1252,6 +1253,7 @@ enum ScrFunc {
     FUNC_PS1OSCILLATE,
     FUNC_PS1RING,
     FUNC_PS1BRIDGEDRAW,
+    FUNC_PS1LOSERING,
 #endif
     FUNC_MAX_CNT
 };
@@ -3759,6 +3761,110 @@ static void PS1RingUpdate()
     }
 }
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+// Sonic 2's Lose Ring update sub (GlobalCode object "Lose Ring": the rings scattered when the player is hit, up to
+// 32 at once, ~20 VM instructions each a frame), natively, like PS1RingUpdate: one statement per script instruction,
+// in order; patched in only when the sub matches LOSERING_SIG exactly.
+static void PS1LoseRingUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    me.yvel += 6144;
+    me.xpos += me.xvel;
+    me.ypos += me.yvel;
+    if (me.yvel >= 0) {
+        ObjectFloorCollision(0, 8, 0); // ObjectTileCollision CSIDE_FLOOR, 0, 8, 0
+        if (cr == 1) {
+            t[0] = me.yvel;
+            t[0] >>= 2;
+            me.yvel -= t[0];
+            me.yvel = -me.yvel;
+            if (me.yvel > -65536)
+                me.yvel = -65536;
+        }
+    }
+    me.values[0]++;
+    if (me.values[0] == 256) {
+        me.type      = 0;
+        me.xvel      = 0;
+        me.yvel      = 0;
+        me.values[0] = 0;
+    }
+    else {
+        me.animationTimer += me.animationSpeed;
+        if (me.animationTimer > 255) {
+            me.animationTimer -= 256;
+            me.frame = me.frame + 1;
+            if (me.frame == 8) {
+                me.frame = 0;
+                if (me.animationSpeed > 16)
+                    me.animationSpeed -= 16;
+            }
+        }
+        if (me.values[0] >= 240)
+            me.alpha -= 16;
+    }
+    if (me.values[0] > 63) {
+        TypeGroupList &players = objectTypeGroupList[256];
+        for (int loop = 0; loop < players.listSize; ++loop) { // ForEachActive 256, ARRAYPOS6
+            ap[6] = players.entityRefs[loop];
+            cr    = PS1_OBJ(ap[6]).state == 27;
+            t[0]  = cr;
+            cr    = PS1_OBJ(ap[6]).state == 26;
+            t[0] |= cr;
+            if (t[0] == 0) {
+                TouchCollision(&PS1_OBJ(self), -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                if (cr == 1) {
+                    me.type = 12;
+                    if (me.propertyValue == 0)
+                        me.drawOrder = 4;
+                    else
+                        me.drawOrder = 2;
+                    me.values[0] = 0;
+                    me.values[1] = 0;
+                    me.values[0] = 0;
+                    me.frame     = 0;
+                    if (PS1_OBJ(ap[6]).values[16] == 1) {
+                        PS1_OBJ(0).values[0]++;
+                        if (PS1_OBJ(0).values[0] > 999)
+                            PS1_OBJ(0).values[0] = 999;
+                    }
+                    else {
+                        PS1_OBJ(ap[6]).values[0]++;
+                        if (PS1_OBJ(ap[6]).values[0] > 999)
+                            PS1_OBJ(ap[6]).values[0] = 999;
+                    }
+                    if (PS1_OBJ(0).values[0] >= G[21]) {
+                        if (G[0] != 2) {
+                            G[25]++;
+                            PlaySfx(24, 0);
+                            PauseSound();
+                            PS1ResetObjectEntity(25, 34, 2, 0, 0);
+                            PS1_OBJ(25).priority = 1;
+                            G[21] += 100;
+                            if (G[21] > 300)
+                                G[21] = 1000;
+                        }
+                    }
+                    if (G[20] == 0) {
+                        PlaySfx(1, 0);
+                        SetSfxAttributes(1, -1, -100);
+                        G[20] = 1;
+                    }
+                    else {
+                        PlaySfx(2, 0);
+                        SetSfxAttributes(2, -1, 100);
+                        G[20] = 0;
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
 // variables read it. The same value, evaluated where it is read (arrayVal is the operand's, in scope there).
@@ -5873,6 +5979,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1RING:
                 opcodeSize = 0;
                 PS1RingUpdate();
+                break;
+            case FUNC_PS1LOSERING:
+                opcodeSize = 0;
+                PS1LoseRingUpdate();
                 break;
             case FUNC_PS1BRIDGEDRAW: {
                 // Emerald Hill's Bridge draw sub (stage object "Bridge"), natively: the logs of a sagging bridge, a

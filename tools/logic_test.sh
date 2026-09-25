@@ -11,6 +11,9 @@
 # Usage: make BOOT=Zone01 && tools/logic_test.sh [OUT_PREFIX] [S0=240] [S1=420] [S2=432] [S3=600]
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/rsdkv4_logic}; S0=${2:-240}; S1=${3:-420}; S2=${4:-432}; S3=${5:-600}
+# HOLD_RIGHT=1: hold Right from S0 to the end, no jump (the obj_profile.sh input: runs into enemies in Emerald Hill).
+M1=0x18; M2=0
+if [ "${HOLD_RIGHT:-0}" = 1 ]; then M1=0x08; M2=0x08; fi
 PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
@@ -38,10 +41,10 @@ if g_ps1PerfFrames == $S0
   set var g_ps1PadTestMask = 0x08
 end
 if g_ps1PerfFrames == $S1
-  set var g_ps1PadTestMask = 0x18
+  set var g_ps1PadTestMask = $M1
 end
 if g_ps1PerfFrames == $S2
-  set var g_ps1PadTestMask = 0
+  set var g_ps1PadTestMask = $M2
 end
 if g_ps1PerfFrames == $S3
   dump binary memory ${OUT}_ents_end.bin &objectEntityList[0] &objectEntityList[0x380]
