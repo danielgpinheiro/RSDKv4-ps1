@@ -1,9 +1,10 @@
 #!/usr/bin/python3
 """Per-stage sprite atlas for the RSDKv3 (Sonic CD) PS1 port (golden rule: build time only).
 
-RSDKv4 (Sonic 2), docs/30 phase 1.3: copied unchanged from RSDKv3-ps1 (1e583ad) and fed by
-tools/atlas/static_manifest.py (manifests from the bytecode, no `stage` lines) for the feasibility report
-(`--report`); the engine-side manifest and the v4 VRAM map come in phase 3.
+RSDKv4 (Sonic 2), docs/30: copied from RSDKv3-ps1 (1e583ad). Phase 1.3 fed it tools/atlas/static_manifest.py
+(bytecode only, no `stage` lines) for the feasibility report; phase 3.1 feeds it the engine's manifests
+(tools/rsdkmanifest: v4 `stage` lines, one directory per player variant, both options.region values) plus the
+regions of frames scripts edit at runtime (tools/atlas/runtime_frames.py). The v3 VRAM map is kept.
 
 Copied from the RSDKv2 port's builder (RSDKv2-ps1/tools/atlas); only the input changed. Sonic
 CD ships bytecode, not script text, so the frames come from tools/rsdkmanifest: it runs every
@@ -43,8 +44,10 @@ replaced. The fewest pictures that make the rest fit are chosen, largest first.
   block  : u16 x, y, w, h (slot 0 VRAM halfwords), u32 offset at dataOffset + offset   (12 B)
 Each picture's pixel data starts on a sector.
 
-Usage: build_atlas.py DATA_DIR MANIFEST_DIR [--stage NAME] [--cols N] [--report] [--suffix S] [--lang en|jp]
-  --suffix S: write <Stage>S.atl (per-player atlases: '' = Sonic, '_t' = Tails; manifests per player)
+Usage: build_atlas.py DATA_DIR MANIFEST_DIR [--stage NAME] [--cols N] [--report] [--suffix S] [--out DIR] [--lang en|jp]
+  --suffix S: write <Stage>S.atl (per-player atlases; Sonic 2: '' Sonic, '_t' Tails, '_k' Knuckles, '_st' Sonic &
+  Tails; manifests per player)
+  --out DIR: write the atlases there instead of DATA_DIR/Sprites/Atlas (Sonic 2: the disc tree, which has no GIFs)
   --cols N: test budget; --report: feasibility only (pack + self-check, no files written; stages
   that don't fit report their texel needs and how many 4-bit columns they are short)
 """
@@ -53,6 +56,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from object_sheets import object_sheets  # noqa: E402
+from runtime_frames import regions  # noqa: E402
 from PIL import Image
 
 PAGE = 256
@@ -153,32 +157,29 @@ def manifest_frames(data, path, images):
 
     objsheets = {}  # this stage block: object name -> sheets its subs may load (tools/atlas/object_sheets)
     whole3d = set()  # sheets sampled by Draw3DScene faces (lower-case paths)
-    fontglyphs = {}  # lower-case sheet path -> glyph rects of the fonts DrawText uses with it
-    prescaled = set()  # font sheets whose glyphs come pre-scaled (<sheet>_ps1.gif)
+    fontglyphs = {}  # lower-case sheet path -> glyph rects of the fonts DrawText uses with it (v3; none in Sonic 2)
+    prescaled = set()  # font sheets whose glyphs come pre-scaled (<sheet>_ps1.gif) (v3; none in Sonic 2)
+    runtime = []  # this stage block: (sheet, x, y, w, h) regions of frames scripts edit at runtime (runtime_frames)
+    drops = set()  # (object name, lower-case sheet, x, y, w, h): startup frames always edited before drawing
     for line in open(path):
         t = line.split()
-        if t[0] == 'stage':
+        if t[0] == 'stage':  # v4: stage <list> <position> <folder> <id> <player> <region>
             sheets = {}
             objsheets = {}
-            for k, v in object_sheets(data, int(t[1]), int(t[2]), t[3]).items():
-                if k == ('*', 'text'):  # pre-scaled glyphs (tools/font/prescale_font.py): the whole sheet
-                    for sheet in v['sheets']:
-                        ps = os.path.splitext(sheet)[0] + '_ps1.gif'
-                        if size(ps) is not None:
-                            H, W = size(ps)
-                            frames.setdefault(ps, set()).add((0, 0, W, H))
-                            prescaled.add(sheet.lower())
-                elif isinstance(k, tuple) and k[1] == 'font':  # DrawText: the fonts' glyphs on the object's sheets
-                    chars = text_chars(data, v[2])      # only those the disc language's texts use
-                    for sheet in v[0]:
-                        fontglyphs.setdefault(sheet.lower(), set()).update(r for f in v[1] for r in font_rects(data, f, chars))
-                elif isinstance(k, tuple):  # (name, '3d'): Draw3DScene faces sample these sheets whole
-                    for p in v:
-                        whole3d.add(p.lower())
-                else:
-                    objsheets[k.replace(' ', '').lower()] = v
+            runtime, drops = [], set()
+            for k, v in object_sheets(data, t[3]).items():
+                key = k.replace(' ', '').lower()
+                objsheets[key] = v['sheets']
+                if '3d' in v['flags']:  # Draw3DScene faces sample the object's sheets
+                    whole3d.update(p.lower() for p in v['sheets'])
+                add, drop = regions(k)
+                runtime += add
+                drops |= {(key, r[0].lower()) + tuple(r[1:]) for r in drop}
         elif t[0] == 'sheet':
             sheets[int(t[1])] = t[2]
+            for r in runtime:  # the edited frames' regions, on the sheet their object loaded
+                if r[0].lower() == t[2].lower():
+                    add_frame(int(t[1]), *r[1:])
             if t[2].lower() not in prescaled:  # pre-scaled glyphs replace the original ones
                 for r in fontglyphs.get(t[2].lower(), ()):
                     add_frame(int(t[1]), *r)
@@ -194,6 +195,8 @@ def manifest_frames(data, path, images):
             sids = [sid]
             if t[6] == 'obj':  # also every other sheet of this stage the object may switch to
                 name = ''.join(t[7:]).lower()  # engine typeNames have no spaces
+                if sid in sheets and (name, sheets[sid].lower(), x, y, w, h) in drops:
+                    continue
                 loaded = {p.lower(): i for i, p in sheets.items()}
                 sids += [loaded[p.lower()] for p in objsheets.get(name, ()) if p.lower() in loaded and loaded[p.lower()] != sid]
             for sid in sids:
@@ -524,7 +527,7 @@ def main():
     suffix = args[args.index('--suffix') + 1] if '--suffix' in args else ''
     global LANG
     LANG = args[args.index('--lang') + 1] if '--lang' in args else 'en'
-    outdir = os.path.join(data, 'Sprites', 'Atlas')
+    outdir = args[args.index('--out') + 1] if '--out' in args else os.path.join(data, 'Sprites', 'Atlas')
     if not feas:
         os.makedirs(outdir, exist_ok=True)
     rc, short = 0, []

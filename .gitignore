@@ -306,5 +306,3 @@ tools/rsdkmanifest/rsdkmanifest
 *.rsdk
 *.ogv
 .DS_Store
-tools/rsdkmanifest/rsdkmanifest
-tools/rsdkmanifest/rsdkmanifest.dSYM/

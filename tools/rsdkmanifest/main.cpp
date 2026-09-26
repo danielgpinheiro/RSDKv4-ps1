@@ -7,8 +7,8 @@
  * (RSDKv4/Scene.cpp: global + stage bytecode, act layout, ProcessStartupObjects; SpriteFrame records frames only
  * there) with the PS1 configuration, and writes what the console will need in VRAM:
  *
- *   <out>/<folder>.txt   (list positions sharing a folder append their own `stage` block)
- *     stage <list> <position> <folder> <id> <player>
+ *   <out>/<folder>.txt   (list positions sharing a folder, and both options.region values, append their own `stage` block)
+ *     stage <list> <position> <folder> <id> <player> <region>
  *     sheet <sheetID> <path under Data/Sprites/>
  *     frame <sheetID> <x> <y> <w> <h> obj <object name>          script frames (the object's final sheet)
  *     frame <sheetID> <x> <y> <w> <h> ani <file>                  animation (.ani) frames
@@ -114,7 +114,9 @@ int main(int argc, char **argv)
     char cwd[0x400];
     if (out[0] != '/' && getcwd(cwd, sizeof(cwd)))
         out = std::string(cwd) + "/" + out;
-    mkdir(out.c_str(), 0755);
+    for (size_t i = 1; i <= out.size(); ++i) // mkdir -p
+        if (i == out.size() || out[i] == '/')
+            mkdir(out.substr(0, i).c_str(), 0755);
     if (chdir(argv[1])) {
         perror(argv[1]);
         return 1;
@@ -136,7 +138,11 @@ int main(int argc, char **argv)
                 printf("skip  %-8s (no %s)\n", stageList[list][pos].folder, bytecode);
                 continue;
             }
-            for (int player : players) {
+            for (int run = 0; run < (int)players.size() * 2; ++run) {
+                // Each variant twice: options.region 0 and 1 (the Title's code toggles it at runtime; startups pick
+                // frames by it, e.g. Act Finish / Special Finish "TAILS" vs "MILES"). The atlas takes the union.
+                int player = players[run >> 1], region = run & 1;
+                setGlobal("options.region", region);
                 activeStageList   = list;
                 stageListPosition = pos;
                 playerListPos     = player;
@@ -157,8 +163,13 @@ int main(int argc, char **argv)
                     AddAnimationFile("SuperSonic.ani");
                 std::string path = out + "/" + stageList[list][pos].folder + ".txt";
                 FILE *f          = fopen(path.c_str(), written.count(path) ? "a" : "w");
+                if (!f) {
+                    perror(path.c_str());
+                    return 1;
+                }
                 written.insert(path);
-                fprintf(f, "stage %d %d %s %s %d\n", list, pos, stageList[list][pos].folder, stageList[list][pos].id, player);
+                fprintf(f, "stage %d %d %s %s %d %d\n", list, pos, stageList[list][pos].folder, stageList[list][pos].id, player,
+                        region);
                 for (int s = 0; s < SURFACE_COUNT; ++s)
                     if (gfxSurface[s].fileName[0])
                         fprintf(f, "sheet %d %s\n", s, gfxSurface[s].fileName + 13); // strip "Data/Sprites/"
@@ -188,8 +199,8 @@ int main(int argc, char **argv)
                     }
                 }
                 fclose(f);
-                printf("%-5s %-8s p%d %4d frames\n", list == 0 ? "pres" : list == 1 ? "reg" : list == 2 ? "spec" : "bonus",
-                       stageList[list][pos].folder, player, frames);
+                printf("%-5s %-8s p%d r%d %4d frames\n", list == 0 ? "pres" : list == 1 ? "reg" : list == 2 ? "bonus" : "spec",
+                       stageList[list][pos].folder, player, region, frames);
             }
             ++stages;
         }
