@@ -763,6 +763,8 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1Earthquake", 0),
     FunctionInfo("PS1Spikes", 0),
     FunctionInfo("PS1PlayerInput", 0),
+    FunctionInfo("PS1CLedge", 0),
+    FunctionInfo("PS1SteamPiston", 0),
 #endif
 };
 
@@ -1286,6 +1288,8 @@ enum ScrFunc {
     FUNC_PS1EARTHQUAKE,
     FUNC_PS1SPIKES,
     FUNC_PS1PLAYERINPUT,
+    FUNC_PS1CLEDGE,
+    FUNC_PS1STEAMPISTON,
 #endif
     FUNC_MAX_CNT
 };
@@ -5553,6 +5557,241 @@ static void PS1SpikesUpdate()
             break;
     }
 }
+
+// FUNC_CREATETEMPOBJECT's body (the new entity in arrayPos8).
+static void PS1CreateTempObject(int type, int prop, int x, int y)
+{
+    int *ap = scriptEng.arrayPosition;
+    if (objectEntityList[ap[8]].type > OBJ_TYPE_BLANKOBJECT && ++ap[8] == ENTITY_COUNT)
+        ap[8] = TEMPENTITY_START;
+    Entity *temp = &objectEntityList[ap[8]];
+    memset(temp, 0, sizeof(Entity));
+    temp->type               = type;
+    temp->propertyValue      = prop;
+    temp->xpos               = x;
+    temp->ypos               = y;
+    temp->direction          = FLIP_NONE;
+    temp->priority           = PRIORITY_ACTIVE;
+    temp->drawOrder          = 3;
+    temp->scale              = 512;
+    temp->inkEffect          = INK_NONE;
+    temp->objectInteractions = true;
+    temp->visible            = true;
+    temp->tileCollisions     = true;
+}
+// GlobalCode function 45 (push the player in arrayPos6 off the running object), as its instructions.
+static void PS1PushPlayerOff(Entity &me)
+{
+    int *ap   = scriptEng.arrayPosition;
+    Entity &p = PS1_OBJ(ap[6]);
+    if (p.state != 28) {
+        ap[0] = ap[6];
+        ap[0] += ap[7];
+        if (p.values[7] == 0) {
+            if (p.values[8] == 0) {
+                p.state = 26;
+                if (p.xpos > me.xpos)
+                    p.speed = 131072;
+                else
+                    p.speed = -131072;
+            }
+        }
+    }
+}
+
+// Mystic Cave's C Ledge (stage object in Zone06, the crumbling ledges; update 58 VM instructions, ~1.5 hblanks a
+// frame each, 8 on screen), natively: one statement per script instruction, in order. Patched in only when the sub
+// and its jump-table entries match CLEDGE_SIG.
+static void PS1CLedgeUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    switch (me.state) { // cases 1, 2, 4, 5 (3 goes to the end)
+        case 1:
+            if (v[0] < 10) {
+                v[0]++;
+            }
+            else {
+                t[0] = 0;
+                while (t[0] < 6) {
+                    get(65802, t[0], t[1]);
+                    PS1CreateTempObject(43, t[1], me.xpos, me.ypos);
+                    PS1_OBJ(ap[8]).state     = 4;
+                    PS1_OBJ(ap[8]).direction = me.direction;
+                    get(65809, t[0], PS1_OBJ(ap[8]).values[1]);
+                    t[0]++;
+                }
+                PlaySfx(44, 0);
+                v[0] = 0;
+                me.state++;
+            }
+            break;
+        case 2:
+            if (v[0] < 20) {
+                v[0]++;
+            }
+            else {
+                v[0] = 0;
+                me.state++;
+            }
+            break;
+        case 4:
+            if (v[0] < v[1]) {
+                v[0]++;
+            }
+            else {
+                v[0] = 0;
+                me.state++;
+            }
+            break;
+        case 5:
+            me.ypos += me.yvel;
+            me.yvel += 16384;
+            if (PS1ObjectOutOfBounds(&me) == 1)
+                me.type = 0;
+            break;
+    }
+    if (me.state < 4) {
+        if (PS1ObjectOutOfBounds(&me) == 1) {
+            me.state    = 0;
+            v[0]        = 0;
+            me.priority = 0;
+        }
+    }
+    if (me.state < 3) {
+        TypeGroupList &players = objectTypeGroupList[256];
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6] = players.entityRefs[loop];
+            PlatformCollision(&PS1_OBJ(self), -32, -24, 32, -8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 1) {
+                if (me.state == 0) {
+                    me.state    = 1;
+                    me.priority = 1;
+                }
+            }
+        }
+    }
+}
+
+// Metropolis's Steam Piston (stage object in Zone09; update 95 VM instructions, ~6 hblanks a frame each), natively:
+// one statement per script instruction, in order; GlobalCode function 45 inline (PS1PushPlayerOff). Patched in only
+// when the sub (with its jump-table entries) and function 45 match STEAMPISTON_SIG / PUSHPLAYER_FN_SIG.
+static void PS1SteamPistonUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    t[7]       = 0;
+    switch (me.state) {
+        case 0:
+            t[0] = G[17];
+            t[0] &= 127;
+            if (t[0] == 0) {
+                me.priority = 1;
+                v[0]        = 2;
+                me.state    = 1;
+            }
+            break;
+        case 1:
+            me.ypos -= 524288;
+            t[7] = -524288;
+            v[0]--;
+            if (v[0] == 0) {
+                me.state     = 2;
+                me.frame     = 0;
+                me.animation = 1;
+            }
+            break;
+        case 2:
+            t[0] = G[17];
+            t[0] &= 63;
+            if (t[0] == 0) {
+                me.priority = 1;
+                v[0]        = 2;
+                me.state    = 3;
+            }
+            break;
+        case 3:
+            me.ypos += 524288;
+            t[7] = 524288;
+            v[0]--;
+            if (v[0] == 0)
+                me.state = 0;
+            break;
+    }
+    if (me.animation == 1) {
+        me.frame = me.animationTimer;
+        me.frame = me.frame >> 3;
+        me.animationTimer++;
+        if (me.frame == 7) {
+            me.animationTimer = 0;
+            me.animation      = 0;
+        }
+    }
+    t[2]                   = 0;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[0]      = (v[2] & (1 << t[2])) >> t[2];
+        if (t[0] == 1)
+            p.ypos += t[7];
+        v[2] &= ~(1 << t[2]);
+        BoxCollision(&PS1_OBJ(self), -16, -16, 16, 16, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        if (cr == 1) {
+            v[2] |= 1 << t[2];
+            if (me.state == 1) {
+                p.yvel = -655360;
+                p.yvel -= p.values[25];
+                p.state          = 12;
+                p.tileCollisions = 1;
+                p.gravity        = 1;
+                p.values[1]      = 0;
+                p.collisionMode  = 0;
+                p.pushing        = 0;
+                p.animation      = G[90];
+                p.prevAnimation  = G[90];
+                p.frame          = 0;
+                p.animationSpeed = 40;
+                PlaySfx(11, 0);
+            }
+        }
+        else {
+            if (me.frame == 3) {
+                TouchCollision(&PS1_OBJ(self), -50, -4, -30, 4, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                if (cr == 1) {
+                    PS1PushPlayerOff(me);
+                }
+                else {
+                    TouchCollision(&PS1_OBJ(self), 30, -4, 50, 4, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                    if (cr == 1)
+                        PS1PushPlayerOff(me);
+                }
+            }
+        }
+        t[2]++;
+    }
+    if (PS1ObjectOutOfBounds(&me) == 1) {
+        me.ypos = v[1];
+        me.ypos += v[31];
+        v[0]              = 0;
+        v[2]              = 0;
+        me.animation      = 0;
+        me.animationTimer = 0;
+        me.priority       = 0;
+        me.state          = 0;
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -7737,6 +7976,14 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1PLAYERINPUT:
                 opcodeSize = 0;
                 PS1PlayerInput();
+                break;
+            case FUNC_PS1CLEDGE:
+                opcodeSize = 0;
+                PS1CLedgeUpdate();
+                break;
+            case FUNC_PS1STEAMPISTON:
+                opcodeSize = 0;
+                PS1SteamPistonUpdate();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
