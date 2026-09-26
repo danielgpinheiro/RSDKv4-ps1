@@ -8,6 +8,8 @@
 # manifests per player variant (tools/rsdkmanifest runs every stage's startups on the disc tree), packed by
 # tools/atlas/build_atlas.py from the GIFs into Data/Sprites/Atlas/<Stage><suffix>.atl ('' Sonic, _t Tails,
 # _k Knuckles, _st Sonic & Tails). Tile pages: tools/tiles/convert_tiles.py -> Data/Stages/<Stage>/16x16Tiles.vram.
+# BG line strips (phase 3.5, after both: they fill the VRAM each atlas leaves free): tools/bgstrips ->
+# Data/Stages/<Stage>/BGStrips<suffix>.bin.
 # SFX and music join in later phases.
 set -eu
 cd "$(dirname "$0")/.."
@@ -27,5 +29,6 @@ for v in ":0" "_t:1" "_k:2" "_st:3"; do
         --out build/iso/Data/Sprites/Atlas > "build/manifest/atlas$suffix.log" || { cat "build/manifest/atlas$suffix.log"; exit 1; }
 done
 /usr/bin/python3 tools/tiles/convert_tiles.py "$SRC/Data" build/iso/Data
+/usr/bin/python3 tools/bgstrips/build_bgstrips.py build/iso/Data > build/manifest/bgstrips.log || { cat build/manifest/bgstrips.log; exit 1; }
 echo "iso root: $(find build/iso -type f | wc -l | tr -d ' ') files, $(du -sh build/iso | cut -f1)"
 make -s disc

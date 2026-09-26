@@ -6,6 +6,7 @@
 #include "../ps1/tileset.hh"
 #include "../ps1/video.hh"
 void PS1BuildTileVisuals(); // ps1/render.cpp
+void PS1LoadBGStrips(const char *folder, int player);
 
 // Headless CPU profile of the NORMAL stage mode (hblanks of the last frame; GDB, tools/*_test.sh).
 volatile uint32_t g_ps1ProfObjectsHbl = 0; // ProcessObjects: main + player-interaction subs
@@ -894,6 +895,7 @@ void LoadStageFiles(void)
             // stage.player2Enabled, which the later loads see.
             int variant = playerListPos == 0 && GetGlobalVariableByName("stage.player2Enabled") ? 3 : playerListPos;
             PS1AtlasLoad(stageList[activeStageList][stageListPosition].folder, variant);
+            PS1LoadBGStrips(stageList[activeStageList][stageListPosition].folder, variant); // after the atlas (shares its VRAM)
         }
 #else
         LoadStageGIFFile(stageListPosition);

@@ -15,10 +15,10 @@
 // points it at its bank): on PS1 it stays at gfxLineBuffer[0]'s bank (SetActivePalette), as the mobile
 // game's GL renderer leaves it; it only matters for SetPaletteEntry(-1) (the next zone's tile colours).
 //
-// Phase 3.2 scope (docs/30): chain + clear + palette, atlas sprites (plain / flipped / scaled / rotated
-// / rotozoom), HScroll tile layers from the packed chunk table (Scene.hpp Tiles128x128::ps1Tile). Not
-// yet (counted in g_ps1DrawTodo): tint (3.3), BG line strips (3.5), VScroll layers, 3D faces (phase 7),
-// menu text (phase 4). Sonic 2 has no 3D floor / sky layer.
+// Scope (docs/30 phase 3): chain + clear + palette (fades, per-line banks), atlas sprites (plain / flipped / scaled /
+// rotated / rotozoom / ink), HScroll tile layers from the packed chunk table (Scene.hpp Tiles128x128::ps1Tile) and
+// BG line strips. Not yet (counted in g_ps1DrawTodo): tint, VScroll layers, 3D faces (phase 7), menu text
+// (phase 4). Sonic 2 has no 3D floor / sky layer.
 #include "RetroEngine.hpp"
 
 #include <stdio.h>
@@ -1079,15 +1079,11 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
     g_ps1LayerPrims = g_ps1LayerPrims + prims;
 }
 
-// BG line strips (Sonic CD's tools/bgstrips: BG lines pre-rendered into VRAM the atlas leaves free) come back in
-// step 3.5; until then every BG line is drawn from tiles (PS1_BG_STRIPS 0).
-#define PS1_BG_STRIPS 0
-#if PS1_BG_STRIPS
-// BG line strips (tools/bgstrips/build_bgstrips.py -> Data/Stages/<Stage>/BGStrips[_t].bin, format
-// there): BG layer lines pre-rendered at build time as 8-bit rows of one horizontal period, in VRAM
-// the stage's atlas leaves free. A band of lines in a strip region costs 1-3 sprites instead of ~21
-// tiles (per-line parallax would otherwise make one band per line). From the Nexus port.
-#define PS1_STRIP_MAX    64
+// BG line strips (tools/bgstrips/build_bgstrips.py -> Data/Stages/<Stage>/BGStrips<suffix>.bin, format
+// there; docs/30 phase 3.5): BG layer lines pre-rendered at build time as 8-bit rows of one horizontal period, in
+// VRAM the stage's atlas leaves free. A band of lines in a strip region costs 1-3 sprites instead of ~21
+// tiles (per-line parallax would otherwise make one band per line). From the Nexus / Sonic CD ports.
+#define PS1_STRIP_MAX    32 // Sonic 2: 18 at most (Wing Fortress with Tails); tools/bgstrips MAX_REGIONS
 #define PS1_STRIP_PIECES 9 // tools/bgstrips MAX_PIECES
 struct PS1StripRegion {
     uint8_t layer, plane, pieces, pad;
@@ -1096,19 +1092,20 @@ struct PS1StripRegion {
 };
 static PS1StripRegion s_strips[PS1_STRIP_MAX];
 static int s_stripCount = 0;
-static uint8_t s_stripRow[LAYER_COUNT][2][TILELAYER_SCROLL_COUNT / TILE_SIZE]; // region + 1 per tile row
+static uint8_t s_stripRow[LAYER_COUNT][2][TILELAYER_LINESCROLL_COUNT / TILE_SIZE]; // region + 1 per tile row
 volatile uint32_t g_ps1StripRegions = 0; // regions loaded for this stage
 volatile uint32_t g_ps1StripBytes   = 0; // strip texel bytes uploaded by the last load
 
-// Loads the stage's strips (player 1 = Tails: BGStrips_t.bin, placed around the Tails atlas) into VRAM.
-// Immediate uploads: call during the stage load, after PS1AtlasLoad.
+// Loads the stage's strips for the player variant (the atlas' one: BGStrips<suffix>.bin sits around that atlas) into
+// VRAM. Immediate uploads: call during the stage load, after PS1AtlasLoad.
 void PS1LoadBGStrips(const char *folder, int player)
 {
     s_stripCount = 0;
     g_ps1StripRegions = 0;
     memset(s_stripRow, 0, sizeof(s_stripRow));
     char path[96];
-    snprintf(path, sizeof(path), "Data/Stages/%s/BGStrips%s.bin", folder, player == 1 ? "_t" : "");
+    static const char *const suffix[4] = { "", "_t", "_k", "_st" };
+    snprintf(path, sizeof(path), "Data/Stages/%s/BGStrips%s.bin", folder, player >= 0 && player < 4 ? suffix[player] : "");
     FILE *f = fopen(path, "rb");
     if (!f)
         return; // no HScroll BG strips for this stage: tiles only
@@ -1134,7 +1131,7 @@ void PS1LoadBGStrips(const char *folder, int player)
             r.y[k] = e[12 + 6 * k] | (e[13 + 6 * k] << 8);
             r.w[k] = e[14 + 6 * k] | (e[15 + 6 * k] << 8);
         }
-        ok = ok && r.pieces <= PS1_STRIP_PIECES && r.layer < LAYER_COUNT && r.line0 + r.lines <= TILELAYER_SCROLL_COUNT;
+        ok = ok && r.pieces <= PS1_STRIP_PIECES && r.layer < LAYER_COUNT && r.line0 + r.lines <= TILELAYER_LINESCROLL_COUNT;
     }
     const int stagingBytes = 16 * 1024;
     uint8_t *staging       = ok ? (uint8_t *)psyqo_malloc(stagingBytes) : nullptr;
@@ -1217,8 +1214,11 @@ static void PS1WalkStripBand(const PS1StripRegion &r, int sy, int h, int ly, int
     }
 }
 
-#endif
-
+struct PS1StripBand {
+    short sy, h, ly, chunkX;
+    uint8_t region;
+};
+static PS1StripBand s_stripBands[SCREEN_YSIZE];
 static short s_lineX[SCREEN_YSIZE];
 
 // upstream DrawHLineScrollLayer (v4 SW path): the same scroll-state update (BG autoscroll, parallax line
@@ -1333,23 +1333,80 @@ void DrawHLineScrollLayer(int layerID)
         if (++ly >= fullH)
             ly = 0;
     }
-    g_ps1ProfLayer[1] = g_ps1ProfLayer[1] + PS1HblanksSince(t0);
-    uint32_t tTiles   = 0;
-    ly                = tileYPos;
+    g_ps1ProfLayer[1]       = g_ps1ProfLayer[1] + PS1HblanksSince(t0);
+    uint32_t tTiles         = 0;
+    int stripBands          = 0;
+    int layerIdx            = activeTileLayers[layerID];
+    const uint8_t *stripRow = s_stripCount && !fg ? s_stripRow[layerIdx][above] : nullptr;
+    ly                      = tileYPos;
     for (int y = 0; y < SCREEN_YSIZE;) {
-        int chunkX  = s_lineX[y];
-        int h       = 1;
-        int rowLeft = TILE_SIZE - (ly & 0xF);
-        while (h < rowLeft && y + h < SCREEN_YSIZE && s_lineX[y + h] == chunkX) ++h;
-        uint32_t tb = PS1Hblanks();
-        PS1DrawTileBand(layer, above, y, h, ly, chunkX, fullW);
-        tTiles += PS1HblanksSince(tb);
+        int chunkX = s_lineX[y];
+        int ri     = stripRow ? stripRow[ly >> 4] : 0;
+        int h      = 1;
+        if (ri) { // strip region: a band runs until the X scroll changes or the region ends
+            const PS1StripRegion &r = s_strips[ri - 1];
+            int end                 = r.line0 + r.lines;
+            while (y + h < SCREEN_YSIZE && ly + h < end && s_lineX[y + h] == chunkX) ++h;
+            PS1StripBand &b = s_stripBands[stripBands++]; // drawn after the loop, piece by piece
+            b.sy = (short)y, b.h = (short)h, b.ly = (short)ly, b.chunkX = (short)chunkX, b.region = (uint8_t)(ri - 1);
+        }
+        else {
+            int rowLeft = TILE_SIZE - (ly & 0xF);
+            while (h < rowLeft && y + h < SCREEN_YSIZE && s_lineX[y + h] == chunkX) ++h;
+            uint32_t tb = PS1Hblanks();
+            PS1DrawTileBand(layer, above, y, h, ly, chunkX, fullW);
+            tTiles += PS1HblanksSince(tb);
+        }
         y += h;
         ly += h;
         if (ly >= fullH)
             ly -= fullH;
     }
-    g_ps1ProfLayer[2]          = g_ps1ProfLayer[2] + tTiles;
+    g_ps1ProfLayer[2]   = g_ps1ProfLayer[2] + tTiles;
+    g_ps1StripBandCount = g_ps1StripBandCount + stripBands;
+    uint32_t t2         = PS1Hblanks();
+    static uint32_t s_stripClut = 0;
+    if (!s_stripClut) {
+        psyqo::PrimPieces::ClutIndex clut(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
+        uint16_t c;
+        memcpy(&c, &clut, 2);
+        s_stripClut = (uint32_t)c << 16;
+    }
+    for (int i = 0; i < stripBands;) { // strip bands grouped by region, chained piece by piece
+        int region = s_stripBands[i].region, j = i;
+        while (j < stripBands && s_stripBands[j].region == region) ++j;
+        const PS1StripRegion &r          = s_strips[region];
+        int count[PS1_STRIP_PIECES]      = {};
+        int pos[PS1_STRIP_PIECES], total = 0;
+        s_stripWalkCount                 = 0;
+        for (int b = i; b < j; ++b)
+            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count);
+        for (int k = 0; k < r.pieces; ++k) {
+            pos[k] = total;
+            total += count[k];
+        }
+        for (int q = 0; q < s_stripWalkCount; ++q) { // scatter: group by piece, band order kept
+            uint32_t *d = &s_stripRuns[pos[s_stripWalkPiece[q]]++ * 3];
+            uint32_t *w = &s_stripWalk[q * 3];
+            d[0] = w[0], d[1] = w[1], d[2] = w[2];
+        }
+        for (int k = 0, start = 0; k < r.pieces; start += count[k++]) {
+            int n = count[k];
+            if (start + n > PS1_STRIP_RUNS)
+                n = PS1_STRIP_RUNS - start;
+            if (n <= 0)
+                continue;
+            psyqo::PrimPieces::TPageAttr attr;
+            attr.set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
+            attr.setPageX((uint8_t)(r.x[k] >> 6));
+            attr.setPageY((uint8_t)(r.y[k] >> 8));
+            PS1ChainTPage(attr);
+            PS1ChainSpriteRawN(&s_stripRuns[start * 3], n);
+            g_ps1LayerPrims = g_ps1LayerPrims + n;
+        }
+        i = j;
+    }
+    g_ps1ProfLayer[3]          = g_ps1ProfLayer[3] + PS1HblanksSince(t2);
     g_ps1LayerHbl              = g_ps1LayerHbl + PS1HblanksSince(t0);
     g_ps1ProfSlot[layerID & 3] = PS1HblanksSince(t0);
 }
