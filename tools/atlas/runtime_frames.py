@@ -39,10 +39,11 @@ RUNTIME = {
     # start offsets and 2 px x 48 / 80 frames of travel): y 31..255.
     'Pull Chain': {'add': [('SCZ/Objects.gif', 236, 31, 24, 225)]},
     # Special: rings and bombs are TEXTURED_C faces in the half-pipe's Scene3D (centre +- extent 17 x 16: 34 x 32 texel
-    # boxes, one wider than the 32 x 32 sprite frames): the ring frames (animated centre, x 1..133, y 1..66), the bomb
-    # (centre 83, 50) and the shadow (116, 50) (Ring / Bomb update subs) -> the sheet's top-left 134 x 67.
-    'Ring': {'add': [('Special/Objects.gif', 0, 0, 134, 67)]},
-    'Bomb': {'add': [('Special/Objects.gif', 0, 0, 134, 67)]},
+    # boxes, one wider than the 32 x 32 sprite frames): the ring frames (centres from the Ring's U / V tables: U 17..215,
+    # V 17 / 50 -> x 1..231, y 1..66), the bomb (centre 83, 50) and the shadows (row V 50) (Ring / Bomb update subs) ->
+    # the sheet's top-left 232 x 67 (134 wide missed the late spin frames: face misses at frame 900, docs/30 phase 7).
+    'Ring': {'add': [('Special/Objects.gif', 0, 0, 232, 67)]},
+    'Bomb': {'add': [('Special/Objects.gif', 0, 0, 232, 67)]},
     # Special: the emerald line reads x 403 when specialStage.emeralds > 127 (the startup only saw 0).
     'Special Finish': {'add': [('Special/Objects.gif', 403, 311, 80, 16)]},
     # LSelect: the text menus (DrawMenu -> DrawTextMenu: 8 x 8 characters at ((c & 15) * 8, (c >> 4) * 8 + 0 | 128) of

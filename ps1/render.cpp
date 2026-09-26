@@ -84,9 +84,6 @@ volatile uint32_t g_ps1TileFlipped    = 0; // this frame: tiles drawn as flipped
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
 volatile int32_t g_ps1MissSheet = -1, g_ps1MissX = 0, g_ps1MissY = 0; // the last miss (atlas sheet, texel)
 volatile uint32_t g_ps1SheetUnbound   = 0; // draws from a sheet the stage atlas doesn't have
-volatile uint32_t g_ps1GteVertices    = 0; // Draw3DScene vertices projected on the GTE (GDB)
-volatile uint32_t g_ps1GteFallbacks   = 0; // ... of them left to the CPU's exact division (a GTE flag)
-volatile uint32_t g_ps1GteLastFlag    = 0;
 volatile uint32_t g_ps1DrawTodo       = 0; // draw calls of later steps (ink effects, faces, text...), skipped
 volatile uint32_t g_ps1SurfaceGen     = 1; // bumped by Sprite.cpp when a sheet name is (un)registered
 volatile uint8_t g_ps1DebugDrawMask   = 0; // bit 0: drop object-list primitives (layers-only frames); bit 1: tile bands chain nothing (profiling)
@@ -1957,10 +1954,13 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
 volatile uint32_t g_ps1Faces        = 0; // faces chained (flat + textured), total
 volatile uint32_t g_ps1FaceTexMiss  = 0; // textured faces whose UVs span no single atlas cluster (skipped)
 
+// The special stage's per-face / per-vertex functions are built -O2 (the rest of the file stays -Os: -O2 for all of it
+// costs 7.3 KB of the 2 MB heap; docs/30 phase 7.2b).
+#define PS1_HOT3D __attribute__((optimize("O2")))
 // Upstream's software rasterizer fills the convex hull of a face's 4 corners, in any order (its scan edges join every
 // pair); the GPU's quad is a triangle strip (0 1 2, 1 2 3). Strip order: the diagonal (1-2) is the corner pair whose
 // line has the other two corners on opposite sides.
-static void PS1QuadStrip(const Vertex *in, Vertex *out)
+PS1_HOT3D static void PS1QuadStrip(const Vertex *in, Vertex *out)
 {
     int cx[4], cy[4]; // clamped for the side test only (32-bit products; far corners keep their direction)
     for (int k = 0; k < 4; ++k) {
@@ -1981,121 +1981,182 @@ static void PS1QuadStrip(const Vertex *in, Vertex *out)
     for (int k = 0; k < 4; ++k) out[k] = in[k]; // degenerate (collinear corners): as given
 }
 
-// Draw3DScene's screen positions (RSDKv4/Scene3D.cpp PS1ProjectedVertex; docs/30 phase 7): every transformed vertex once
-// on the GTE (RTPS, psx-spx "GTE Coordinate Calculation Commands"): V = T >> s (the smallest s that fits x, y, z in 15
-// bits: the ratio T / T.z is kept), R = diag(1, -projectionY / projectionX, 1), TR 0, H = projectionX, OF = the screen
-// centre -> SX = CX + projectionX * x / z, SY = CY - projectionY * y / z (the GTE's division and flooring: within
-// +-1 px of upstream's). z <= 0 (the faces skip it) or a GTE flag (IR1 / IR2 or SX / SY saturated, divide overflow:
-// near the camera or far off-screen) -> marked for the exact CPU division.
-void PS1Project3DVertices(uint32_t *out, int count)
+// Draw3DScene's transform + projection on the GTE (docs/30 phase 7.2b; RSDKv4/Scene3D.cpp TransformVertexBuffer), as
+// Sonic CD's special-stage floor: RTPT, three vertices a command (psx-spx "GTE Coordinate Calculation Commands").
+// Upstream: T = v * M >> 8 (per term) + translation; screen = SCREEN_CENTER + projectionX * T.x / T.z,
+// SCREEN_CENTER - projectionY * T.y / T.z. On the GTE, in units of 32 (the half-pipe's vertices are +-2^18, most of
+// them multiples of 32): V = v >> 5, R = M's 3x3 in 4.12 (x 16; the y row scaled by -projectionY / projectionX),
+// TR = translation / 32, H = projectionX, OF = the screen centre -> SXY = the screen position (within about a pixel
+// of upstream's), SZ = T.z / 32 -> the depth z (.v) for the sort and the fog. Left to the CPU (exact transform + the
+// division, marked PS1_PROJ_MARK): a coordinate past +-2^20, a GTE flag (bit 31: IR1 / IR2 / SZ / SX / SY saturated,
+// divide overflow; z <= 0 included) or T.z < 8192 (near the camera, where the units of 32 would show).
+void PS1ExactVertexT(int v); // RSDKv4/Scene3D.cpp: upstream's transform of one vertex
+volatile uint32_t g_ps1GteVertices    = 0; // vertices transformed on the GTE (GDB)
+volatile uint32_t g_ps1GteFallbacks   = 0; // ... left to the CPU (a flag, near, a range)
+volatile uint32_t g_ps1GteLastFlag    = 0;
+volatile uint32_t g_ps1GteMatrixCPU   = 0; // frames whose matrix doesn't fit the GTE (all on the CPU)
+static void PS1CpuVertexT(int v)
+{
+    PS1ExactVertexT(v);
+    vertexBufferT[v].u = 0x8000u;
+    vertexBufferT[v].v = vertexBufferT[v].z;
+}
+PS1_HOT3D void PS1TransformProject3D(int count)
 {
     using namespace psyqo::GTE;
-    int r22 = -(projectionY * 4096 + projectionX / 2) / projectionX;
-    write<Register::R11R12, Unsafe>(4096u); // R11 1.0, R12 0
-    clear<Register::R13R21, Unsafe>();
-    write<Register::R22R23, Unsafe>((uint32_t)(uint16_t)(int16_t)r22);
-    clear<Register::R31R32, Unsafe>();
-    write<Register::R33, Unsafe>(4096u);
-    clear<Register::TRX, Unsafe>();
-    clear<Register::TRY, Unsafe>();
-    clear<Register::TRZ, Unsafe>();
+    const Matrix &m = matFinal;
+    int r[3][3];
+    bool fits = true;
+    for (int k = 0; k < 3; ++k) {
+        r[0][k] = m.values[k][0] * 16;
+        r[1][k] = -(m.values[k][1] * 16 * projectionY) / projectionX;
+        r[2][k] = m.values[k][2] * 16;
+        for (int j = 0; j < 3; ++j) fits = fits && r[j][k] >= -32768 && r[j][k] <= 32767;
+    }
+    if (!fits) {
+        g_ps1GteMatrixCPU = g_ps1GteMatrixCPU + 1;
+        for (int v = 0; v < count; ++v) PS1CpuVertexT(v);
+        return;
+    }
+    auto pack = [](int lo, int hi) { return (uint32_t)(uint16_t)lo | ((uint32_t)(uint16_t)hi << 16); };
+    write<Register::R11R12, Unsafe>(pack(r[0][0], r[0][1]));
+    write<Register::R13R21, Unsafe>(pack(r[0][2], r[1][0]));
+    write<Register::R22R23, Unsafe>(pack(r[1][1], r[1][2]));
+    write<Register::R31R32, Unsafe>(pack(r[2][0], r[2][1]));
+    write<Register::R33, Unsafe>((uint32_t)(uint16_t)r[2][2]);
+    write<Register::TRX, Unsafe>((uint32_t)(m.values[3][0] >> 5));
+    write<Register::TRY, Unsafe>((uint32_t)(-(m.values[3][1] >> 5) * projectionY / projectionX));
+    write<Register::TRZ, Unsafe>((uint32_t)(m.values[3][2] >> 5));
     write<Register::OFX, Unsafe>((uint32_t)(SCREEN_CENTERX << 16));
     write<Register::OFY, Unsafe>((uint32_t)(SCREEN_CENTERY << 16));
     write<Register::H, Safe>((uint32_t)projectionX);
-    const uint32_t bad = (1u << 24) | (1u << 23) | (1u << 17) | (1u << 14) | (1u << 13);
-    for (int i = 0; i < count; ++i) {
-        const Vertex &t = vertexBufferT[i];
-        if (t.z <= 0) {
-            out[i] = 0x8000u;
+    const uint32_t lim = 1u << 20;
+    uint32_t cpu       = 0;
+    int v              = 0;
+    for (; v + 3 <= count; v += 3) {
+        const Vertex *p = &vertexBuffer[v];
+        uint32_t o      = (uint32_t)(p[0].x + lim) | (uint32_t)(p[0].y + lim) | (uint32_t)(p[0].z + lim) | (uint32_t)(p[1].x + lim)
+                     | (uint32_t)(p[1].y + lim) | (uint32_t)(p[1].z + lim) | (uint32_t)(p[2].x + lim) | (uint32_t)(p[2].y + lim)
+                     | (uint32_t)(p[2].z + lim);
+        if (o >= 2 * lim) {
+            PS1CpuVertexT(v), PS1CpuVertexT(v + 1), PS1CpuVertexT(v + 2);
+            cpu += 3;
             continue;
         }
-        int ax = t.x < 0 ? -t.x : t.x, ay = t.y < 0 ? -t.y : t.y, m = t.z;
-        m     = ax > m ? ax : m;
-        m     = ay > m ? ay : m;
-        int s = 0;
-        while ((m >> s) > 32767) ++s;
-        write<Register::VXY0, Unsafe>((uint32_t)(uint16_t)(t.x >> s) | ((uint32_t)(uint16_t)(t.y >> s) << 16));
-        write<Register::VZ0, Safe>((uint32_t)(t.z >> s));
-        Kernels::rtps();
-        uint32_t flag = readRaw<Register::FLAG, Safe>();
-        if (flag & bad) {
-            out[i]    = 0x8000u;
-            g_ps1GteFallbacks = g_ps1GteFallbacks + 1;
-            g_ps1GteLastFlag  = flag;
+        write<Register::VXY0, Unsafe>(pack(p[0].x >> 5, p[0].y >> 5));
+        write<Register::VZ0, Unsafe>((uint32_t)(p[0].z >> 5));
+        write<Register::VXY1, Unsafe>(pack(p[1].x >> 5, p[1].y >> 5));
+        write<Register::VZ1, Unsafe>((uint32_t)(p[1].z >> 5));
+        write<Register::VXY2, Unsafe>(pack(p[2].x >> 5, p[2].y >> 5));
+        write<Register::VZ2, Safe>((uint32_t)(p[2].z >> 5));
+        Kernels::rtpt();
+        int32_t flag = (int32_t)readRaw<Register::FLAG, Safe>();
+        uint32_t z0 = readRaw<Register::SZ1, Safe>(), z1 = readRaw<Register::SZ2, Safe>(), z2 = readRaw<Register::SZ3, Safe>();
+        if (flag < 0 || z0 < 256 || z1 < 256 || z2 < 256) {
+            g_ps1GteLastFlag = flag;
+            PS1CpuVertexT(v), PS1CpuVertexT(v + 1), PS1CpuVertexT(v + 2);
+            cpu += 3;
+            continue;
         }
-        else
-            out[i] = readRaw<Register::SXY2, Safe>();
+        Vertex *t = &vertexBufferT[v];
+        t[0].u    = readRaw<Register::SXY0, Safe>();
+        t[1].u    = readRaw<Register::SXY1, Safe>();
+        t[2].u    = readRaw<Register::SXY2, Safe>();
+        t[0].v    = (int)(z0 << 5);
+        t[1].v    = (int)(z1 << 5);
+        t[2].v    = (int)(z2 << 5);
     }
-    g_ps1GteVertices = g_ps1GteVertices + count;
+    for (; v < count; ++v, ++cpu) PS1CpuVertexT(v);
+    g_ps1GteVertices  = g_ps1GteVertices + count;
+    g_ps1GteFallbacks = g_ps1GteFallbacks + cpu;
 }
 
-// Draw3DScene's faded faces (the half-pipe: ~700 a frame) in one pass (docs/30 phase 7): the four packed GTE screen
-// positions, upstream's DrawFadedFace early-outs and fog blend, the strip order from one or two side tests, and the flat
-// quads written straight into bulk runs of the chain (no per-face fragment call). A face of another type ends the run
-// (PS1FadedRunFlush) so the draw order stays the sorted one.
-static uint32_t *s_fadedRun = nullptr;
-static int s_fadedCap = 0, s_fadedUsed = 0;
-volatile uint32_t g_ps1FadedFast = 0; // faded faces through the fast path (GDB)
-
-void PS1FadedRunFlush()
+// Draw3DScene's faded faces (the half-pipe: ~650 a frame) in one pass (docs/30 phase 7): from draw-list entry i, every
+// following faded face whose four corners the GTE projected (vertexBufferT .u): upstream's fog (the depth's) and
+// DrawFadedFace early-outs, the fog blend (cached: runs of faces share colour and fog), the strip order from one or two
+// side tests, flat quads written straight into bulk runs of the chain. Returns the entry it stopped at (another kind of
+// face, or a corner left to the CPU: Draw3DScene's general path), so the draw order stays the sorted one.
+volatile uint32_t g_ps1FadedFast   = 0; // faded faces through the fast path (GDB)
+volatile uint32_t g_ps1FadedCulled = 0; // ... of them off screen or degenerate (not drawn)
+PS1_HOT3D int PS1FadedFaces(int i, int count)
 {
-    if (s_fadedRun)
-        PS1ChainBulkEnd(s_fadedUsed);
-    s_fadedRun = nullptr;
-    s_fadedCap = s_fadedUsed = 0;
-}
-
-bool PS1FadedRunAdd(uint32_t pa, uint32_t pb, uint32_t pc, uint32_t pd, uint color, uint fogColor, int alpha)
-{
-    if (!s_frameOpen || PS1ObjectsHidden())
-        return true;
-    if (alpha > 0xFF)
-        alpha = 0xFF;
-    if (alpha < 1)
-        return true;
-    int x[4] = { (int16_t)(pa & 0xFFFF), (int16_t)(pb & 0xFFFF), (int16_t)(pc & 0xFFFF), (int16_t)(pd & 0xFFFF) };
-    int y[4] = { (int16_t)(pa >> 16), (int16_t)(pb >> 16), (int16_t)(pc >> 16), (int16_t)(pd >> 16) };
-    if ((x[0] < 0 && x[1] < 0 && x[2] < 0 && x[3] < 0) || (x[0] > SCREEN_XSIZE && x[1] > SCREEN_XSIZE && x[2] > SCREEN_XSIZE && x[3] > SCREEN_XSIZE)
-        || (y[0] < 0 && y[1] < 0 && y[2] < 0 && y[3] < 0) || (y[0] > SCREEN_YSIZE && y[1] > SCREEN_YSIZE && y[2] > SCREEN_YSIZE && y[3] > SCREEN_YSIZE))
-        return true;
-    if ((x[0] == x[1] && x[1] == x[2] && x[2] == x[3]) || (y[0] == y[1] && y[1] == y[2] && y[2] == y[3]))
-        return true;
-    // strip order (PS1QuadStrip): the diagonal is the pair whose line separates the other two; faces listed around their
-    // outline (a-c diagonal) are tested first. Coordinates are GTE screen positions (-1024..1023): 32-bit products.
-    auto side = [&](int i, int j, int k) { return (x[j] - x[i]) * (y[k] - y[i]) - (y[j] - y[i]) * (x[k] - x[i]); };
-    int o0 = 0, o1 = 1, o2 = 2, o3 = 3;
-    int s1 = side(0, 2, 1), s3 = side(0, 2, 3);
-    if ((s1 < 0 && s3 > 0) || (s1 > 0 && s3 < 0))
-        o0 = 1, o1 = 0, o2 = 2, o3 = 3; // diagonal a-c: strip b a c d
-    else {
-        int t0 = side(1, 2, 0), t3 = side(1, 2, 3);
-        if (!((t0 < 0 && t3 > 0) || (t0 > 0 && t3 < 0))) {
-            int u1 = side(0, 3, 1), u2 = side(0, 3, 2);
-            if ((u1 < 0 && u2 > 0) || (u1 > 0 && u2 < 0))
-                o0 = 1, o1 = 0, o2 = 3, o3 = 2; // diagonal a-d
+    const bool draw = s_frameOpen && !PS1ObjectsHidden();
+    uint32_t *run   = nullptr;
+    int cap = 0, used = 0;
+    uint32_t cacheColor = 0, cacheCmd = 0;
+    int cacheAlpha = -1;
+    uint32_t fast = 0, culled = 0, drawn = 0;
+    const uint32_t fog = fogColor;
+    for (; i < count; ++i) {
+        const Face &f = faceBuffer[drawList3D[i].faceID];
+        if (f.flag != FACE_FLAG_FADED)
+            break;
+        uint32_t pa = vertexBufferT[f.a].u, pb = vertexBufferT[f.b].u, pc = vertexBufferT[f.c].u, pd = vertexBufferT[f.d].u;
+        if ((pa & 0xFFFF) == 0x8000u || (pb & 0xFFFF) == 0x8000u || (pc & 0xFFFF) == 0x8000u || (pd & 0xFFFF) == 0x8000u)
+            break;
+        ++fast;
+        int fogStr = (drawList3D[i].depth - 0x8000) >> 8;
+        if (fogStr < 0)
+            fogStr = 0;
+        if (fogStr > fogStrength)
+            fogStr = fogStrength;
+        int alpha = 0xFF - fogStr;
+        if (!draw || alpha < 1)
+            continue;
+        if (alpha > 0xFF)
+            alpha = 0xFF;
+        int x0 = (int16_t)(pa & 0xFFFF), x1 = (int16_t)(pb & 0xFFFF), x2 = (int16_t)(pc & 0xFFFF), x3 = (int16_t)(pd & 0xFFFF);
+        int y0 = (int16_t)(pa >> 16), y1 = (int16_t)(pb >> 16), y2 = (int16_t)(pc >> 16), y3 = (int16_t)(pd >> 16);
+        if ((x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) || (x0 > SCREEN_XSIZE && x1 > SCREEN_XSIZE && x2 > SCREEN_XSIZE && x3 > SCREEN_XSIZE)
+            || (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) || (y0 > SCREEN_YSIZE && y1 > SCREEN_YSIZE && y2 > SCREEN_YSIZE && y3 > SCREEN_YSIZE)
+            || (x0 == x1 && x1 == x2 && x2 == x3) || (y0 == y1 && y1 == y2 && y2 == y3)) {
+            ++culled;
+            continue;
         }
+        // strip order (PS1QuadStrip): the diagonal is the pair whose line separates the other two; faces listed around
+        // their outline (a-c diagonal) are tested first. GTE screen positions (-1024..1023): 32-bit products.
+        uint32_t w1 = pb, w2 = pa, w3 = pc, w4 = pd; // diagonal a-c: strip b a c d
+        int s1 = (x2 - x0) * (y1 - y0) - (y2 - y0) * (x1 - x0), s3 = (x2 - x0) * (y3 - y0) - (y2 - y0) * (x3 - x0);
+        if (!((s1 < 0 && s3 > 0) || (s1 > 0 && s3 < 0))) {
+            int t0 = (x2 - x1) * (y0 - y1) - (y2 - y1) * (x0 - x1), t3 = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+            w1 = pa, w2 = pb, w3 = pc, w4 = pd; // diagonal b-c (or collinear): as given
+            if (!((t0 < 0 && t3 > 0) || (t0 > 0 && t3 < 0))) {
+                int u1 = (x3 - x0) * (y1 - y0) - (y3 - y0) * (x1 - x0), u2 = (x3 - x0) * (y2 - y0) - (y3 - y0) * (x2 - x0);
+                if ((u1 < 0 && u2 > 0) || (u1 > 0 && u2 < 0))
+                    w1 = pb, w2 = pa, w3 = pd, w4 = pc; // diagonal a-d
+            }
+        }
+        if (f.color != cacheColor || alpha != cacheAlpha) {
+            auto ch = [&](int shift) {
+                int c5 = ((f.color >> shift) & 0xFF) >> 3, f5 = ((fog >> shift) & 0xFF) >> 3;
+                return (uint32_t)((f5 * (0xFF - alpha) >> 8) + (c5 * alpha >> 8)) << 3;
+            };
+            cacheColor = f.color, cacheAlpha = alpha;
+            cacheCmd   = 0x28000000u | ch(0) << 16 | ch(8) << 8 | ch(16); // GP0 28h flat quad, BGR
+        }
+        if (used == cap) {
+            if (run)
+                PS1ChainBulkEnd(used);
+            run = PS1ChainBulkBegin(128, 5);
+            cap = run ? 128 : 0, used = 0;
+            if (!run)
+                continue;
+        }
+        uint32_t *w = run + used * 6;
+        w[0]        = cacheCmd;
+        w[1]        = w1;
+        w[2]        = w2;
+        w[3]        = w3;
+        w[4]        = w4;
+        ++used;
+        ++drawn;
     }
-    auto ch = [&](int shift) {
-        int c5 = ((color >> shift) & 0xFF) >> 3, f5 = ((fogColor >> shift) & 0xFF) >> 3;
-        return (uint32_t)((f5 * (0xFF - alpha) >> 8) + (c5 * alpha >> 8)) << 3;
-    };
-    if (s_fadedUsed == s_fadedCap) {
-        PS1FadedRunFlush();
-        s_fadedRun = PS1ChainBulkBegin(128, 5);
-        if (!s_fadedRun)
-            return true;
-        s_fadedCap = 128;
-    }
-    uint32_t *w = s_fadedRun + s_fadedUsed * 6;
-    w[0]        = 0x28000000u | ch(0) << 16 | ch(8) << 8 | ch(16); // GP0 28h flat quad, BGR
-    w[1]        = (uint32_t)(uint16_t)x[o0] | ((uint32_t)(uint16_t)y[o0] << 16);
-    w[2]        = (uint32_t)(uint16_t)x[o1] | ((uint32_t)(uint16_t)y[o1] << 16);
-    w[3]        = (uint32_t)(uint16_t)x[o2] | ((uint32_t)(uint16_t)y[o2] << 16);
-    w[4]        = (uint32_t)(uint16_t)x[o3] | ((uint32_t)(uint16_t)y[o3] << 16);
-    ++s_fadedUsed;
-    g_ps1Faces     = g_ps1Faces + 1;
-    g_ps1FadedFast = g_ps1FadedFast + 1;
-    return true;
+    if (run)
+        PS1ChainBulkEnd(used);
+    g_ps1Faces       = g_ps1Faces + drawn;
+    g_ps1FadedFast   = g_ps1FadedFast + fast;
+    g_ps1FadedCulled = g_ps1FadedCulled + culled;
+    return i;
 }
 
 void DrawFace(void *v, uint colour)
@@ -2141,7 +2202,7 @@ volatile int32_t g_ps1FaceMissSheet = -1, g_ps1FaceMissU0 = 0, g_ps1FaceMissV0 =
 
 // Textured quads (Draw3DScene's TEXTURED_* faces); blended: B/2 + F/2 on the texels (upstream DrawTexturedFaceBlended:
 // (texel & 0xF7BC) >> 1 + (pixel & 0xF7BC) >> 1), the PS1's semi-transparency mode 0.
-static void PS1TexturedFace(const Vertex *q, byte sheetID, bool blended)
+PS1_HOT3D static void PS1TexturedFace(const Vertex *q, byte sheetID, bool blended)
 {
     if (!s_frameOpen || PS1ObjectsHidden())
         return;

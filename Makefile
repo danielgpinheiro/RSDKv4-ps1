@@ -114,7 +114,7 @@ RSDKv4/Math.o RSDKv4/Math.dep: build/gen/trig_tables.inc
 ps1/mdec.o: CPPFLAGS += -O2
 ps1/gpu_chain.o: CPPFLAGS += -O2
 # The script VM and the object / collision loops are the CPU hot path (as in the Sonic CD port).
-RSDKv4/Script.o RSDKv4/Object.o RSDKv4/Collision.o: CPPFLAGS += -O2
+RSDKv4/Script.o RSDKv4/Object.o RSDKv4/Collision.o RSDKv4/Scene3D.o: CPPFLAGS += -O2
 
 $(OBJS): build/flags.txt
 

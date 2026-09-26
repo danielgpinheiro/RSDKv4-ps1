@@ -267,6 +267,34 @@ void MatrixInverse(Matrix *matrix)
 // Scene3D CPU per call (hblanks, the last call; GDB, docs/30 phase 7): the vertex transform, the depth sort, the faces.
 volatile uint32_t g_ps1Prof3DTransform = 0, g_ps1Prof3DSort = 0, g_ps1Prof3DDraw = 0, g_ps1Prof3DVertices = 0, g_ps1Prof3DFaces = 0;
 volatile uint32_t g_ps1Prof3DProject = 0; // the GTE projection pass (part of Draw)
+volatile uint32_t g_ps1Prof3DFaded = 0, g_ps1Prof3DGeneral = 0, g_ps1Prof3DGeneralN = 0; // Draw: faded runs vs the rest
+#endif
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 vertexBufferT (docs/30 phase 7.2b, Sonic CD's special-stage floor technique): the GTE transforms and projects every
+// vertex in one pass (ps1/render.cpp PS1TransformProject3D, RTPT: three vertices a command): .u = the packed screen
+// position (or PS1_PROJ_MARK: left to the CPU), .v = the depth z the sort and the fog use. Upstream's exact transform
+// (.x .y .z) is computed only where it is read: the marked vertices and the corners of the faces the general path draws
+// (PS1VertexT). Visual only: the scripts never read vertexBufferT (their TransformVertices stays exact).
+uint32_t g_ps1VertexTDone[VERTEXBUFFER_SIZE / 32 + 1];
+void PS1ExactVertexT(int v)
+{
+    int vx = vertexBuffer[v].x;
+    int vy = vertexBuffer[v].y;
+    int vz = vertexBuffer[v].z;
+    vertexBufferT[v].x =
+        (vx * matFinal.values[0][0] >> 8) + (vy * matFinal.values[1][0] >> 8) + (vz * matFinal.values[2][0] >> 8) + matFinal.values[3][0];
+    vertexBufferT[v].y =
+        (vx * matFinal.values[0][1] >> 8) + (vy * matFinal.values[1][1] >> 8) + (vz * matFinal.values[2][1] >> 8) + matFinal.values[3][1];
+    vertexBufferT[v].z =
+        (vx * matFinal.values[0][2] >> 8) + (vy * matFinal.values[1][2] >> 8) + (vz * matFinal.values[2][2] >> 8) + matFinal.values[3][2];
+    g_ps1VertexTDone[v >> 5] |= 1u << (v & 31);
+}
+static inline void PS1VertexT(int v)
+{
+    if (!(g_ps1VertexTDone[v >> 5] & (1u << (v & 31))))
+        PS1ExactVertexT(v);
+}
+void PS1TransformProject3D(int count); // ps1/render.cpp
 #endif
 void TransformVertexBuffer()
 {
@@ -294,6 +322,13 @@ void TransformVertexBuffer()
     matFinal.values[3][3] = matWorld.values[3][3];
     MatrixMultiply(&matFinal, &matView);
 
+#if RETRO_PLATFORM == RETRO_PS1
+    memset(g_ps1VertexTDone, 0, sizeof(g_ps1VertexTDone));
+    PS1TransformProject3D(vertexCount);
+    g_ps1Prof3DTransform = PS1HblanksSince(t0);
+    g_ps1Prof3DVertices  = vertexCount;
+    return;
+#endif
     for (int v = 0; v < vertexCount; ++v) {
         int vx = vertexBuffer[v].x;
         int vy = vertexBuffer[v].y;
@@ -324,8 +359,7 @@ void TransformVertices(Matrix *matrix, int startIndex, int endIndex)
     }
 }
 #if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_SORT3D_CHECK)
-// One buffer for two passes of a frame (docs/30 phase 7): the draw-list sort's scratch, then Draw3DScene's per-vertex
-// screen positions (PS1Project3DVertices).
+// The draw-list sort's scratch (docs/30 phase 7; the screen positions live in vertexBufferT .u since phase 7.2b).
 DrawListEntry3D g_ps1Scene3DScratch[FACEBUFFER_SIZE];
 #endif
 #if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_SORT3D_CHECK)
@@ -368,12 +402,20 @@ void Sort3DDrawList()
 #if RETRO_PLATFORM == RETRO_PS1
     uint32_t t0 = PS1Hblanks();
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+    for (int i = 0; i < faceCount; ++i) { // .v: the depth z (the GTE's, or the exact one for marked vertices)
+        const Face &f       = faceBuffer[i];
+        drawList3D[i].depth = (vertexBufferT[f.d].v + vertexBufferT[f.c].v + vertexBufferT[f.b].v + vertexBufferT[f.a].v) >> 2;
+        drawList3D[i].faceID = i;
+    }
+#else
     for (int i = 0; i < faceCount; ++i) {
         drawList3D[i].depth = (vertexBufferT[faceBuffer[i].d].z + vertexBufferT[faceBuffer[i].c].z + vertexBufferT[faceBuffer[i].b].z
                                + vertexBufferT[faceBuffer[i].a].z)
                               >> 2;
         drawList3D[i].faceID = i;
     }
+#endif
 
 #if RETRO_PLATFORM == RETRO_PS1
     // PS1: the bubble sort below is stable and descending, so any stable descending sort gives the same order: a radix
@@ -399,14 +441,13 @@ void Sort3DDrawList()
     }
 }
 #if RETRO_PLATFORM == RETRO_PS1
-// ps1/render.cpp: every transformed vertex projected once on the GTE (the faces share them), as upstream's
-// SCREEN_CENTER +- projection * T / T.z within +-1 px (GTE division and flooring); a vertex the GTE can't do (near the
-// camera, off the GTE's screen range) is marked and projected here exactly.
-void PS1Project3DVertices(uint32_t *out, int count);
+// vertexBufferT[i].u: the GTE's screen position (upstream's SCREEN_CENTER +- projection * T / T.z within about a pixel);
+// a vertex the GTE can't do (near the camera, off the GTE's screen range) is marked and projected here exactly (its exact
+// T is computed: PS1VertexT before the face is drawn).
 #define PS1_PROJ_MARK (0x8000u)
-static inline void PS1ProjectedVertex(const uint32_t *cache, int i, int *x, int *y)
+static inline void PS1ProjectedVertex(int i, int *x, int *y)
 {
-    uint32_t p = cache[i];
+    uint32_t p = vertexBufferT[i].u;
     if ((p & 0xFFFF) != PS1_PROJ_MARK) {
         *x = (int16_t)(p & 0xFFFF);
         *y = (int16_t)(p >> 16);
@@ -416,50 +457,40 @@ static inline void PS1ProjectedVertex(const uint32_t *cache, int i, int *x, int 
         *y = SCREEN_CENTERY - projectionY * vertexBufferT[i].y / vertexBufferT[i].z;
     }
 }
-static_assert(sizeof(g_ps1Scene3DScratch) >= VERTEXBUFFER_SIZE * sizeof(uint32_t), "projection cache");
-#endif
-#if RETRO_PLATFORM == RETRO_PS1
-void PS1FadedRunFlush();                                                                                    // ps1/render.cpp
-bool PS1FadedRunAdd(uint32_t pa, uint32_t pb, uint32_t pc, uint32_t pd, uint color, uint fogColor, int alpha); // ps1/render.cpp
+int PS1FadedFaces(int i, int count); // ps1/render.cpp: a run of faded faces, returns where it stopped
 #endif
 void Draw3DScene(int spriteSheetID)
 {
 #if RETRO_PLATFORM == RETRO_PS1
-    uint32_t t0 = PS1Hblanks();
-    uint32_t *proj = (uint32_t *)g_ps1Scene3DScratch; // the sort is done: its scratch holds the screen positions
-    PS1Project3DVertices(proj, vertexCount);
-    g_ps1Prof3DProject = PS1HblanksSince(t0);
-    bool runOpen       = false;
+    uint32_t t0        = PS1Hblanks();
+    g_ps1Prof3DProject = 0; // the projection is part of the transform now (PS1TransformProject3D)
+    uint32_t fadedHbl = 0, generalN = 0;
 #define PS1_PROJECT_QUAD()                                                                                                                  \
-    PS1ProjectedVertex(proj, face->a, &quad[0].x, &quad[0].y);                                                                            \
-    PS1ProjectedVertex(proj, face->b, &quad[1].x, &quad[1].y);                                                                            \
-    PS1ProjectedVertex(proj, face->c, &quad[2].x, &quad[2].y);                                                                            \
-    PS1ProjectedVertex(proj, face->d, &quad[3].x, &quad[3].y);
+    PS1ProjectedVertex(face->a, &quad[0].x, &quad[0].y);                                                                                  \
+    PS1ProjectedVertex(face->b, &quad[1].x, &quad[1].y);                                                                                  \
+    PS1ProjectedVertex(face->c, &quad[2].x, &quad[2].y);                                                                                  \
+    PS1ProjectedVertex(face->d, &quad[3].x, &quad[3].y);
 #endif
     Vertex quad[4];
     for (int i = 0; i < faceCount; ++i) {
         Face *face = &faceBuffer[drawList3D[i].faceID];
 #if RETRO_PLATFORM == RETRO_PS1
-        if (face->flag == FACE_FLAG_FADED) { // the fast path (ps1/render.cpp PS1FadedRunAdd), same fog as below
-            uint32_t pa = proj[face->a], pb = proj[face->b], pc = proj[face->c], pd = proj[face->d];
-            // no marked corner: every z > 0 (z <= 0 is marked) and GTE positions
-            if ((pa & 0xFFFF) != PS1_PROJ_MARK && (pb & 0xFFFF) != PS1_PROJ_MARK && (pc & 0xFFFF) != PS1_PROJ_MARK
-                && (pd & 0xFFFF) != PS1_PROJ_MARK) {
-                int fogStr = 0;
-                if ((drawList3D[i].depth - 0x8000) >> 8 >= 0)
-                    fogStr = (drawList3D[i].depth - 0x8000) >> 8;
-                if (fogStr > fogStrength)
-                    fogStr = fogStrength;
-                PS1FadedRunAdd(pa, pb, pc, pd, face->color, fogColor, 0xFF - fogStr);
-                runOpen = true;
+        if (face->flag == FACE_FLAG_FADED) { // the fast path: the run of faded faces whose corners the GTE projected
+            uint32_t tf = PS1Hblanks();
+            int next    = PS1FadedFaces(i, faceCount);
+            fadedHbl += PS1HblanksSince(tf);
+            if (next != i) {
+                i = next - 1;
                 continue;
             }
-            if (!(vertexBufferT[face->a].z > 0 && vertexBufferT[face->b].z > 0 && vertexBufferT[face->c].z > 0 && vertexBufferT[face->d].z > 0))
-                continue; // upstream's test; the general path below would skip it too
         }
-        if (runOpen) { // another kind of face (or an exact-fallback corner): the run ends, the draw order is kept
-            PS1FadedRunFlush();
-            runOpen = false;
+        // the general path: upstream's code on the exact transform of the corners it reads
+        ++generalN;
+        PS1VertexT(face->a);
+        if (face->flag < FACE_FLAG_TEXTURED_C) {
+            PS1VertexT(face->b);
+            PS1VertexT(face->c);
+            PS1VertexT(face->d);
         }
 #endif
         memset(quad, 0, 4 * sizeof(Vertex));
@@ -650,8 +681,10 @@ void Draw3DScene(int spriteSheetID)
     }
 #if RETRO_PLATFORM == RETRO_PS1
 #undef PS1_PROJECT_QUAD
-    PS1FadedRunFlush();
-    g_ps1Prof3DDraw = PS1HblanksSince(t0);
+    g_ps1Prof3DDraw     = PS1HblanksSince(t0);
+    g_ps1Prof3DFaded    = fadedHbl;
+    g_ps1Prof3DGeneral  = g_ps1Prof3DDraw - fadedHbl;
+    g_ps1Prof3DGeneralN = generalN;
 #endif
 }
 
