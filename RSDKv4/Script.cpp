@@ -779,6 +779,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1TailsFn62", 0),
     FunctionInfo("PS1TailsFn66", 0),
     FunctionInfo("PS1TailsFn67", 0),
+    FunctionInfo("PS1MPZSetup", 0),
 #endif
 };
 
@@ -1318,6 +1319,7 @@ enum ScrFunc {
     FUNC_PS1TAILSFN62,
     FUNC_PS1TAILSFN66,
     FUNC_PS1TAILSFN67,
+    FUNC_PS1MPZSETUP,
 #endif
     FUNC_MAX_CNT
 };
@@ -6842,6 +6844,185 @@ static void PS1TailsFn67()
         }
     }
 }
+
+// Metropolis's MPZ Setup (stage object in Zone09; update 195 VM instructions, ~86 a frame, 12.7 hblanks),
+// natively: one statement per script instruction, in order. Palette cycling, the animated tiles (Copy16x16Tile),
+// the players' conveyor tiles (function 46 in the VM, from inside the player loop), the vertical wrap (entities
+// shifted by 2048 px, indexes past ENTITY_COUNT through PS1_OBJ as in the VM) and the achievement call.
+// Patched in only when the sub and its jump-table entries match MPZSETUP_SIG and function 46 is callable.
+static void PS1MPZSetupUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    auto L     = [](int pos) { return (int)scriptCode[pos]; };
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    auto copies = [](const int *tiles, int n, int &src) { // Copy16x16Tile <tile> src / Inc src, n times
+        for (int k = 0; k < n; ++k) {
+            Copy16x16Tile(tiles[k], src);
+            src++;
+        }
+    };
+    v[0]++;
+    if (v[0] > 2) {
+        v[0] = 0;
+        RotatePalette(0, 161, 163, 0);
+    }
+    v[10]++;
+    if (v[10] >= 10) {
+        v[10] = 0;
+        v[11]++;
+        if (v[11] >= 10)
+            v[11] = 0;
+        get(63679, v[11], t[0]);
+        SetPaletteEntryPacked(0, 175, t[0]);
+    }
+    v[12]++;
+    if (v[12] >= 18) {
+        v[12] = 0;
+        v[13]++;
+        if (v[13] >= 6)
+            v[13] = 0;
+        get(63690, v[13], t[0]);
+        SetPaletteEntryPacked(0, 168, t[0]);
+    }
+    static const int belt2[8] = { 760, 761, 762, 763, 764, 765, 766, 767 };
+    static const int belt3[8] = { 744, 745, 746, 747, 748, 749, 750, 751 };
+    static const int gear4[3] = { 753, 754, 755 };
+    static const int gear5[3] = { 742, 743, 752 };
+    static const int gear6[4] = { 756, 757, 758, 759 };
+    copies(belt2, 8, v[2]);
+    if (v[2] == 832)
+        v[2] = 768;
+    copies(belt3, 8, v[3]);
+    if (v[3] == 896)
+        v[3] = 832;
+    if (v[7] < 2) {
+        copies(gear4, 3, v[4]);
+        if (v[4] == 908)
+            v[4] = 896;
+        copies(gear5, 3, v[5]);
+        if (v[5] == 908)
+            v[5] = 896;
+        if (v[8] == 0)
+            v[7] = 20;
+        else
+            v[7] = 8;
+        v[8] ^= 1;
+    }
+    else {
+        v[7]--;
+    }
+    if (v[9] < 2) {
+        copies(gear6, 4, v[6]);
+        if (v[6] == 932)
+            v[6] = 908;
+        v[9] = 14;
+    }
+    else {
+        v[9]--;
+    }
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6] = players.entityRefs[loop];
+        t[1]  = PS1_OBJ(ap[6]).xpos;
+        t[1] >>= 16;
+        t[2] = PS1_OBJ(ap[6]).ypos;
+        t[2] >>= 16;
+        t[2] += 4;
+        { // Get16x16TileInfo TEMP0 TEMP1 TEMP2 8 (TILEINFO_ANGLEB)
+            int chunk = stageLayouts[0].tiles[(t[1] >> 7) + ((t[2] >> 7) << 8)] << 6;
+            chunk += ((t[1] & 0x7F) >> 4) + 8 * ((t[2] & 0x7F) >> 4);
+            int index = tiles128x128.tileIndex[chunk];
+            t[0]      = collisionMasks[1].angles[index];
+        }
+        t[0] &= 1;
+        if (t[0] == 1)
+            PS1CallScriptFunction(46, 1);
+    }
+    PS1ScriptWrite(63698, L(63698) + L(63699));
+    PS1ScriptWrite(63698, L(63698) & 3);
+    if (PS1_OBJ(0).ypos >= 149946368) {
+        t[1]  = PS1_OBJ(0).ypos;
+        ap[6] = 0;
+        while (ap[6] < ap[7]) {
+            t[0] = PS1_OBJ(ap[6]).ypos;
+            t[0] -= t[1];
+            t[0] = abs(t[0]);
+            if (t[0] < 9175040)
+                PS1_OBJ(ap[6]).ypos -= 134217728;
+            ap[6]++;
+        }
+        if (cameraYPos >= 2048) {
+            cameraYPos -= 2048;
+            yScrollOffset -= 2048;
+        }
+    }
+    if (PS1_OBJ(0).ypos <= 9437184) {
+        t[1]  = PS1_OBJ(0).ypos;
+        ap[6] = 0;
+        while (ap[6] < ap[7]) {
+            t[0] = PS1_OBJ(ap[6]).ypos;
+            t[0] -= t[1];
+            t[0] = abs(t[0]);
+            if (t[0] < 9175040)
+                PS1_OBJ(ap[6]).ypos += 134217728;
+            ap[6]++;
+        }
+        if (cameraYPos <= 384) {
+            cameraYPos += 2048;
+            yScrollOffset += 2048;
+        }
+    }
+    if (cameraYPos >= 1552) {
+        if (L(63697) == 0) {
+            PS1ScriptWrite(63697, 1);
+            ap[0] = 32;
+            while (ap[0] < 1184) {
+                if (PS1_OBJ(ap[0]).ypos <= 41943040) {
+                    PS1_OBJ(ap[0]).ypos += 134217728;
+                    PS1_OBJ(ap[0]).values[31] += 134217728;
+                }
+                ap[0]++;
+            }
+        }
+    }
+    if (cameraYPos <= 640) {
+        if (L(63697) == 1) {
+            PS1ScriptWrite(63697, 0);
+            ap[0] = 32;
+            while (ap[0] < 1184) {
+                if (PS1_OBJ(ap[0]).ypos >= 109051904) {
+                    PS1_OBJ(ap[0]).ypos -= 134217728;
+                    PS1_OBJ(ap[0]).values[31] -= 134217728;
+                }
+                ap[0]++;
+            }
+        }
+    }
+    if (PS1_OBJ(0).state == 27)
+        PS1ScriptWrite(63701, 1);
+    if (L(63700) == 0) {
+        if (debugMode == 0) {
+            if (PS1_OBJ(30).type == 8) {
+                PS1ScriptWrite(63700, 1);
+                if (L(63701) == 0) { // CallNativeFunction2 GLOBAL[104] 9 100
+                    int op0 = G[104], op1 = 9, op2 = 100;
+                    if (op0 >= 0 && op0 < NATIIVEFUNCTION_COUNT) {
+                        void (*func)(int *, int *) = (void (*)(int *, int *))nativeFunction[op0];
+                        if (func)
+                            func(&op1, &op2);
+                    }
+                }
+            }
+        }
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -9105,6 +9286,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1TAILSFN67:
                 opcodeSize = 0;
                 PS1TailsFn67();
+                break;
+            case FUNC_PS1MPZSETUP:
+                opcodeSize = 0;
+                PS1MPZSetupUpdate();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
