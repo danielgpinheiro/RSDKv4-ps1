@@ -572,7 +572,9 @@ int PS1ChainReplayLines(uint32_t *from, uint32_t *to, int y0, int y1) {
         unsigned n    = head >> 24;
         uint32_t *next = reinterpret_cast<uint32_t *>(0x80000000u | (head & 0xffffff));
         int ymin, ymax;
-        bool keep = n && n <= PS1_CHAIN_MAX_WORDS && (p[1] >> 24) != 0xA0 // not a CPU->VRAM upload (CLUT rows)
+        uint32_t op = p[1] >> 24;
+        bool keep = n && n <= PS1_CHAIN_MAX_WORDS && op != 0xA0 // not a CPU->VRAM upload (CLUT rows)
+                    && op != 0xE3 && op != 0xE4                   // nor a drawing area (the region sets its own)
                     && (!packetsYRange(p + 1, n, ymin, ymax) || (ymax >= y0 && ymin < y1));
         if (keep) {
             auto *f = allocVar(n);

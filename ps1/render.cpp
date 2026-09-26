@@ -175,25 +175,110 @@ static void PS1ReserveRow(int src, int count, int16_t x, int16_t y)
     }
 }
 
-// Fills chunks [first, s_palChunkCount) with `bank`'s palette.
-static void PS1FillPalette(int bank, int first = 0)
+// Fills chunks [first, end) (end < 0: up to s_palChunkCount) with `bank`'s palette.
+static void PS1FillPalette(int bank, int first = 0, int end = -1)
 {
     PS1BuildPalette(bank);
-    for (int i = first; i < s_palChunkCount; ++i) memcpy(s_palChunks[i].dst, &s_pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
+    if (end < 0)
+        end = s_palChunkCount;
+    for (int i = first; i < end; ++i) memcpy(s_palChunks[i].dst, &s_pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
 }
 
-// Master + atlas 4-bit CLUT rows, chained here (filled by PS1FillPalette).
-static void PS1ReservePaletteRows()
+// Master + atlas 4-bit CLUT rows, chained here (filled by PS1FillPalette); dy > 0: the bottom bank's copy (set B).
+static void PS1ReservePaletteRows(int dy = 0)
 {
-    PS1ReserveRow(0, 256, PS1_CLUT_X, PS1_CLUT_Y);
+    PS1ReserveRow(0, 256, PS1_CLUT_X, (int16_t)(PS1_CLUT_Y + dy));
     for (int k = 0; k < g_ps1AtlasClutCount;) { // runs of adjacent CLUT slots in one VRAM row
         int run = 1;
         while (k + run < g_ps1AtlasClutCount && g_ps1AtlasCluts[k + run].y == g_ps1AtlasCluts[k].y
                && g_ps1AtlasCluts[k + run].x == g_ps1AtlasCluts[k].x + 16 * run)
             ++run;
-        PS1ReserveRow(256 + k * 16, run * 16, (int16_t)g_ps1AtlasCluts[k].x, (int16_t)g_ps1AtlasCluts[k].y);
+        PS1ReserveRow(256 + k * 16, run * 16, (int16_t)g_ps1AtlasCluts[k].x, (int16_t)(g_ps1AtlasCluts[k].y + dy));
         k += run;
     }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Draw-time palette-bank split (docs/30 phase 3.6). Upstream's SW renderer picks each line's bank
+// (gfxLineBuffer, SetActivePalette: the water) as it draws. When the lines form two runs (a top bank
+// over [0, y0), a bottom bank over [y0, 240): every water frame), the bottom run is drawn with a second
+// copy of the CLUTs ("set B", PS1_CLUT_B_DY rows below set A: master row 497, the atlas' CLUT rows
+// 240-241 -> 497-498): primitives below y0 use set B, sprites and tile / strip bands that cross y0 are cut
+// there, quads that cross it are drawn twice under a drawing area. The bank state is the one at each
+// primitive's draw call, as upstream (the Player's draw sub moves the water line mid-frame). Any other
+// layout (> 2 runs, a bank change under set B, atlas CLUTs past row 241) falls back to the region
+// replay at FlipScreen (PS1DrawBankRegions), with both sets filled per region.
+#define PS1_CLUT_B_DY 257
+static int s_splitY      = 0;     // first line of the bottom bank now (0 = one bank)
+static int s_splitTop    = 0;     // banks above / below s_splitY
+static int s_splitBottom = 0;
+static bool s_splitComplex = false; // this frame falls back to the replay
+static bool s_setB         = false; // set B's rows are chained this frame
+static int s_setAEnd = 0, s_setBFirst = 0, s_setBEnd = 0; // palette chunk ranges of the two sets
+static uint32_t s_splitAtlas = 0xFFFFFFFF;
+static bool s_splitFits      = false;
+volatile uint32_t g_ps1SplitFrames = 0, g_ps1SplitCuts = 0, g_ps1SplitQuads = 0; // split frames / cut primitives / doubled quads (total)
+volatile uint32_t g_ps1SplitFallbacks = 0; // frames that fell back to the replay
+
+static bool PS1SplitFits()
+{
+    if (s_splitAtlas != g_ps1AtlasLoads) {
+        s_splitAtlas = g_ps1AtlasLoads;
+        s_splitFits  = true;
+        for (int k = 0; k < g_ps1AtlasClutCount; ++k)
+            if (g_ps1AtlasCluts[k].y < PS1_CLUT_Y || g_ps1AtlasCluts[k].y > PS1_CLUT_Y + 1)
+                s_splitFits = false;
+    }
+    return s_splitFits;
+}
+
+// The split from gfxLineBuffer as it is now.
+static void PS1SplitUpdate()
+{
+    typedef uint32_t __attribute__((may_alias)) PS1Word;
+    const PS1Word *lw = (const PS1Word *)gfxLineBuffer; // aligned(4) on PS1 (Palette.cpp)
+    int b0            = gfxLineBuffer[0];
+    uint32_t w0       = b0 * 0x01010101u;
+    int i             = 0;
+    while (i < SCREEN_YSIZE / 4 && lw[i] == w0) ++i;
+    if (i == SCREEN_YSIZE / 4) {
+        s_splitY = 0;
+        return;
+    }
+    int y = i * 4;
+    while (gfxLineBuffer[y] == b0) ++y;
+    int b1       = gfxLineBuffer[y];
+    uint32_t w1  = b1 * 0x01010101u;
+    bool twoRuns = true;
+    for (int l = y; l < SCREEN_YSIZE && twoRuns; ++l) {
+        if ((l & 3) == 0 && l + 4 <= SCREEN_YSIZE) {
+            twoRuns = lw[l >> 2] == w1;
+            l += 3;
+        }
+        else
+            twoRuns = gfxLineBuffer[l] == b1;
+    }
+    if (!twoRuns || !PS1SplitFits() || (s_setB && (b0 != s_splitTop || b1 != s_splitBottom))) {
+        s_splitComplex = true;
+        s_splitY       = 0;
+        return;
+    }
+    s_splitY      = y;
+    s_splitTop    = b0;
+    s_splitBottom = b1;
+}
+
+// Set B's CLUT rows, chained before the first primitive that uses them.
+static void PS1EnsureSetB()
+{
+    if (s_setB)
+        return;
+    s_setB      = true;
+    s_setBFirst = s_palChunkCount;
+    PS1ReservePaletteRows(PS1_CLUT_B_DY);
+    s_setBEnd = s_palChunkCount; // filled at FlipScreen (the chain is sent after the frame)
+    PS1ChainFlushCache();
+    g_ps1SplitFrames = g_ps1SplitFrames + 1;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -204,6 +289,13 @@ static void PS1ReservePaletteRows()
 static bool s_chainOpen  = false;
 static uint32_t *s_sceneMark = nullptr; // chain position after the clear and the frame-start CLUT rows
 static bool s_frameOpen  = false;
+
+// SetActivePalette (Palette.hpp) changed gfxLineBuffer: the next draw calls follow it.
+void PS1PaletteLinesChanged()
+{
+    if (s_frameOpen && !s_splitComplex)
+        PS1SplitUpdate();
+}
 static bool s_frameFresh = false; // this frame started with a clear
 
 static void PS1ClearClusterCache();
@@ -237,8 +329,11 @@ static void PS1FrameStart(bool clear)
         g_ps1RepeatFrames = g_ps1RepeatFrames + 1;
     }
     s_palChunkCount = 0;
-    PS1ReservePaletteRows();
-    PS1FillPalette(gfxLineBuffer[0]);
+    PS1ReservePaletteRows(); // filled at FlipScreen, or at PS1RenderEndFrame for a frame that only repeats
+    s_setAEnd = s_palChunkCount;
+    s_setB         = false;
+    s_splitComplex = false;
+    PS1SplitUpdate();
     PS1ChainFlushCache(); // the GPU caches CLUTs
     PS1ChainInvalidateTPage();
     s_sceneMark = PS1ChainMark();
@@ -254,8 +349,10 @@ void PS1RenderBeginFrame(psyqo::GPU &gpu)
 
 void PS1RenderEndFrame()
 {
-    if (!s_frameOpen)
+    if (!s_frameOpen) {
         PS1FrameStart(false); // nothing drawn: keep the image in both buffers
+        PS1FillPalette(gfxLineBuffer[0]);
+    }
     PS1ChainEnd();
     s_chainOpen = false;
 }
@@ -318,12 +415,14 @@ static psyqo::PrimPieces::TPageAttr PS1ClusterTPage(const PS1AtlasCluster *c)
     return attr;
 }
 
-static psyqo::PrimPieces::ClutIndex PS1ClusterClut(const PS1AtlasCluster *c)
+// The cluster's CLUT; setB: the bottom bank's copy (draw-time bank split).
+static psyqo::PrimPieces::ClutIndex PS1ClusterClut(const PS1AtlasCluster *c, bool setB = false)
 {
+    int16_t dy = setB ? PS1_CLUT_B_DY : 0;
     if (c->clut == 0xFFFF)
-        return psyqo::PrimPieces::ClutIndex(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
+        return psyqo::PrimPieces::ClutIndex(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = (int16_t)(PS1_CLUT_Y + dy) } });
     const PS1AtlasClut &k = g_ps1AtlasCluts[c->clut];
-    return psyqo::PrimPieces::ClutIndex(psyqo::Vertex{ { .x = (int16_t)k.x, .y = (int16_t)k.y } });
+    return psyqo::PrimPieces::ClutIndex(psyqo::Vertex{ { .x = (int16_t)k.x, .y = (int16_t)(k.y + dy) } });
 }
 
 // A piece of a frame: texel rect [x, x + w) x [y, y + h) of one cluster, at offset (ox, oy) in the frame.
@@ -420,7 +519,8 @@ static inline void PS1ApplyInk(psyqo::PrimPieces::TPageAttr &attr)
 // draws: B/4 + 3F/4), 3 = opaque.
 static inline int PS1AlphaLevel(int a) { return a < 64 ? 0 : a < 160 ? 1 : a < 224 ? 2 : 3; }
 
-static void PS1ChainPieceSprite(const PS1Piece &p, int x, int y)
+// Rows [v, v + h) of a piece at (x, y) with CLUT set A or B.
+static void PS1ChainPieceSpriteRows(const PS1Piece &p, int x, int y, int v, int h, bool setB)
 {
     psyqo::PrimPieces::TPageAttr attr = PS1ClusterTPage(p.c);
     if (s_ink != PS1_INK_OPAQUE)
@@ -432,10 +532,29 @@ static void PS1ChainPieceSprite(const PS1Piece &p, int x, int y)
         g_ps1InkPieces = g_ps1InkPieces + 1;
     }
     s.position = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)y } };
-    s.size     = psyqo::Vertex{ { .w = p.w, .h = p.h } };
-    s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)p.u, (uint8_t)p.v, PS1ClusterClut(p.c) };
+    s.size     = psyqo::Vertex{ { .w = p.w, .h = (int16_t)h } };
+    s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)p.u, (uint8_t)v, PS1ClusterClut(p.c, setB) };
     PS1ChainSprite(s);
     g_ps1DrawSprites = g_ps1DrawSprites + 1;
+}
+
+// 1:1 piece at (x, y); under a bank split, cut at the split line (rows below it use set B).
+static void PS1ChainPieceSprite(const PS1Piece &p, int x, int y)
+{
+    int y0 = s_splitY;
+    if (!y0 || y + p.h <= y0) {
+        PS1ChainPieceSpriteRows(p, x, y, p.v, p.h, false);
+        return;
+    }
+    PS1EnsureSetB();
+    if (y >= y0) {
+        PS1ChainPieceSpriteRows(p, x, y, p.v, p.h, true);
+        return;
+    }
+    int h1 = y0 - y;
+    PS1ChainPieceSpriteRows(p, x, y, p.v, h1, false);
+    PS1ChainPieceSpriteRows(p, x, y0, p.v + h1, p.h - h1, true);
+    g_ps1SplitCuts = g_ps1SplitCuts + 1;
 }
 
 // Textured quad: corners A (u0, v0), B (u1, v0), C (u0, v1), D (u1, v1). UVs are texel edges; they
@@ -460,8 +579,30 @@ static void PS1ChainPieceQuad(const PS1Piece &p, const int16_t *xs, const int16_
         q.setSemiTrans();
         g_ps1InkPieces = g_ps1InkPieces + 1;
     }
-    PS1ChainQuad(q);
     g_ps1DrawQuads = g_ps1DrawQuads + 1;
+    int y0 = s_splitY;
+    if (y0) { // bank split: set B below the line, both halves under a drawing area when the quad crosses it
+        int ymin = ys[0], ymax = ys[0];
+        for (int k = 1; k < 4; ++k) {
+            ymin = ys[k] < ymin ? ys[k] : ymin;
+            ymax = ys[k] > ymax ? ys[k] : ymax;
+        }
+        if (ymax > y0) {
+            PS1EnsureSetB();
+            if (ymin < y0) {
+                PS1ChainDrawArea(0, 0, SCREEN_XSIZE, y0);
+                PS1ChainQuad(q);
+                PS1ChainDrawArea(0, y0, SCREEN_XSIZE, SCREEN_YSIZE);
+                g_ps1SplitQuads = g_ps1SplitQuads + 1;
+            }
+            q.clutIndex = PS1ClusterClut(p.c, true);
+            PS1ChainQuad(q);
+            if (ymin < y0)
+                PS1ChainDrawAreaReset();
+            return;
+        }
+    }
+    PS1ChainQuad(q);
 }
 
 // Axis-aligned piece at screen rect (x, y, w, h) with optional mirroring: 1:1 mirrors sample texel
@@ -640,6 +781,8 @@ static void PS1DrawBankRegions(psyqo::Color clear)
         if (bank != s_baseBank) { // this run of lines again, with its own bank
             int first = s_palChunkCount;
             PS1ReservePaletteRows();
+            if (s_setB) // set B's rows too: primitives drawn before the frame fell back use them
+                PS1ReservePaletteRows(PS1_CLUT_B_DY);
             PS1FillPalette(bank, first);
             PS1ChainFlushCache();
             PS1ChainDrawArea(0, y0, 320, y);
@@ -680,16 +823,29 @@ void FlipScreen()
         }
         g_ps1FadeDirect = g_ps1FadeDirect + s_directCount;
     }
-    int frameChunks = s_palChunkCount;
-    uint32_t tb     = PS1Hblanks();
+    uint32_t tb       = PS1Hblanks();
     g_ps1ReplayWalked = 0;
     g_ps1ReplayKept   = 0;
-    PS1DrawBankRegions(clear);
+    if (!s_splitComplex)
+        PS1SplitUpdate(); // the final layout (a change after the last draw call)
+    if (!s_splitComplex) { // one bank, or the draw-time split: set A = the top bank, set B = the bottom one
+        s_baseBank = (s_splitY ? s_splitTop : gfxLineBuffer[0]) & (PALETTE_COUNT - 1);
+        PS1FillPalette(s_baseBank, 0, s_setAEnd);
+        if (s_setB)
+            PS1FillPalette(s_splitBottom, s_setBFirst, s_setBEnd);
+        g_ps1BankRegions = s_splitY ? 2 : 1;
+        g_ps1BankMask    = (1u << s_baseBank) | (s_splitY ? 1u << (s_splitBottom & (PALETTE_COUNT - 1)) : 0);
+    }
+    else { // region replay (both CLUT sets hold the base bank in the first pass)
+        g_ps1SplitFallbacks = g_ps1SplitFallbacks + 1;
+        int frameChunks     = s_palChunkCount;
+        PS1DrawBankRegions(clear);
+        int end         = s_palChunkCount; // the regions filled their own chunks: refill only the frame's rows
+        s_palChunkCount = frameChunks;
+        PS1FillPalette(s_baseBank); // the first pass is drawn with the base bank
+        s_palChunkCount = end;
+    }
     g_ps1BankHbl = PS1HblanksSince(tb);
-    int end         = s_palChunkCount; // the regions filled their own chunks: refill only the frame-start rows
-    s_palChunkCount = frameChunks;
-    PS1FillPalette(s_baseBank); // the first pass is drawn with the base bank
-    s_palChunkCount = end;
     if (s_fadePending) {
         g_ps1ClutFades = g_ps1ClutFades + 1;
         if (s_clearPrim) // cleared (undrawn) pixels are black: under the fade, fade colour * a
@@ -892,7 +1048,8 @@ void PS1Copy16x16Tile(int dest, int src)
 }
 
 static psyqo::PrimPieces::TPageAttr s_tileTPage[4];
-static uint32_t s_tileClutWord = 0;
+static uint32_t s_tileClutWord = 0, s_tileClutWordB = 0; // master CLUT: set A / set B (bank split)
+static bool s_tileSetB = false;                          // the band being drawn uses set B
 
 static void PS1TileSetup()
 {
@@ -902,69 +1059,14 @@ static void PS1TileSetup()
     uint16_t c;
     memcpy(&c, &clut, 2);
     s_tileClutWord = (uint32_t)c << 16;
+    psyqo::PrimPieces::ClutIndex clutB(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y + PS1_CLUT_B_DY } });
+    memcpy(&c, &clutB, 2);
+    s_tileClutWordB = (uint32_t)c << 16;
     for (int p = 0; p < 4; ++p) {
         s_tileTPage[p].set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
         s_tileTPage[p].setPageX((uint8_t)(PS1_TILE_PAGE_X + 2 * (p & 1)));
         s_tileTPage[p].setPageY((uint8_t)(PS1_TILE_PAGE_Y + (p >> 1)));
     }
-}
-
-// Textured quad over tile texels, UV edges uL..uR (exclusive, may run backwards) and vT..vB.
-static void PS1ChainTileQuad(int x, int y, int w, int h, int pageX, int pageY, int uL, int uR, int vT, int vB)
-{
-    psyqo::Prim::TexturedQuad quad(psyqo::Color{ { .r = 0x80, .g = 0x80, .b = 0x80 } });
-    quad.pointA    = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)y } };
-    quad.uvA       = psyqo::PrimPieces::UVCoords{ (uint8_t)uL, (uint8_t)vT };
-    quad.clutIndex = psyqo::PrimPieces::ClutIndex(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
-    quad.pointB    = psyqo::Vertex{ { .x = (int16_t)(x + w), .y = (int16_t)y } };
-    quad.uvB       = psyqo::PrimPieces::UVCoords{ (uint8_t)uR, (uint8_t)vT };
-    quad.tpage.setPageX((uint8_t)pageX);
-    quad.tpage.setPageY((uint8_t)pageY);
-    quad.tpage.set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
-    quad.pointC = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)(y + h) } };
-    quad.uvC    = psyqo::PrimPieces::UVCoordsPadded{ (uint8_t)uL, (uint8_t)vB, 0 };
-    quad.pointD = psyqo::Vertex{ { .x = (int16_t)(x + w), .y = (int16_t)(y + h) } };
-    quad.uvD    = psyqo::PrimPieces::UVCoordsPadded{ (uint8_t)uR, (uint8_t)vB, 0 };
-    PS1ChainQuad(quad);
-}
-
-// Rows [ty0, ty0 + h) of a tile (rows before flipping) at screen (sx, sy): unflipped as a sprite,
-// flipped as a quad with backwards UVs (the Nexus port's PS1DrawTilePiece; old GPUs have no
-// rectangle flip bits, psx-spx).
-static void PS1DrawTilePiece(int sx, int sy, int tileIndex, int ty0, int h, int dir)
-{
-    int page = tileIndex >> 8, pt = tileIndex & 0xFF;
-    int u = (pt & 0xF) << 4, v = (pt >> 4) << 4;
-    int pageX = PS1_TILE_PAGE_X + 2 * (page & 1), pageY = PS1_TILE_PAGE_Y + (page >> 1);
-    if (dir == FLIP_NONE) {
-        PS1ChainTPage(s_tileTPage[page]);
-        psyqo::PrimPieces::ClutIndex clut(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
-        psyqo::Prim::Sprite s(psyqo::Color{ { .r = 0x80, .g = 0x80, .b = 0x80 } });
-        s.position = psyqo::Vertex{ { .x = (int16_t)sx, .y = (int16_t)sy } };
-        s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)u, (uint8_t)(v + ty0), clut };
-        s.size     = psyqo::Vertex{ { .x = TILE_SIZE, .y = (int16_t)h } };
-        PS1ChainSprite(s);
-        return;
-    }
-    int uL = (dir & FLIP_X) ? u + 15 : u;
-    int uR = (dir & FLIP_X) ? u - 1 : u + 16;
-    int dv = (dir & FLIP_Y) ? -1 : 1;
-    int vT = (dir & FLIP_Y) ? v + 15 - ty0 : v + ty0;
-    if (uR < 0) { // u -1 / 256 don't fit a UV byte: address the tile from the neighbouring 8-bit page
-        pageX -= 1, uL += 128, uR += 128;
-    }
-    else if (uR > 255) {
-        pageX += 1, uL -= 128, uR -= 128;
-    }
-    int vB = vT + h * dv;
-    if (vB < 0 || vB > 255) { // pageY can't shift: the last row gets its own constant-v strip
-        int vLast = vT + (h - 1) * dv;
-        if (h > 1)
-            PS1ChainTileQuad(sx, sy, TILE_SIZE, h - 1, pageX, pageY, uL, uR, vT, vLast);
-        PS1ChainTileQuad(sx, sy + h - 1, TILE_SIZE, 1, pageX, pageY, uL, uR, vLast, vLast);
-        return;
-    }
-    PS1ChainTileQuad(sx, sy, TILE_SIZE, h, pageX, pageY, uL, uR, vT, vB);
 }
 
 // Screen lines [sy, sy + h) showing layer lines [ly, ly + h) (inside one tile row) scrolled to chunkX.
@@ -987,7 +1089,7 @@ static int PS1TileQuadWords(uint32_t *w, int sx, int sy, int tileIndex, int ty0,
     else if (uR > 255)
         pageX += 1, uL -= 128, uR -= 128;
     uint32_t tpage = (uint32_t)(pageX | (pageY << 4) | (1 << 7)); // GP0 E1h bits: page X / Y, 8-bit
-    uint32_t clut  = s_tileClutWord;
+    uint32_t clut  = s_tileSetB ? s_tileClutWordB : s_tileClutWord;
     auto quad = [&](uint32_t *q, int y, int hh, int v0, int v1) {
         uint32_t xl = (uint16_t)sx, xr = (uint16_t)(sx + TILE_SIZE);
         uint32_t yt = (uint32_t)(uint16_t)y << 16, yb = (uint32_t)(uint16_t)(y + hh) << 16;
@@ -1033,7 +1135,7 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
     int tileRow            = ((ly & 0x7F) >> 4) << 3;
     uint16_t want          = above ? 1 : 0; // visual plane
     uint32_t yWord         = (uint32_t)(uint16_t)sy << 16;
-    uint32_t clutWord      = s_tileClutWord;
+    uint32_t clutWord      = s_tileSetB ? s_tileClutWordB : s_tileClutWord;
     bool whole             = h == TILE_SIZE;
     int prims              = 0;
     uint16_t rowBit        = 1 << ((tileRow >> 3) * 2 + (above ? 1 : 0));
@@ -1096,6 +1198,30 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
         PS1ChainPrimsRawN(quads, 9, quadWords / 9);
     }
     g_ps1LayerPrims = g_ps1LayerPrims + prims;
+}
+
+// A tile band under the bank split: set B below the split line, cut there when it crosses it.
+static void PS1DrawTileBandSplit(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
+{
+    int y0 = s_splitY;
+    if (!y0 || sy + h <= y0) {
+        PS1DrawTileBand(layer, above, sy, h, ly, chunkX, fullW);
+        return;
+    }
+    PS1EnsureSetB();
+    s_tileSetB = true;
+    if (sy >= y0) {
+        PS1DrawTileBand(layer, above, sy, h, ly, chunkX, fullW);
+    }
+    else {
+        int h1     = y0 - sy;
+        s_tileSetB = false;
+        PS1DrawTileBand(layer, above, sy, h1, ly, chunkX, fullW);
+        s_tileSetB = true;
+        PS1DrawTileBand(layer, above, y0, h - h1, ly + h1, chunkX, fullW);
+        g_ps1SplitCuts = g_ps1SplitCuts + 1;
+    }
+    s_tileSetB = false;
 }
 
 // BG line strips (tools/bgstrips/build_bgstrips.py -> Data/Stages/<Stage>/BGStrips<suffix>.bin, format
@@ -1235,9 +1361,9 @@ static void PS1WalkStripBand(const PS1StripRegion &r, int sy, int h, int ly, int
 
 struct PS1StripBand {
     short sy, h, ly, chunkX;
-    uint8_t region;
+    uint8_t region, setB; // setB: below the bank split line
 };
-static PS1StripBand s_stripBands[SCREEN_YSIZE];
+static PS1StripBand s_stripBands[SCREEN_YSIZE + 1]; // + the band cut at the bank split line
 static short s_lineX[SCREEN_YSIZE];
 
 // upstream DrawHLineScrollLayer (v4 SW path): the same scroll-state update (BG autoscroll, parallax line
@@ -1320,7 +1446,7 @@ void DrawHLineScrollLayer(int layerID)
             int h = TILE_SIZE - (ly & 0xF);
             if (h > SCREEN_YSIZE - y)
                 h = SCREEN_YSIZE - y;
-            PS1DrawTileBand(layer, above, y, h, ly, chunkX, fullW);
+            PS1DrawTileBandSplit(layer, above, y, h, ly, chunkX, fullW);
             y += h;
             ly += h;
             if (ly >= fullH)
@@ -1366,14 +1492,26 @@ void DrawHLineScrollLayer(int layerID)
             const PS1StripRegion &r = s_strips[ri - 1];
             int end                 = r.line0 + r.lines;
             while (y + h < SCREEN_YSIZE && ly + h < end && s_lineX[y + h] == chunkX) ++h;
+            int y0 = s_splitY, h1 = h;
+            if (y0 > y && y0 < y + h) // cut at the bank split line
+                h1 = y0 - y;
             PS1StripBand &b = s_stripBands[stripBands++]; // drawn after the loop, piece by piece
-            b.sy = (short)y, b.h = (short)h, b.ly = (short)ly, b.chunkX = (short)chunkX, b.region = (uint8_t)(ri - 1);
+            b.sy = (short)y, b.h = (short)h1, b.ly = (short)ly, b.chunkX = (short)chunkX, b.region = (uint8_t)(ri - 1);
+            b.setB = y0 && y >= y0;
+            if (h1 < h) {
+                PS1StripBand &c = s_stripBands[stripBands++];
+                c    = b;
+                c.sy = (short)y0, c.h = (short)(h - h1), c.ly = (short)(ly + h1), c.setB = 1;
+                g_ps1SplitCuts = g_ps1SplitCuts + 1;
+            }
+            if (y0 && y + h > y0)
+                PS1EnsureSetB();
         }
         else {
             int rowLeft = TILE_SIZE - (ly & 0xF);
             while (h < rowLeft && y + h < SCREEN_YSIZE && s_lineX[y + h] == chunkX) ++h;
             uint32_t tb = PS1Hblanks();
-            PS1DrawTileBand(layer, above, y, h, ly, chunkX, fullW);
+            PS1DrawTileBandSplit(layer, above, y, h, ly, chunkX, fullW);
             tTiles += PS1HblanksSince(tb);
         }
         y += h;
@@ -1384,13 +1522,7 @@ void DrawHLineScrollLayer(int layerID)
     g_ps1ProfLayer[2]   = g_ps1ProfLayer[2] + tTiles;
     g_ps1StripBandCount = g_ps1StripBandCount + stripBands;
     uint32_t t2         = PS1Hblanks();
-    static uint32_t s_stripClut = 0;
-    if (!s_stripClut) {
-        psyqo::PrimPieces::ClutIndex clut(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
-        uint16_t c;
-        memcpy(&c, &clut, 2);
-        s_stripClut = (uint32_t)c << 16;
-    }
+    uint32_t stripClut[2] = { s_tileClutWord, s_tileClutWordB }; // master CLUT, set A / B (PS1TileSetup)
     for (int i = 0; i < stripBands;) { // strip bands grouped by region, chained piece by piece
         int region = s_stripBands[i].region, j = i;
         while (j < stripBands && s_stripBands[j].region == region) ++j;
@@ -1399,7 +1531,8 @@ void DrawHLineScrollLayer(int layerID)
         int pos[PS1_STRIP_PIECES], total = 0;
         s_stripWalkCount                 = 0;
         for (int b = i; b < j; ++b)
-            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count);
+            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX,
+                             stripClut[s_stripBands[b].setB], count);
         for (int k = 0; k < r.pieces; ++k) {
             pos[k] = total;
             total += count[k];

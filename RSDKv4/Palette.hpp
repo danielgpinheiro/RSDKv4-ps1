@@ -51,6 +51,9 @@ extern int paletteMode;
 
 void LoadPalette(const char *filePath, int paletteID, int startPaletteIndex, int startIndex, int endIndex);
 
+#if RETRO_PLATFORM == RETRO_PS1
+void PS1PaletteLinesChanged(); // ps1/render.cpp: the draw-time bank split follows gfxLineBuffer
+#endif
 inline void SetActivePalette(byte newActivePal, int startLine, int endLine)
 {
 #if RETRO_SOFTWARE_RENDER
@@ -59,6 +62,9 @@ inline void SetActivePalette(byte newActivePal, int startLine, int endLine)
 
     activePalette   = fullPalette[gfxLineBuffer[0]];
     activePalette32 = fullPalette32[gfxLineBuffer[0]];
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1PaletteLinesChanged();
+#endif
 #endif
 }
 
