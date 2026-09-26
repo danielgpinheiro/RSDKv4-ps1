@@ -153,8 +153,12 @@ static void PS1BuildPalette(int bank)
         for (int i = 1; i < 256; ++i)
             s_pal[i] = PS1Conv((pal[i].r * na + s_fadeR * a) / 255, (pal[i].g * na + s_fadeG * a) / 255, (pal[i].b * na + s_fadeB * a) / 255);
     }
-    else {
-        for (int i = 1; i < 256; ++i) s_pal[i] = PS1Conv(pal[i].r, pal[i].g, pal[i].b);
+    else { // from the RGB565 copy every palette writer keeps in step (Palette.hpp): one load per colour
+        const ushort *p565 = fullPalette[bank];
+        for (int i = 1; i < 256; ++i) {
+            uint32_t c = p565[i]; // b5 | g6 << 5 | r5 << 11 -> PS1Conv's r5 | (g >> 3) << 5 | b5 << 10
+            s_pal[i]   = (uint16_t)(0x8000 | (c >> 11) | ((c >> 1) & 0x3E0) | ((c & 0x1F) << 10));
+        }
     }
     for (int k = 0; k < g_ps1AtlasClutCount; ++k) {
         const uint8_t *map = g_ps1AtlasCluts[k].map;
