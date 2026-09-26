@@ -4,9 +4,9 @@
 # (../RSDKv3-ps1/Makefile). Plan: ../docs/30.
 #
 # The RSDKv4 engine (RSDKv4/, PS1 app in RSDKv4/main.cpp) on the PS1 platform layer (ps1/, copied from
-# RSDKv3-ps1 at 1e583ad). Phase 2: headless (ps1/render_headless.cpp, ps1/audio_headless.cpp); phase 3.1: the
-# stage loads upload the tile pages and the sprite atlas (ps1/tileset, ps1/sprite_atlas); render and fmv join with
-# the renderer (3.2). Not built
+# RSDKv3-ps1 at 1e583ad). Phase 3: the GPU renderer (ps1/render.cpp, 3.2) over the tile pages and sprite atlas
+# uploaded at stage load (ps1/tileset, ps1/sprite_atlas, 3.1); audio still headless (ps1/audio_headless.cpp,
+# phase 5). Not built
 # on PS1: Drawing.cpp, Renderer.cpp, Audio.cpp, Networking.cpp and the native menu objects
 # (docs/30: the scripted Title + 2D PS1 menus in phase 4).
 # `make PLATFORM_TEST=1`: the phase 0 smoke test (ps1/platform_test.cpp) instead.
@@ -33,7 +33,7 @@ RSDKv4/String.cpp \
 RSDKv4/Text.cpp \
 RSDKv4/Userdata.cpp \
 RSDKv4/main.cpp \
-ps1/render_headless.cpp \
+ps1/render.cpp \
 ps1/audio_headless.cpp \
 ps1/tileset.cpp \
 ps1/sprite_atlas.cpp \
@@ -53,7 +53,7 @@ ps1/loading.cpp \
 ps1/memcard.cpp \
 
 ifeq ($(PLATFORM_TEST),1)
-SRCS := ps1/platform_test.cpp $(filter-out RSDKv4/% ps1/%_headless.cpp,$(SRCS))
+SRCS := ps1/platform_test.cpp $(filter-out RSDKv4/% ps1/%_headless.cpp ps1/render.cpp ps1/tileset.cpp ps1/sprite_atlas.cpp,$(SRCS))
 endif
 
 # ps1/libc comes FIRST: its C/C++ shim headers (<string>, <cmath>, <stdio.h>, ...) shadow any

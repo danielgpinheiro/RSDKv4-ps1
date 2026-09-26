@@ -148,3 +148,8 @@ void PS1LoadingEnd() {}
 // Stage-load VRAM uploads (ps1/tileset.hh, ps1/sprite_atlas.hh): no VRAM here; the manifest is what builds atlases.
 bool PS1TileSetLoad(const char *, uint8_t *) { return false; }
 bool PS1AtlasLoad(const char *, int) { return false; }
+// Renderer hooks (ps1/render.cpp) the engine calls: nothing to draw here.
+volatile uint32_t g_ps1SurfaceGen = 0;
+void PS1BuildTileVisuals() {}
+void PS1TileChanged(int) {}
+void PS1Copy16x16Tile(int, int) {}

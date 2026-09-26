@@ -3,6 +3,7 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/video.hh"
+void PS1TileChanged(int chunkTile); // ps1/render.cpp
 
 // Guards for the PS1-sized arrays and the VM (for GDB; tools/*_test.sh read them).
 volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table / big values past the PS1-sized arrays
@@ -9312,6 +9313,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     case TILEINFO_ANGLEA: collisionMasks[1].angles[tiles128x128.tileIndex[scriptEng.operands[6]]] = scriptEng.operands[0]; break;
                     default: break;
                 }
+#if RETRO_PLATFORM == RETRO_PS1
+                PS1TileChanged(scriptEng.operands[6]); // ps1/render.cpp: the chunk's visible tile rows
+#endif
                 break;
             }
             case FUNC_COPY16X16TILE:

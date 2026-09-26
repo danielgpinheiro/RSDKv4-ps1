@@ -323,9 +323,14 @@ void LoadStageGIFFile(int stageID);
 
 #if RETRO_PLATFORM == RETRO_PS1
 // PS1: no software 3D floor (v4 Sonic 2 has no 3D floor layer) and no tile pixels in RAM (VRAM, phase 3).
-extern volatile uint32_t g_ps1Copy16x16Tile; // Scene.cpp: calls until the phase 3 VRAM tile copy
+extern volatile uint32_t g_ps1Copy16x16Tile; // Scene.cpp: calls (GDB)
+void PS1Copy16x16Tile(int dest, int src);     // ps1/render.cpp: VRAM-to-VRAM copy inside the tile pages
 inline void Init3DFloorBuffer(int layerID) {}
-inline void Copy16x16Tile(ushort dest, ushort src) { g_ps1Copy16x16Tile = g_ps1Copy16x16Tile + 1; }
+inline void Copy16x16Tile(ushort dest, ushort src)
+{
+    g_ps1Copy16x16Tile = g_ps1Copy16x16Tile + 1;
+    PS1Copy16x16Tile(dest, src);
+}
 #else
 inline void Init3DFloorBuffer(int layerID)
 {

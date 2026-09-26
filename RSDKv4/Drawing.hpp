@@ -88,10 +88,16 @@ void ReleaseRenderDevice(bool refresh = false);
 
 void GenerateBlendLookupTable();
 
+#if RETRO_PLATFORM == RETRO_PS1
+extern volatile uint32_t g_ps1SurfaceGen; // ps1/render.cpp: re-binds sheets to the atlas when it changes
+#endif
 inline void ClearGraphicsData()
 {
     for (int i = 0; i < SURFACE_COUNT; ++i) MEM_ZERO(gfxSurface[i]);
     gfxDataPosition = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+    g_ps1SurfaceGen = g_ps1SurfaceGen + 1;
+#endif
 }
 void ClearScreen(byte index);
 void SetScreenDimensions(int width, int height);

@@ -5,6 +5,7 @@
 #include "../ps1/sprite_atlas.hh"
 #include "../ps1/tileset.hh"
 #include "../ps1/video.hh"
+void PS1BuildTileVisuals(); // ps1/render.cpp
 
 // Headless CPU profile of the NORMAL stage mode (hblanks of the last frame; GDB, tools/*_test.sh).
 volatile uint32_t g_ps1ProfObjectsHbl = 0; // ProcessObjects: main + player-interaction subs
@@ -904,6 +905,9 @@ void LoadStageFiles(void)
         PrintLog("Reloading Scene %s - %s", stageListNames[activeStageList], stageList[activeStageList][stageListPosition].name);
     }
     LoadStageChunks();
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1BuildTileVisuals(); // ps1/render.cpp: per chunk, the tile rows with visible tiles on each plane
+#endif
     for (int i = 0; i < TRACK_COUNT; ++i) SetMusicTrack("", i, false, 0);
 
     memset(objectEntityList, 0, ENTITY_COUNT * sizeof(Entity));

@@ -30,6 +30,8 @@
 #define PS1_CLUT_CHUNK        22 // halfwords per CLUT upload chunk: 3 + 11 words = 14 // 84 * 3 words = 252 <= 255-word chained fragment limit
 
 volatile uint32_t g_ps1ChainOverflow  = 0;
+// Every overflow (no arena, or the arena full) calls this: a GDB breakpoint target (the allocators are inlined).
+extern "C" __attribute__((noinline)) void PS1ChainOverflowHook() { g_ps1ChainOverflow = g_ps1ChainOverflow + 1; }
 volatile uint32_t g_ps1ChainHighWater = 0;
 volatile uint32_t g_ps1ChainLastWords = 0;
 volatile uint32_t g_ps1ChainReplayWords = 0;
@@ -89,7 +91,7 @@ bool s_tpageValid    = false;
 
 VarFragment *allocVar(unsigned n) {
     if (!s_cur || s_cur + 2 + n > s_end) {
-        g_ps1ChainOverflow = g_ps1ChainOverflow + 1;
+        PS1ChainOverflowHook();
         return nullptr;
     }
     auto *f = reinterpret_cast<VarFragment *>(s_cur);
@@ -102,7 +104,7 @@ template <typename T>
 T *allocRaw() {
     size_t words = (sizeof(T) + 3) / 4;
     if (!s_cur || s_cur + words > s_end) {
-        g_ps1ChainOverflow = g_ps1ChainOverflow + 1;
+        PS1ChainOverflowHook();
         return nullptr;
     }
     T *p = reinterpret_cast<T *>(s_cur);
@@ -182,6 +184,8 @@ void PS1ChainSuspend() {
     s_suspended = true;
     g_ps1ChainSuspends = g_ps1ChainSuspends + 1;
 }
+
+bool PS1ChainHasArena() { return s_cur != nullptr; }
 
 void PS1ChainSetArenaWords(uint32_t words) { s_arenaWords = words ? words : PS1_CHAIN_ARENA_WORDS; }
 
@@ -420,7 +424,7 @@ uint32_t *PS1ChainBulkBegin(int n, int wpp) {
     runHook();
     flushBatch();
     if (!s_cur || s_cur + n * (wpp + 1) > s_end) {
-        g_ps1ChainOverflow = g_ps1ChainOverflow + 1;
+        PS1ChainOverflowHook();
         return nullptr;
     }
     s_bulk    = s_cur;

@@ -35,6 +35,7 @@ void PS1GpuImmediate();              // wait for the in-flight chain before an i
 // releases them (only if this frame chained nothing yet) and gets them back at its end.
 void PS1ChainSuspend();
 void PS1ChainResume();
+bool PS1ChainHasArena(); // false while suspended for a load (or the heap had no room): nothing can be chained
 // Arena size (words per parity) of the next allocation (PS1ChainResume); 0 = the normal 64 KB. An FMV
 // plays with tiny arenas and lends their heap to the video buffers (ps1/fmv.cpp).
 void PS1ChainSetArenaWords(uint32_t words);

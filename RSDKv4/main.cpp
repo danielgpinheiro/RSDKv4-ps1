@@ -36,6 +36,8 @@ psyqo::GPU *g_ps1GPU           = nullptr;
 psyqo::AdvancedPad *g_ps1Pad   = nullptr;
 psyqo::CDRomDevice *g_ps1CDRom = nullptr;
 void PS1IrqGuardInstall(); // ps1/irq_guard.cpp
+void PS1RenderBeginFrame(psyqo::GPU &gpu); // ps1/render.cpp
+void PS1RenderEndFrame();
 
 __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
 {
@@ -100,7 +102,9 @@ class RSDKv4PS1App final : public psyqo::Application {
     void frame() override
     {
         uint32_t t0 = PS1Hblanks();
+        PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
+        PS1RenderEndFrame();
         uint32_t cpu     = PS1HblanksSince(t0);
         g_ps1PerfLastHbl = cpu;
         if (cpu > g_ps1PerfMaxHbl)

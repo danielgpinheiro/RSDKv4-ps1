@@ -1,5 +1,9 @@
 #include "RetroEngine.hpp"
 
+#if RETRO_PLATFORM == RETRO_PS1
+extern volatile uint32_t g_ps1SurfaceGen; // ps1/render.cpp: re-binds sheets to the atlas when it changes
+#endif
+
 #if RETRO_PLATFORM != RETRO_PS1 // PS1: images are converted at build time (tools/atlas, tools/tiles); no GIF decoder
 struct GifDecoder {
     int depth;
@@ -220,6 +224,7 @@ int AddGraphicsFile(const char *filePath)
     // PS1: sprite pixels live only in VRAM (the per-stage atlas, tools/atlas; bound in phase 3). Register the
     // name; never decode an image at runtime (golden rule).
     StrCopy(gfxSurface[sheetID].fileName, sheetPath);
+    g_ps1SurfaceGen = g_ps1SurfaceGen + 1;
 #else
     byte fileExtension = (byte)sheetPath[(StrLength(sheetPath) - 1) & 0xFF];
     switch (fileExtension) {
@@ -243,6 +248,7 @@ void RemoveGraphicsFile(const char *filePath, int sheetID)
     }
     if (sheetID >= 0)
         StrCopy(gfxSurface[sheetID].fileName, "");
+    g_ps1SurfaceGen = g_ps1SurfaceGen + 1;
     return;
 #endif
     if (sheetID < 0) {

@@ -1,4 +1,5 @@
-// RSDKv3 (Sonic CD) PS1 renderer: replaces RSDKv3/Drawing.cpp (the PC software/GL renderer) on PS1.
+// RSDKv4 (Sonic 2) PS1 renderer: replaces RSDKv4/Drawing.cpp (the PC software renderer) on PS1. From the Sonic CD
+// port's ps1/render.cpp (RSDKv3-ps1 1e583ad; docs/30 phase 3.2), bound to the v4 engine.
 //
 // Everything a frame draws is DMA-chained (ps1/gpu_chain.hh, the Nexus port's chain): main.cpp opens the
 // chain around Engine.RunFrame(), psyqo sends it after frame() returns. Sprites come from the stage's
@@ -6,14 +7,18 @@
 // tools/tiles): nothing is decoded at runtime.
 //
 // Upstream Drawing.cpp functions also change game state, not just pixels (phase 2.3: the title card
-// works from its draw sub). Every such side effect is ported here explicitly, marked "upstream":
-// draw subs (DrawObjectList), draw order + water position (DrawStageGFX), the BG autoscroll and
-// parallax line positions (DrawHLineScrollLayer / DrawVLineScrollLayer), the view globals
-// (InitRenderDevice), DrawObjectAnimation's dispatch.
+// works from its draw sub). Every such side effect is ported here explicitly, marked "upstream": draw
+// subs (DrawObjectList), draw order + water position (DrawStageGFX, v4: by tLayerMidPoint), the BG
+// layers' autoscroll and the parallax line positions (DrawHLineScrollLayer / DrawVLineScrollLayer, v4's
+// SW path; v4 advances the parallax scrollPos in Scene.cpp), the view globals (InitRenderDevice),
+// DrawObjectAnimation's dispatch. Not ported: the SW path's per-line `activePalette` (each drawn line
+// points it at its bank): on PS1 it stays at gfxLineBuffer[0]'s bank (SetActivePalette), as the mobile
+// game's GL renderer leaves it; it only matters for SetPaletteEntry(-1) (the next zone's tile colours).
 //
-// Phase 3.2 scope (docs/28): chain + clear + palette, atlas sprites (plain / flipped / scaled / rotated
-// / rotozoom), HScroll tile layers. Not yet (counted in g_ps1DrawTodo): ink effects and tint (3.3),
-// per-line palette banks + water palette (3.4), VScroll / 3D layers / faces (3.5, 7), menu text (4).
+// Phase 3.2 scope (docs/30): chain + clear + palette, atlas sprites (plain / flipped / scaled / rotated
+// / rotozoom), HScroll tile layers from the packed chunk table (Scene.hpp Tiles128x128::ps1Tile). Not
+// yet (counted in g_ps1DrawTodo): tint (3.3), BG line strips (3.5), VScroll layers, 3D faces (phase 7),
+// menu text (phase 4). Sonic 2 has no 3D floor / sky layer.
 #include "RetroEngine.hpp"
 
 #include <stdio.h>
@@ -31,11 +36,6 @@
 #include "common/syscalls/syscalls.h"
 #include "gpu_chain.hh"
 #include "sprite_atlas.hh"
-#include "fmv.hh"
-#include <psyqo/gte-kernels.hh>
-#include <psyqo/gte-registers.hh>
-#include <psyqo/gte-kernels.hh>
-#include <psyqo/gte-registers.hh>
 #include "tileset.hh"
 #include "video.hh" // PS1Hblanks (profiling)
 
@@ -44,9 +44,14 @@ extern psyqo::GPU *g_ps1GPU;
 // ---------------------------------------------------------------------------------------------------
 // Engine globals owned by Drawing.cpp upstream
 
+int SCREEN_XSIZE_CONFIG = DEFAULT_SCREEN_XSIZE;
 int SCREEN_XSIZE        = DEFAULT_SCREEN_XSIZE; // 320 (user decision; PC 424)
 int SCREEN_CENTERX      = DEFAULT_SCREEN_XSIZE / 2;
-int SCREEN_XSIZE_CONFIG = DEFAULT_SCREEN_XSIZE;
+
+float SCREEN_XSIZE_F   = DEFAULT_SCREEN_XSIZE;
+float SCREEN_CENTERX_F = DEFAULT_SCREEN_XSIZE / 2;
+float SCREEN_YSIZE_F   = SCREEN_YSIZE;
+float SCREEN_CENTERY_F = SCREEN_YSIZE / 2;
 
 DrawListEntry drawListEntries[DRAWLAYER_COUNT];
 
@@ -54,15 +59,9 @@ int gfxDataPosition;
 GFXSurface gfxSurface[SURFACE_COUNT];
 byte graphicData[GFXDATA_SIZE];
 
-ushort gfxVertexSize       = 0;
-ushort gfxVertexSizeOpaque = 0;
-ushort gfxIndexSize        = 0;
-ushort gfxIndexSizeOpaque  = 0;
-ushort vertexSize3D        = 0;
-ushort indexSize3D         = 0;
-ushort tileUVArray[TILEUV_SIZE];
-bool render3DEnabled = false;
-byte texBufferMode   = 0;
+// Evidence for draw-sub changes (native opcodes, tools/logic_test.sh): a hash of every DrawSprite call the scripts
+// make in a frame and their count (phase 2's headless renderer; the same calls are hashed here).
+volatile uint32_t g_ps1DrawHash = 0, g_ps1DrawCount = 0, g_ps1DrawHashLast = 0, g_ps1DrawCountLast = 0;
 
 // ---------------------------------------------------------------------------------------------------
 // Verification counters (GDB)
@@ -245,50 +244,12 @@ static void PS1FrameStart(bool clear)
     s_sceneMark = PS1ChainMark();
 }
 
-static bool s_fmvFrame = false; // this frame shows an FMV (ps1/fmv.cpp): FlipScreen leaves it alone
-
 void PS1RenderBeginFrame(psyqo::GPU &gpu)
 {
     PS1ChainBegin(gpu);
     PS1AtlasServicePictures(); // on-demand pictures the last frame asked for (nothing chained yet)
-    PS1FmvBeginFrame();        // FMV open / close (swaps the chain arenas: nothing chained yet)
     s_chainOpen = true;
     s_frameOpen = false;
-    s_fmvFrame  = false;
-}
-
-// FMV frames (ps1/fmv.cpp): 0 = black, 1 = a new picture was just written into the other buffer (the one
-// shown after this frame's flip): it is copied into this frame's buffer too, so both hold it; 2 = no new
-// picture: the displayed frame is copied over (the skip fade darkens it a step further each frame).
-void PS1RenderFmvFrame(int mode)
-{
-    if (s_frameOpen || !s_chainOpen)
-        return;
-    s_frameOpen = true;
-    s_fmvFrame  = true;
-    if (mode == 1) {
-        PS1ChainFillLines(0, 32, 0, 0, 0);
-        PS1ChainCopyLastFrameLines(32, 208);
-        PS1ChainFillLines(208, SCREEN_YSIZE, 0, 0, 0);
-    } else if (mode == 2) {
-        PS1ChainCopyLastFrameLines(0, SCREEN_YSIZE);
-    } else {
-        PS1ChainFillLines(0, SCREEN_YSIZE, 0, 0, 0);
-    }
-}
-
-// FMV skip fade (upstream ProcessVideo: fadeMode += 8 per frame): the frame, a copy of the last one, is
-// darkened by step / 255 with subtractive blending, so 32 frames reach black.
-void PS1RenderFmvFade(int step)
-{
-    psyqo::Prim::Rectangle r(psyqo::Color{ { .r = (uint8_t)step, .g = (uint8_t)step, .b = (uint8_t)step } });
-    r.position = psyqo::Vertex{ { .x = 0, .y = 0 } };
-    r.size     = psyqo::Vertex{ { .w = (int16_t)SCREEN_XSIZE, .h = SCREEN_YSIZE } };
-    psyqo::PrimPieces::TPageAttr attr; // untextured semi-transparency takes its mode from the texpage
-    attr.set(psyqo::Prim::TPageAttr::SemiTrans::FullBackSubFullFront);
-    PS1ChainTPage(attr);
-    r.setSemiTrans();
-    PS1ChainRect(r);
 }
 
 void PS1RenderEndFrame()
@@ -616,14 +577,19 @@ static void PS1ChainFlatPolygonClipped(const int *px, const int *py, int n, uint
 // ---------------------------------------------------------------------------------------------------
 // Upstream API
 
+// upstream InitRenderDevice -> SetScreenDimensions -> SetScreenSize: the screen width and what depends on it
+// (scroll edges, object activity borders). Left at their static values, every bounds-priority object would be
+// judged against a 424 px screen.
 int InitRenderDevice()
 {
-    // upstream InitRenderDevice / SetScreenSize: the logic's view (scroll edges, object activity border)
     SCREEN_XSIZE        = DEFAULT_SCREEN_XSIZE;
     SCREEN_CENTERX      = SCREEN_XSIZE / 2;
+    SCREEN_XSIZE_F      = SCREEN_XSIZE;
+    SCREEN_CENTERX_F    = SCREEN_CENTERX;
     SCREEN_SCROLL_LEFT  = SCREEN_CENTERX - 8;
     SCREEN_SCROLL_RIGHT = SCREEN_CENTERX + 8;
     OBJECT_BORDER_X2    = SCREEN_XSIZE + 0x80;
+    OBJECT_BORDER_X4    = SCREEN_XSIZE + 0x20;
     return 1;
 }
 
@@ -683,7 +649,7 @@ static void PS1DrawBankRegions(psyqo::Color clear)
 // palette as it is now (a SetFade / palette change from a draw sub shows in the same frame).
 void FlipScreen()
 {
-    if (!s_frameOpen || s_fmvFrame)
+    if (!s_frameOpen)
         return;
     PS1ChainSetHook(nullptr); // nothing else comes: a pending fade stays a CLUT fade (the hook would draw it)
     psyqo::Color clear = { { .r = 0, .g = 0, .b = 0 } };
@@ -713,7 +679,6 @@ void FlipScreen()
 }
 
 void GenerateBlendLookupTable() {}
-void UpdateHardwareTextures() {}
 
 void ClearScreen(byte index)
 {
@@ -724,6 +689,7 @@ void ClearScreen(byte index)
 }
 
 // upstream: draw subs are game logic too; only their Draw* calls produce primitives.
+extern uint32_t g_ps1TypeDrawTicks[OBJECT_COUNT], g_ps1TypeDrawCalls[OBJECT_COUNT]; // Object.cpp profile
 void DrawObjectList(int layer)
 {
     PS1FrameStart(false);
@@ -731,12 +697,14 @@ void DrawObjectList(int layer)
     g_ps1ChainSkipPrims = PS1ObjectsHidden();
     int size            = drawListEntries[layer].listSize;
     for (int i = 0; i < size; ++i) {
-        objectLoop = drawListEntries[layer].entityRefs[i];
-        int type   = objectEntityList[objectLoop].type;
+        objectEntityPos = drawListEntries[layer].entityRefs[i];
+        int type        = objectEntityList[objectEntityPos].type;
         if (type) {
-            activePlayer = 0;
-            if (scriptCode[objectScriptList[type].subDraw.scriptCodePtr] > 0)
-                ProcessScript(objectScriptList[type].subDraw.scriptCodePtr, objectScriptList[type].subDraw.jumpTablePtr, SUB_DRAW);
+            uint32_t tt = PS1ProfTicks();
+            if (scriptCode[objectScriptList[type].eventDraw.scriptCodePtr] > 0)
+                ProcessScript(objectScriptList[type].eventDraw.scriptCodePtr, objectScriptList[type].eventDraw.jumpTablePtr, EVENT_DRAW);
+            g_ps1TypeDrawTicks[type] += (PS1ProfTicks() - tt) & 0xFFFF;
+            g_ps1TypeDrawCalls[type]++;
         }
     }
     g_ps1ChainSkipPrims = false;
@@ -745,7 +713,6 @@ void DrawObjectList(int layer)
 
 void DrawHLineScrollLayer(int layerID);
 void DrawVLineScrollLayer(int layerID);
-static void PS1Draw3DFloor(int layerID);
 
 static void PS1DrawLayer(int layerID)
 {
@@ -754,14 +721,14 @@ static void PS1DrawLayer(int layerID)
     switch (stageLayouts[activeTileLayers[layerID]].type) {
         case LAYER_HSCROLL: DrawHLineScrollLayer(layerID); break;
         case LAYER_VSCROLL: DrawVLineScrollLayer(layerID); break;
-        case LAYER_3DFLOOR:
-        case LAYER_3DSKY: PS1Draw3DFloor(layerID); break;
+        case LAYER_3DFLOOR: Draw3DFloorLayer(layerID); break;
+        case LAYER_3DSKY: Draw3DSkyLayer(layerID); break;
         default: break;
     }
 }
 
-// upstream DrawStageGFX (SW path): water position, then layers and draw lists in upstream order
-// (list 7 before 6), then the full-screen fade rectangle.
+// upstream DrawStageGFX (v4 SW path): water position, then layers and draw lists in upstream order by
+// tLayerMidPoint (list 7 before 6; nothing when it is >= 6), then the full-screen fade rectangle.
 volatile uint32_t g_ps1ProfWaitHbl = 0; // profiling (g_ps1DebugDrawMask bit 2): time waiting for the previous chain
 void DrawStageGFX()
 {
@@ -771,25 +738,47 @@ void DrawStageGFX()
         g_ps1ProfWaitHbl = PS1HblanksSince(t0);
     }
     PS1FrameStart(true);
+    memset(g_ps1TypeDrawTicks, 0, sizeof(g_ps1TypeDrawTicks));
+    memset(g_ps1TypeDrawCalls, 0, sizeof(g_ps1TypeDrawCalls));
+    g_ps1DrawHashLast  = g_ps1DrawHash; // the previous frame's
+    g_ps1DrawCountLast = g_ps1DrawCount;
+    g_ps1DrawHash      = 0;
+    g_ps1DrawCount     = 0;
     waterDrawPos = waterLevel - yScrollOffset;
     if (waterDrawPos < 0)
         waterDrawPos = 0;
     if (waterDrawPos > SCREEN_YSIZE)
         waterDrawPos = SCREEN_YSIZE;
 
-    DrawObjectList(0);
-    PS1DrawLayer(0);
-    DrawObjectList(1);
-    PS1DrawLayer(1);
-    DrawObjectList(2);
-    PS1DrawLayer(2);
-    DrawObjectList(3);
-    DrawObjectList(4);
-    PS1DrawLayer(3);
-    DrawObjectList(5);
-    if (forceUseScripts || Engine.usingOrigins)
-        DrawObjectList(7);
-    DrawObjectList(6);
+    if (tLayerMidPoint < 3) {
+        DrawObjectList(0);
+        PS1DrawLayer(0);
+        DrawObjectList(1);
+        PS1DrawLayer(1);
+        DrawObjectList(2);
+        DrawObjectList(3);
+        DrawObjectList(4);
+        PS1DrawLayer(2);
+    }
+    else if (tLayerMidPoint < 6) {
+        DrawObjectList(0);
+        PS1DrawLayer(0);
+        DrawObjectList(1);
+        PS1DrawLayer(1);
+        DrawObjectList(2);
+        PS1DrawLayer(2);
+        DrawObjectList(3);
+        DrawObjectList(4);
+    }
+    if (tLayerMidPoint < 6) {
+        PS1DrawLayer(3);
+        DrawObjectList(5);
+#if RETRO_REV03
+        if (forceUseScripts || Engine.usingOrigins)
+            DrawObjectList(7);
+#endif
+        DrawObjectList(6);
+    }
     if (fadeMode > 0)
         DrawRectangle(0, 0, SCREEN_XSIZE, SCREEN_YSIZE, fadeR, fadeG, fadeB, fadeA);
 }
@@ -797,38 +786,34 @@ void DrawStageGFX()
 void DrawDebugOverlays() {}
 
 // ---------------------------------------------------------------------------------------------------
-// Tile layers. Each chunk tile's visual as one halfword (built at stage load, updated when a script
-// changes a tile): bits 0-9 tile index, 10-11 flip, 12 visual plane, 13 "has pixels" (the tile page
-// scan in ps1/tileset). Plus, per chunk, which of its 8 tile rows have visible tiles on each plane.
+// Tile layers. The chunk tiles' visuals are the engine's packed table itself (Scene.hpp, phase 2): per
+// chunk tile one halfword, bits 0-9 tile index, 10-11 flip, 12-15 visual plane (upstream draws plane 0
+// below the mid point, 1 above; other values never). Empty tiles (no texel, ps1/tileset
+// g_ps1TileSolid) are skipped. Per chunk: which of its 8 tile rows have visible tiles on each plane
+// (rebuilt at stage load and when a script changes a tile or Copy16x16Tile fills an empty tile).
 
 #define PS1_TV_INDEX 0x03FF
 #define PS1_TV_DIR_SHIFT 10
-#define PS1_TV_PLANE 0x1000
-#define PS1_TV_SOLID 0x2000
-static uint16_t s_tileVis[CHUNKTILE_COUNT];
+#define PS1_TV_PLANE_SHIFT 12
 static uint16_t s_chunkRowPlanes[CHUNKTILE_COUNT / 64];
 
-static inline uint16_t PS1TileVisOf(int i)
-{
-    int t = tiles128x128.tileIndex[i] & PS1_TV_INDEX;
-    return (uint16_t)(t | ((tiles128x128.direction[i] & 3) << PS1_TV_DIR_SHIFT) | (tiles128x128.visualPlane[i] ? PS1_TV_PLANE : 0)
-                      | ((g_ps1TileSolid[t >> 3] >> (t & 7)) & 1 ? PS1_TV_SOLID : 0));
-}
+static inline bool PS1TileSolid(int t) { return (g_ps1TileSolid[t >> 3] >> (t & 7)) & 1; }
 
 static void PS1UpdateChunkRows(int chunk)
 {
-    uint16_t m = 0;
+    uint16_t m          = 0;
+    const ushort *tiles = &tiles128x128.ps1Tile[chunk << 6];
     for (int t = 0; t < 64; ++t) {
-        uint16_t tv = s_tileVis[(chunk << 6) + t];
-        if (tv & PS1_TV_SOLID)
-            m |= 1 << ((t >> 3) * 2 + ((tv & PS1_TV_PLANE) ? 1 : 0));
+        uint16_t tv = tiles[t];
+        int plane   = tv >> PS1_TV_PLANE_SHIFT;
+        if (plane <= 1 && PS1TileSolid(tv & PS1_TV_INDEX))
+            m |= 1 << ((t >> 3) * 2 + plane);
     }
     s_chunkRowPlanes[chunk] = m;
 }
 
 void PS1BuildTileVisuals()
 {
-    for (int i = 0; i < CHUNKTILE_COUNT; ++i) s_tileVis[i] = PS1TileVisOf(i);
     for (int c = 0; c < CHUNKTILE_COUNT / 64; ++c) PS1UpdateChunkRows(c);
 }
 
@@ -836,13 +821,13 @@ void PS1TileChanged(int chunkTile)
 {
     if ((uint)chunkTile >= CHUNKTILE_COUNT)
         return;
-    s_tileVis[chunkTile] = PS1TileVisOf(chunkTile);
     PS1UpdateChunkRows(chunkTile >> 6);
 }
 
 // upstream Copy16x16Tile (Scene.hpp, SW path): tile `src`'s pixels overwrite tile `dest`'s, from now
 // on. Here: a VRAM-to-VRAM copy inside the tile pages, chained where the script calls it (draws before
-// it still show the old pixels, as on PC), or immediate outside a frame.
+// it still show the old pixels, as on PC), or immediate outside a frame and during a load (startups call
+// it while the chain arenas are lent to the CD read: Chemical Plant).
 volatile uint32_t g_ps1TileCopies  = 0; // Copy16x16Tile calls
 volatile uint32_t g_ps1TileRebuild = 0; // copies that made an empty tile visible (packed table rebuilt)
 static void PS1TileVramXY(int t, int &x, int &y)
@@ -859,7 +844,7 @@ void PS1Copy16x16Tile(int dest, int src)
     int sx, sy, dx, dy;
     PS1TileVramXY(src, sx, sy);
     PS1TileVramXY(dest, dx, dy);
-    if (s_chainOpen) {
+    if (s_chainOpen && PS1ChainHasArena()) {
         PS1ChainVramCopy(sx, sy, dx, dy, 8, 16);
         PS1ChainFlushCache();
     }
@@ -1027,7 +1012,7 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
         h = TILE_SIZE - ty0;
     const ushort *chunkRow = &layer->tiles[(ly >> 7) * TILELAYER_CHUNK_W];
     int tileRow            = ((ly & 0x7F) >> 4) << 3;
-    uint16_t want          = PS1_TV_SOLID | (above ? PS1_TV_PLANE : 0);
+    uint16_t want          = above ? 1 : 0; // visual plane
     uint32_t yWord         = (uint32_t)(uint16_t)sy << 16;
     uint32_t clutWord      = s_tileClutWord;
     bool whole             = h == TILE_SIZE;
@@ -1047,11 +1032,11 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
         int first = (px & 0x7F) >> 4, count = 8 - first;
         int chunk = chunkRow[px >> 7];
         if (s_chunkRowPlanes[chunk] & rowBit) {
-            const uint16_t *vis = &s_tileVis[(chunk << 6) + tileRow + first];
-            int x               = sx;
+            const ushort *vis = &tiles128x128.ps1Tile[(chunk << 6) + tileRow + first];
+            int x             = sx;
             for (int k = 0; k < count && x < SCREEN_XSIZE; ++k, x += TILE_SIZE) {
                 uint16_t tv = vis[k];
-                if ((tv & (PS1_TV_SOLID | PS1_TV_PLANE)) != want)
+                if ((tv >> PS1_TV_PLANE_SHIFT) != want || !PS1TileSolid(tv & PS1_TV_INDEX))
                     continue;
                 ++prims;
                 int dir       = (tv >> PS1_TV_DIR_SHIFT) & 3;
@@ -1094,6 +1079,10 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
     g_ps1LayerPrims = g_ps1LayerPrims + prims;
 }
 
+// BG line strips (Sonic CD's tools/bgstrips: BG lines pre-rendered into VRAM the atlas leaves free) come back in
+// step 3.5; until then every BG line is drawn from tiles (PS1_BG_STRIPS 0).
+#define PS1_BG_STRIPS 0
+#if PS1_BG_STRIPS
 // BG line strips (tools/bgstrips/build_bgstrips.py -> Data/Stages/<Stage>/BGStrips[_t].bin, format
 // there): BG layer lines pre-rendered at build time as 8-bit rows of one horizontal period, in VRAM
 // the stage's atlas leaves free. A band of lines in a strip region costs 1-3 sprites instead of ~21
@@ -1228,28 +1217,28 @@ static void PS1WalkStripBand(const PS1StripRegion &r, int sy, int h, int ly, int
     }
 }
 
-struct PS1StripBand {
-    short sy, h, ly, chunkX;
-    uint8_t region;
-};
-static PS1StripBand s_stripBands[SCREEN_YSIZE];
+#endif
+
 static short s_lineX[SCREEN_YSIZE];
 
-// upstream DrawHLineScrollLayer: the same scroll-state update (BG autoscroll, parallax line
-// positions: game state) and per-line X (parallax line, deformation above / below the water line,
-// wrap), drawn as bands of lines sharing one X (a band never crosses a tile row).
+// upstream DrawHLineScrollLayer (v4 SW path): the same scroll-state update (BG autoscroll, parallax line
+// positions: game state) and per-line X (parallax line, deformation above / below the water line, wrap),
+// drawn as bands of lines sharing one X (a band never crosses a tile row).
 void DrawHLineScrollLayer(int layerID)
 {
-    uint32_t t0      = PS1Hblanks();
-    g_ps1ProfLayer[4] = g_ps1ProfLayer[4] + 1;
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
-    int layerwidth   = layer->xsize;
-    int layerheight  = layer->ysize;
-    byte above       = layerID >= tLayerMidPoint;
+    if (!layer->xsize || !layer->ysize)
+        return;
+    uint32_t t0       = PS1Hblanks();
+    g_ps1ProfLayer[4] = g_ps1ProfLayer[4] + 1;
+    int layerwidth    = layer->xsize;
+    int layerheight   = layer->ysize;
+    byte above        = layerID >= tLayerMidPoint;
+    bool fg           = !activeTileLayers[layerID];
     int *deformationData, *deformationDataW;
 
     int yscrollOffset = 0;
-    if (activeTileLayers[layerID]) { // BG Layer
+    if (!fg) { // BG Layer
         int yScroll    = yScrollOffset * layer->parallaxFactor >> 8;
         int fullheight = layerheight << 7;
         layer->scrollPos += layer->scrollSpeed;
@@ -1273,7 +1262,6 @@ void DrawHLineScrollLayer(int layerID)
             int fullLayerwidth = layerwidth << 7;
             for (int i = 0; i < hParallax.entryCount; ++i) {
                 hParallax.linePos[i] = xScrollOffset * hParallax.parallaxFactor[i] >> 8;
-                hParallax.scrollPos[i] += hParallax.scrollSpeed[i];
                 if (hParallax.scrollPos[i] > fullLayerwidth << 16)
                     hParallax.scrollPos[i] -= fullLayerwidth << 16;
                 if (hParallax.scrollPos[i] < 0)
@@ -1282,14 +1270,17 @@ void DrawHLineScrollLayer(int layerID)
                 hParallax.linePos[i] %= fullLayerwidth;
             }
         }
-        lastXSize = layerwidth;
+        lastXSize = fg ? -1 : layerwidth;
     }
     // (end of the upstream state update)
 
-    if (!layerwidth || !layerheight || !s_frameOpen)
+    if (!s_frameOpen)
         return;
     PS1TileSetup();
-    int rows  = layerheight < TILELAYER_CHUNK_H ? layerheight : TILELAYER_CHUNK_H; // PS1-sized rows (Scene.hpp)
+    // PS1-sized layer buffers (Scene.hpp): the FG holds PS1_LAYER0_CHUNK_H chunk rows, the BG layers
+    // TILELAYER_CHUNK_H; their line scroll covers the BG heights only (the FG's is all zero upstream: index 0).
+    int rows  = fg ? PS1_LAYER0_CHUNK_H : TILELAYER_CHUNK_H;
+    rows      = layerheight < rows ? layerheight : rows;
     int fullW = layerwidth << 7;
     int fullH = rows << 7;
     int tileYPos = yscrollOffset % (layerheight << 7);
@@ -1299,7 +1290,7 @@ void DrawHLineScrollLayer(int layerID)
 
     // The FG without deformation scrolls every line by xScrollOffset (upstream sets every
     // hParallax.linePos to it above): one band per tile row, no per-line pass (the Nexus fast path).
-    bool uniform = !activeTileLayers[layerID];
+    bool uniform = fg;
     for (int i = 0; i < PARALLAX_COUNT && uniform; ++i) uniform = !hParallax.deform[i];
     int ly = tileYPos;
     if (uniform) {
@@ -1316,13 +1307,13 @@ void DrawHLineScrollLayer(int layerID)
             if (ly >= fullH)
                 ly -= fullH;
         }
-        g_ps1LayerHbl     = g_ps1LayerHbl + PS1HblanksSince(t0);
-        g_ps1ProfLayer[0] = g_ps1ProfLayer[0] + PS1HblanksSince(t0);
+        g_ps1LayerHbl              = g_ps1LayerHbl + PS1HblanksSince(t0);
+        g_ps1ProfLayer[0]          = g_ps1ProfLayer[0] + PS1HblanksSince(t0);
         g_ps1ProfSlot[layerID & 3] = PS1HblanksSince(t0);
         return;
     }
     for (int y = 0; y < SCREEN_YSIZE; ++y) {
-        byte idx   = layer->lineScroll[ly];
+        byte idx   = fg || ly >= TILELAYER_LINESCROLL_COUNT ? 0 : layer->lineScroll[ly];
         int chunkX = hParallax.linePos[idx];
         if (y < waterDrawPos) {
             if (hParallax.deform[idx])
@@ -1342,93 +1333,36 @@ void DrawHLineScrollLayer(int layerID)
         if (++ly >= fullH)
             ly = 0;
     }
-
-    uint32_t t1             = PS1Hblanks();
-    g_ps1ProfLayer[1]       = g_ps1ProfLayer[1] + PS1HblanksSince(t0);
-    uint32_t tTiles         = 0;
-    int stripBands          = 0;
-    int layerIdx            = activeTileLayers[layerID];
-    const uint8_t *stripRow = s_stripCount && layerIdx < LAYER_COUNT ? s_stripRow[layerIdx][above] : nullptr;
-    ly                      = tileYPos;
+    g_ps1ProfLayer[1] = g_ps1ProfLayer[1] + PS1HblanksSince(t0);
+    uint32_t tTiles   = 0;
+    ly                = tileYPos;
     for (int y = 0; y < SCREEN_YSIZE;) {
-        int chunkX = s_lineX[y];
-        int ri     = stripRow ? stripRow[ly >> 4] : 0;
-        int h      = 1;
-        if (ri) { // strip region: a band runs until the X scroll changes or the region ends
-            const PS1StripRegion &r = s_strips[ri - 1];
-            int end                 = r.line0 + r.lines;
-            while (y + h < SCREEN_YSIZE && ly + h < end && s_lineX[y + h] == chunkX) ++h;
-            PS1StripBand &b = s_stripBands[stripBands++]; // drawn after the loop, piece by piece
-            b.sy = (short)y, b.h = (short)h, b.ly = (short)ly, b.chunkX = (short)chunkX, b.region = (uint8_t)(ri - 1);
-        }
-        else {
-            int rowLeft = TILE_SIZE - (ly & 0xF);
-            while (h < rowLeft && y + h < SCREEN_YSIZE && s_lineX[y + h] == chunkX) ++h;
-            uint32_t tb = PS1Hblanks();
-            PS1DrawTileBand(layer, above, y, h, ly, chunkX, fullW);
-            tTiles += PS1HblanksSince(tb);
-        }
+        int chunkX  = s_lineX[y];
+        int h       = 1;
+        int rowLeft = TILE_SIZE - (ly & 0xF);
+        while (h < rowLeft && y + h < SCREEN_YSIZE && s_lineX[y + h] == chunkX) ++h;
+        uint32_t tb = PS1Hblanks();
+        PS1DrawTileBand(layer, above, y, h, ly, chunkX, fullW);
+        tTiles += PS1HblanksSince(tb);
         y += h;
         ly += h;
         if (ly >= fullH)
             ly -= fullH;
     }
-    g_ps1ProfLayer[2] = g_ps1ProfLayer[2] + tTiles;
-    g_ps1StripBandCount = g_ps1StripBandCount + stripBands;
-    uint32_t t2       = PS1Hblanks();
-    static uint32_t s_stripClut = 0;
-    if (!s_stripClut) {
-        psyqo::PrimPieces::ClutIndex clut(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
-        uint16_t c;
-        memcpy(&c, &clut, 2);
-        s_stripClut = (uint32_t)c << 16;
-    }
-    for (int i = 0; i < stripBands;) { // strip bands grouped by region, chained piece by piece
-        int region = s_stripBands[i].region, j = i;
-        while (j < stripBands && s_stripBands[j].region == region) ++j;
-        const PS1StripRegion &r        = s_strips[region];
-        int count[PS1_STRIP_PIECES]    = {};
-        int pos[PS1_STRIP_PIECES], total = 0;
-        s_stripWalkCount = 0;
-        for (int b = i; b < j; ++b)
-            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count);
-        for (int k = 0; k < r.pieces; ++k) {
-            pos[k] = total;
-            total += count[k];
-        }
-        for (int q = 0; q < s_stripWalkCount; ++q) { // scatter: group by piece, band order kept
-            uint32_t *d = &s_stripRuns[pos[s_stripWalkPiece[q]]++ * 3];
-            uint32_t *w = &s_stripWalk[q * 3];
-            d[0] = w[0], d[1] = w[1], d[2] = w[2];
-        }
-        for (int k = 0, start = 0; k < r.pieces; start += count[k++]) {
-            int n = count[k];
-            if (start + n > PS1_STRIP_RUNS)
-                n = PS1_STRIP_RUNS - start;
-            if (n <= 0)
-                continue;
-            psyqo::PrimPieces::TPageAttr attr;
-            attr.set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
-            attr.setPageX((uint8_t)(r.x[k] >> 6));
-            attr.setPageY((uint8_t)(r.y[k] >> 8));
-            PS1ChainTPage(attr);
-            PS1ChainSpriteRawN(&s_stripRuns[start * 3], n);
-            g_ps1LayerPrims = g_ps1LayerPrims + n;
-        }
-        i = j;
-    }
-    g_ps1ProfLayer[3] = g_ps1ProfLayer[3] + PS1HblanksSince(t2);
-    (void)t1;
-    g_ps1LayerHbl = g_ps1LayerHbl + PS1HblanksSince(t0);
+    g_ps1ProfLayer[2]          = g_ps1ProfLayer[2] + tTiles;
+    g_ps1LayerHbl              = g_ps1LayerHbl + PS1HblanksSince(t0);
+    g_ps1ProfSlot[layerID & 3] = PS1HblanksSince(t0);
 }
 
-// upstream DrawVLineScrollLayer's scroll-state update (incl. its `scrollPos += scrollPos << 16`);
-// drawing VScroll layers is step 3.5.
+// upstream DrawVLineScrollLayer's scroll-state update (v4 SW path, incl. its `scrollPos += scrollPos << 16`);
+// drawing VScroll layers: none in Sonic 2 so far (counted).
 void DrawVLineScrollLayer(int layerID)
 {
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
-    int layerwidth   = layer->xsize;
-    int layerheight  = layer->ysize;
+    if (!layer->xsize || !layer->ysize)
+        return;
+    int layerwidth  = layer->xsize;
+    int layerheight = layer->ysize;
     if (activeTileLayers[layerID]) { // BG Layer
         int fullLayerwidth = layerwidth << 7;
         layer->scrollPos += layer->scrollSpeed;
@@ -1445,18 +1379,23 @@ void DrawVLineScrollLayer(int layerID)
             int fullLayerheight = layerheight << 7;
             for (int i = 0; i < vParallax.entryCount; ++i) {
                 vParallax.linePos[i] = yScrollOffset * vParallax.parallaxFactor[i] >> 8;
-                vParallax.scrollPos[i] += vParallax.scrollSpeed[i];
                 vParallax.scrollPos[i] += vParallax.scrollPos[i] << 16;
                 if (vParallax.scrollPos[i] > fullLayerheight << 16)
                     vParallax.scrollPos[i] -= fullLayerheight << 16;
                 vParallax.linePos[i] += vParallax.scrollPos[i] >> 16;
                 vParallax.linePos[i] %= fullLayerheight;
             }
+            layerheight = fullLayerheight >> 7;
         }
         lastYSize = layerheight;
     }
     g_ps1DrawTodo = g_ps1DrawTodo + 1;
 }
+
+// Sonic 2 has no 3D floor / sky layer (docs/30 phase 1): counted if one ever comes.
+volatile uint32_t g_ps1Draw3DLayer = 0;
+void Draw3DFloorLayer(int layerID) { g_ps1Draw3DLayer = g_ps1Draw3DLayer + 1; }
+void Draw3DSkyLayer(int layerID) { g_ps1Draw3DLayer = g_ps1Draw3DLayer + 1; }
 
 // ---------------------------------------------------------------------------------------------------
 // Shapes
@@ -1522,11 +1461,22 @@ void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivot
 // ---------------------------------------------------------------------------------------------------
 // Sprites
 
-void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
+static void PS1DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
 {
     if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden())
         return;
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) { PS1ChainPieceSprite(p, XPos + p.ox, YPos + p.oy); });
+}
+
+// The engine's DrawSprite calls are hashed (g_ps1DrawHash, as phase 2's headless renderer did); the renderer's
+// own uses (unrotated DrawSpriteRotated, ink passes) call PS1DrawSprite.
+void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
+{
+    uint32_t h = g_ps1DrawHash;
+    for (int a : { XPos, YPos, width, height, sprX, sprY, sheetID }) h = h * 31 + (uint32_t)a;
+    g_ps1DrawHash  = h;
+    g_ps1DrawCount = g_ps1DrawCount + 1;
+    PS1DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
 }
 
 void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
@@ -1600,7 +1550,7 @@ void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY
                        int sheetID)
 {
     if (!(rotation & 0x1FF) && direction == FLIP_NONE) { // no rotation: 1:1 sprite (pixel exact)
-        DrawSprite(XPos - pivotX, YPos - pivotY, width, height, sprX, sprY, sheetID); // callers pass -frame pivot
+        PS1DrawSprite(XPos - pivotX, YPos - pivotY, width, height, sprX, sprY, sheetID); // callers pass -frame pivot
         return;
     }
     PS1DrawSpriteAffine(direction, XPos, YPos, pivotX, pivotY, sprX, sprY, width, height, rotation, 0x200, sheetID);
@@ -1618,7 +1568,7 @@ static void PS1DrawInkSprite(int XPos, int YPos, int width, int height, int sprX
 {
     s_ink    = ink;
     s_inkMod = mod;
-    for (int i = 0; i < passes; ++i) DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
+    for (int i = 0; i < passes; ++i) PS1DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
     s_ink    = PS1_INK_OPAQUE;
     s_inkMod = 0x80;
 }
@@ -1632,7 +1582,7 @@ void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX,
 {
     int level = PS1AlphaLevel(alpha > 0xFF ? 0xFF : alpha);
     if (level == 3)
-        DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
+        PS1DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
     else if (level)
         PS1DrawInkSprite(XPos, YPos, width, height, sprX, sprY, sheetID, PS1_INK_HALF, 0x80, level);
 }
@@ -1653,7 +1603,7 @@ void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int
         PS1DrawInkSprite(XPos, YPos, width, height, sprX, sprY, sheetID, PS1_INK_SUB, (uint8_t)((alpha + 1) >> 1), 1);
 }
 
-// upstream DrawObjectAnimation, verbatim: picks the draw call from the animation's rotation style.
+// upstream DrawObjectAnimation (v4), verbatim: picks the draw call from the animation's rotation style.
 void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
 {
     ObjectScript *objectScript = (ObjectScript *)objScr;
@@ -1669,33 +1619,40 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
                     DrawSpriteFlipped(frame->pivotX + XPos, frame->pivotY + YPos, frame->width, frame->height, frame->sprX, frame->sprY, FLIP_NONE,
                                       frame->sheetID);
                     break;
+
                 case FLIP_X:
                     DrawSpriteFlipped(XPos - frame->width - frame->pivotX, frame->pivotY + YPos, frame->width, frame->height, frame->sprX,
                                       frame->sprY, FLIP_X, frame->sheetID);
                     break;
                 case FLIP_Y:
+
                     DrawSpriteFlipped(frame->pivotX + XPos, YPos - frame->height - frame->pivotY, frame->width, frame->height, frame->sprX,
                                       frame->sprY, FLIP_Y, frame->sheetID);
                     break;
+
                 case FLIP_XY:
                     DrawSpriteFlipped(XPos - frame->width - frame->pivotX, YPos - frame->height - frame->pivotY, frame->width, frame->height,
                                       frame->sprX, frame->sprY, FLIP_XY, frame->sheetID);
                     break;
+
                 default: break;
             }
             break;
+
         case ROTSTYLE_FULL:
             DrawSpriteRotated(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
                               entity->rotation, frame->sheetID);
             break;
+
         case ROTSTYLE_45DEG:
             if (entity->rotation >= 0x100)
                 DrawSpriteRotated(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width,
-                                  frame->height, 0x200 - ((532 - entity->rotation) >> 6 << 6), frame->sheetID);
+                                  frame->height, 0x200 - ((0x214 - entity->rotation) >> 6 << 6), frame->sheetID);
             else
                 DrawSpriteRotated(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width,
                                   frame->height, (entity->rotation + 20) >> 6 << 6, frame->sheetID);
             break;
+
         case ROTSTYLE_STATICFRAMES: {
             if (entity->rotation >= 0x100)
                 rotation = 8 - ((532 - entity->rotation) >> 6);
@@ -1707,6 +1664,7 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
                 case 8: // 360 deg
                     rotation = 0x00;
                     break;
+
                 case 1: // 45 deg
                     frameID += sprAnim->frameCount;
                     if (entity->direction)
@@ -1714,9 +1672,11 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
                     else
                         rotation = 0x80;
                     break;
+
                 case 2: // 90 deg
                     rotation = 0x80;
                     break;
+
                 case 3: // 135 deg
                     frameID += sprAnim->frameCount;
                     if (entity->direction)
@@ -1724,9 +1684,11 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
                     else
                         rotation = 0x100;
                     break;
+
                 case 4: // 180 deg
                     rotation = 0x100;
                     break;
+
                 case 5: // 225 deg
                     frameID += sprAnim->frameCount;
                     if (entity->direction)
@@ -1734,9 +1696,11 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
                     else
                         rotation = 384;
                     break;
+
                 case 6: // 270 deg
                     rotation = 384;
                     break;
+
                 case 7: // 315 deg
                     frameID += sprAnim->frameCount;
                     if (entity->direction)
@@ -1744,14 +1708,19 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
                     else
                         rotation = 0;
                     break;
+
                 default: break;
             }
 
             frame = &animFrames[sprAnim->frameListOffset + frameID];
             DrawSpriteRotated(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
                               rotation, frame->sheetID);
+            // DrawSpriteRotozoom(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width,
+            // frame->height,
+            //                  rotation, entity->scale, frame->sheetID);
             break;
         }
+
         default: break;
     }
 }
@@ -1848,405 +1817,8 @@ void DrawTexturedFace(void *v, byte sheetID)
     PS1ChainPrimsRawN(w, 9, 1);
     g_ps1Faces = g_ps1Faces + 1;
 }
-// Pre-scaled glyphs (tools/font/prescale_font.py, user decision 2026-09-24): the font's table,
-// loaded with it (LoadFontFile -> PS1LoadFontTable); entries per scale, drawn 1:1 from the atlas sheet.
-struct PS1Glyph {
-    uint16_t index, x, y, w, h;
-    int16_t dx, dy;
-};
-#define PS1_GLYPH_SCALES 4
-static PS1Glyph *s_glyphs = nullptr; // heap, exactly the table's size (Japanese Help: 1,436 entries, 20 KB)
-static uint16_t s_glyphScale[PS1_GLYPH_SCALES], s_glyphFirst[PS1_GLYPH_SCALES], s_glyphCount[PS1_GLYPH_SCALES];
-static int s_glyphScales = 0;
-static char s_glyphSheet[64];
-volatile uint32_t g_ps1GlyphTables = 0; // pre-scaled glyph tables loaded
-volatile uint32_t g_ps1GlyphFallback = 0, g_ps1GlyphFallbackScale = 0, g_ps1GlyphFallbackChar = 0; // chars drawn scaled (no pre-scaled glyph)
+void DrawFadedFace(void *v, uint color, uint fogColor, int alpha) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }  // special stage: phase 7
+void DrawTexturedFaceBlended(void *v, byte sheetID) { g_ps1DrawTodo = g_ps1DrawTodo + 1; } // special stage: phase 7
 
-void PS1LoadFontTable(const char *fontPath)
-{
-    s_glyphScales = 0;
-    psyqo_free(s_glyphs);
-    s_glyphs = nullptr;
-    char path[96];
-    int n = 0;
-    while (fontPath[n] && n < 80) path[n] = fontPath[n], ++n;
-    if (n > 4 && path[n - 4] == '.')
-        n -= 4;
-    memcpy(&path[n], "_ps1.bin", 9);
-    FILE *f = fopen(path, "rb");
-    if (!f)
-        return;
-    char magic[4];
-    uint16_t scales = 0;
-    bool ok = fread(magic, 1, 4, f) == 4 && !memcmp(magic, "PSF1", 4) && fread(&scales, 2, 1, f) == 1 && fread(s_glyphSheet, 1, 64, f) == 64;
-    int total = 0;
-    long body = ftell(f);
-    for (int k = 0; ok && k < scales && k < PS1_GLYPH_SCALES; ++k) { // pass 1: sizes
-        uint16_t hdr[2];
-        ok = fread(hdr, 2, 2, f) == 2 && fseek(f, hdr[1] * (long)sizeof(PS1Glyph), SEEK_CUR) == 0;
-        total += hdr[1];
-    }
-    ok = ok && total > 0 && (s_glyphs = (PS1Glyph *)psyqo_malloc(total * sizeof(PS1Glyph))) != nullptr && fseek(f, body, SEEK_SET) == 0;
-    total = 0;
-    for (int k = 0; ok && k < scales && k < PS1_GLYPH_SCALES; ++k) { // pass 2: entries
-        uint16_t hdr[2];
-        ok = fread(hdr, 2, 2, f) == 2;
-        if (ok) {
-            s_glyphScale[k] = hdr[0], s_glyphFirst[k] = (uint16_t)total, s_glyphCount[k] = hdr[1];
-            ok = fread(&s_glyphs[total], sizeof(PS1Glyph), hdr[1], f) == hdr[1];
-            total += hdr[1];
-            s_glyphScales = k + 1;
-        }
-    }
-    fclose(f);
-    s_glyphSheet[63] = 0;
-    if (!ok)
-        s_glyphScales = 0;
-    g_ps1GlyphTables = g_ps1GlyphTables + 1;
-}
-
-static const PS1Glyph *PS1FindGlyph(int scale, int index)
-{
-    for (int k = 0; k < s_glyphScales; ++k) {
-        if (s_glyphScale[k] != scale)
-            continue;
-        int lo = s_glyphFirst[k], hi = lo + s_glyphCount[k] - 1; // sorted by font index (prescale_font)
-        while (lo <= hi) {
-            int mid = (lo + hi) >> 1;
-            if (s_glyphs[mid].index == index)
-                return &s_glyphs[mid];
-            if (s_glyphs[mid].index < index)
-                lo = mid + 1;
-            else
-                hi = mid - 1;
-        }
-        return nullptr;
-    }
-    return nullptr;
-}
-
-// upstream DrawBitmapText (SW path): each character is a scaled sprite of the font's glyph rect on
-// textMenuSurfaceNo; with a pre-scaled table for this scale the glyph is drawn 1:1 instead (same place).
-void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
-{
-    TextMenu *tMenu = (TextMenu *)menu;
-    int Y           = YPos << 9;
-    if (rowCount < 0)
-        rowCount = tMenu->rowCount;
-    if (rowStart + rowCount > tMenu->rowCount)
-        rowCount = tMenu->rowCount - rowStart;
-    int psheet = -1;
-    for (int k = 0; k < s_glyphScales; ++k)
-        if (s_glyphScale[k] == scale && g_ps1AtlasSheetCount)
-            psheet = PS1AtlasFindSheet(s_glyphSheet);
-    while (rowCount > 0) {
-        int X = XPos << 9;
-        for (int i = 0; i < tMenu->entrySize[rowStart]; ++i) {
-            ushort c             = tMenu->textData[tMenu->entryStart[rowStart] + i];
-            FontCharacter *fChar = &fontCharacterList[c];
-            const PS1Glyph *g    = psheet >= 0 ? PS1FindGlyph(scale, c) : nullptr;
-            if (g) {
-                if (g->w && g->h && s_frameOpen && !PS1ObjectsHidden()) { // 0 x 0: too small at this scale
-                    int x = (X >> 9) + g->dx, y = (Y >> 9) + g->dy;
-                    PS1ForEachPieceAtlas(psheet, -1, g->w, g->h, g->x, g->y, [&](const PS1Piece &p) { PS1ChainPieceSprite(p, x + p.ox, y + p.oy); });
-                }
-            }
-            else {
-                g_ps1GlyphFallback = g_ps1GlyphFallback + 1, g_ps1GlyphFallbackScale = scale, g_ps1GlyphFallbackChar = c;
-                DrawSpriteScaled(FLIP_NONE, X >> 9, Y >> 9, -fChar->pivotX, -fChar->pivotY, scale, scale, fChar->width, fChar->height, fChar->srcX,
-                                 fChar->srcY, textMenuSurfaceNo);
-            }
-            X += fChar->xAdvance * scale;
-        }
-        Y += spacing * scale;
-        rowStart++;
-        rowCount--;
-    }
-}
+// Text menus (the scripts' DrawMenu: level select, results): phase 4 (2D menus). Counted.
 void DrawTextMenu(void *menu, int XPos, int YPos) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
-
-// ---------------------------------------------------------------------------------------------------
-// 3D floor (docs/28 phase 7): the special stages' floor, upstream Draw3DFloorLayer / Draw3DSkyLayer (the sky
-// variant is the same floor at the PC's double resolution). Upstream walks the floor per screen row y =
-// 128 + i (i = 4..111): the row sees the floor at forward distance f = K / i (K = YPos * 3 / 2048, px) and
-// steps f / 192 floor px per screen pixel along (-cos, sin). So a floor point at forward f and lateral l
-// (px, camera frame) is on screen at x = 160 + 192 l / f, y = 128 + K / f. Here:
-//  - far rows (more than PS1_FLOOR_NEAR px ahead): one textured line each over the far-floor texture
-//    (tools/floor/build_floor.py: 1 texel per 16x16 tile, tile page 3), its ends computed as upstream's
-//    line walk and clipped to the floor; a row is affine in floor space, so GPU interpolation is exact;
-//  - near rows: every visible 16x16 floor tile as one textured quad through the projection above
-//    (vertices shared per grid row), clipped to those rows by the drawing area. PS1 textures are affine
-//    per quad; at 16 px per tile the warp stays small.
-#define PS1_FLOOR_NEAR      320 // px ahead drawn as tile quads (~350 at the special stages' camera height; farther rows: the far texture)
-#define PS1_FLOOR_MAX_QUADS 900
-#define PS1_FLOOR_GRID      120 // vertices per row buffer (2 rows x 120 x 4 bytes in the 1 KB scratchpad)
-#define PS1_FLOOR_S         8   // GTE input scale (1/8 px): |dx| <= 4095 px fits a 16-bit vertex
-#define PS1_FLOOR_SZMIN     97  // SZ below H / 2 (96) saturates the GTE divide: corner nearer than 12 px
-
-volatile uint32_t g_ps1FloorQuads = 0; // tile quads of the last floor
-volatile uint32_t g_ps1FloorLines = 0; // far textured lines of the last floor
-volatile uint32_t g_ps1FloorHbl   = 0; // CPU time of the last floor (hblanks)
-volatile int32_t  g_ps1FloorNearY = 0; // first screen row drawn with tile quads
-volatile uint32_t g_ps1FloorCand  = 0; // tiles visited for the last floor
-
-// Parameter interval [*t0, *t1] (screen x steps) where p0 + t * dp stays inside [0, max).
-static void PS1FloorClipAxis(int p0, int dp, int max, int *t0, int *t1)
-{
-    if (dp == 0) {
-        if (p0 < 0 || p0 >= max)
-            *t0 = 1, *t1 = 0;
-        return;
-    }
-    // t with p0 + t dp >= 0 and <= max - 1, rounded inward.
-    int lo, hi;
-    if (dp > 0) {
-        lo = p0 >= 0 ? 0 : (-p0 + dp - 1) / dp;
-        hi = (max - 1 - p0) >= 0 ? (max - 1 - p0) / dp : -1;
-    } else {
-        int n = -dp;
-        lo = p0 <= max - 1 ? 0 : (p0 - (max - 1) + n - 1) / n;
-        hi = p0 >= 0 ? p0 / n : -1;
-    }
-    if (lo > *t0)
-        *t0 = lo;
-    if (hi < *t1)
-        *t1 = hi;
-}
-
-static void PS1Draw3DFloor(int layerID)
-{
-    uint32_t t0      = PS1Hblanks();
-    TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
-    if (!layer->xsize || !layer->ysize || layer->YPos <= 0)
-        return;
-    PS1TileSetup();
-    int a      = layer->angle & 0x1FF;
-    int sn     = sinMLookupTable[a], cs = cosMLookupTable[a];
-    int floorW = layer->xsize << 7, floorH = layer->ysize << 7; // px
-    int camX   = layer->XPos >> 4, camZ = layer->ZPos >> 4; // 1/4096 px (upstream layerXPos, ZBuffer)
-    int yPos   = layer->YPos;
-    int K      = (int)((int64_t)yPos * 3 / 2048); // f = K / i (px)
-    if (K <= 0)
-        return;
-    int iNear = K / PS1_FLOOR_NEAR;
-    if (iNear < 4)
-        iNear = 4;
-    if (iNear > 112)
-        iNear = 112;
-    g_ps1FloorNearY = 128 + iNear;
-
-    // Far rows: upstream's line walk, one textured line per row over the far-floor texture.
-    int lines = 0;
-    if (g_ps1FloorTexW && g_ps1FloorScale == 16) {
-        uint32_t tpage = (uint32_t)(PS1_FLOOR_PAGE_X | (PS1_FLOOR_PAGE_Y << 4) | (1 << 7));
-        uint32_t clut  = s_tileClutWord;
-        uint32_t buf[16 * 9];
-        int n = 0;
-        PS1ChainDrawArea(0, 132, SCREEN_XSIZE, 128 + iNear);
-        for (int i = 4; i < iNear; ++i) {
-            int d  = yPos / (i << 9);
-            int xb = d * -cs >> 8, zb = sn * d >> 8;
-            int x0 = camX + (3 * sn * d >> 2) - xb * SCREEN_CENTERX;
-            int z0 = camZ + (3 * cs * d >> 2) - zb * SCREEN_CENTERX;
-            int tA = 0, tB = SCREEN_XSIZE - 1;
-            PS1FloorClipAxis(x0, xb, floorW << 12, &tA, &tB);
-            PS1FloorClipAxis(z0, zb, floorH << 12, &tA, &tB);
-            if (tA > tB)
-                continue;
-            int uA = (x0 + tA * xb) >> 16, vA = (z0 + tA * zb) >> 16;
-            int uB = (x0 + (tB + 1) * xb) >> 16, vB = (z0 + (tB + 1) * zb) >> 16;
-            uA = uA < 0 ? 0 : uA > 255 ? 255 : uA, vA = vA < 0 ? 0 : vA > 255 ? 255 : vA;
-            uB = uB < 0 ? 0 : uB > 255 ? 255 : uB, vB = vB < 0 ? 0 : vB > 255 ? 255 : vB;
-            uint32_t y = 128 + i, xl = (uint32_t)tA, xr = (uint32_t)(tB + 1);
-            uint32_t *q = &buf[n * 9];
-            q[0] = 0x2C808080;
-            q[1] = (y << 16) | xl;
-            q[2] = clut | ((uint32_t)vA << 8) | (uint32_t)uA;
-            q[3] = (y << 16) | xr;
-            q[4] = (tpage << 16) | ((uint32_t)vB << 8) | (uint32_t)uB;
-            q[5] = ((y + 1) << 16) | xl;
-            q[6] = ((uint32_t)vA << 8) | (uint32_t)uA;
-            q[7] = ((y + 1) << 16) | xr;
-            q[8] = ((uint32_t)vB << 8) | (uint32_t)uB;
-            ++lines;
-            if (++n == 16) {
-                PS1ChainPrimsRawN(buf, 9, n);
-                n = 0;
-            }
-        }
-        if (n)
-            PS1ChainPrimsRawN(buf, 9, n);
-    }
-    g_ps1FloorLines = lines;
-
-    // Near rows: projected tile quads over the floor region they see: the convex quadrilateral of the
-    // world points under the screen corners (rows 128 + iNear and 240, x = 0 and 320). Per 16-px tile row,
-    // only the tiles overlapping it are visited; their corners are projected by the GTE (RTPT) into two
-    // vertex rows in the scratchpad, indexed from the region's first tile column.
-    int px[4], pz[4];
-    for (int k = 0; k < 2; ++k) {
-        int i  = k ? 112 : iNear;
-        int d  = yPos / (i << 9);
-        int xb = d * -cs >> 8, zb = sn * d >> 8;
-        int x0 = camX + (3 * sn * d >> 2) - xb * SCREEN_CENTERX;
-        int z0 = camZ + (3 * cs * d >> 2) - zb * SCREEN_CENTERX;
-        for (int e = 0; e < 2; ++e) { // corner order around the quadrilateral: near-left, near-right, bottom-right, bottom-left
-            int c = k ? 3 - e : e;
-            px[c] = (x0 + e * SCREEN_XSIZE * xb) >> 12, pz[c] = (z0 + e * SCREEN_XSIZE * zb) >> 12;
-        }
-    }
-    int minX = px[0], maxX = px[0], minZ = pz[0], maxZ = pz[0];
-    for (int c = 1; c < 4; ++c) {
-        minX = px[c] < minX ? px[c] : minX, maxX = px[c] > maxX ? px[c] : maxX;
-        minZ = pz[c] < minZ ? pz[c] : minZ, maxZ = pz[c] > maxZ ? pz[c] : maxZ;
-    }
-    int tilesW = floorW >> 4, tilesH = floorH >> 4;
-    int tz0 = (minZ >> 4) - 1, tz1 = (maxZ >> 4) + 1;
-    tz0 = tz0 < 0 ? 0 : tz0, tz1 = tz1 > tilesH - 1 ? tilesH - 1 : tz1;
-    // x-range of the region inside world band [za, zb] (edge crossings + corners inside), in tiles
-    auto rowRange = [&](int za, int zb, int &ta, int &tb) {
-        int lo = 0x7FFFFFFF, hi = -0x7FFFFFFF;
-        for (int c = 0; c < 4; ++c) {
-            int n = (c + 1) & 3;
-            if (pz[c] >= za && pz[c] <= zb)
-                lo = px[c] < lo ? px[c] : lo, hi = px[c] > hi ? px[c] : hi;
-            int zlo = pz[c] < pz[n] ? pz[c] : pz[n], zhi = pz[c] < pz[n] ? pz[n] : pz[c];
-            if (zlo == zhi)
-                continue;
-            for (int zz = za; ; zz = zb) {
-                if (zz >= zlo && zz <= zhi) {
-                    // 32-bit: floor coordinates are px within the 4096-px floor (|products| < 2^25);
-                    // a 64-bit divide is a slow libgcc call on the R3000A
-                    int x = px[c] + (zz - pz[c]) * (px[n] - px[c]) / (pz[n] - pz[c]);
-                    lo = x < lo ? x : lo, hi = x > hi ? x : hi;
-                }
-                if (zz == zb)
-                    break;
-            }
-        }
-        ta = (lo >> 4) - 1, tb = (hi >> 4) + 1;
-        ta = ta < 0 ? 0 : ta, tb = tb > tilesW - 1 ? tilesW - 1 : tb;
-    };
-    int quads = 0, cand = 0;
-    if (tz0 <= tz1 && minX < floorW && maxX >= 0) {
-        int gx0 = (minX >> 4) - 2;
-        gx0     = gx0 < 0 ? 0 : gx0;
-        // Vertex rows in the scratchpad (1 KB, unused elsewhere): 2 x PS1_FLOOR_GRID x (int16 x, y); x = 0x7FFF
-        // marks a corner too near for the GTE divide.
-        uint32_t *rowA = reinterpret_cast<uint32_t *>(0x1F800000), *rowB = rowA + PS1_FLOOR_GRID;
-        uint32_t *prev = rowA, *cur = rowB;
-        using namespace psyqo::GTE;
-        write<Register::R11R12, Unsafe>((uint32_t)(uint16_t)(int16_t)-cs);
-        write<Register::R13R21, Unsafe>((uint32_t)(uint16_t)(int16_t)sn);
-        clear<Register::R22R23, Unsafe>();
-        write<Register::R31R32, Unsafe>((uint32_t)(uint16_t)(int16_t)sn);
-        write<Register::R33, Unsafe>((uint32_t)(uint16_t)(int16_t)cs);
-        clear<Register::TRX, Unsafe>();
-        write<Register::TRY, Unsafe>((uint32_t)(K * PS1_FLOOR_S / 192));
-        clear<Register::TRZ, Unsafe>();
-        write<Register::OFX, Unsafe>((uint32_t)(SCREEN_CENTERX << 16));
-        write<Register::OFY, Unsafe>((uint32_t)(128 << 16));
-        write<Register::H, Safe>(192);
-        int camXs = camX >> 9, camZs = camZ >> 9; // 1/8 px
-        // GTE (psx-spx "GTE Coordinate Calculation Commands", RTPT): camera frame = rotation by the floor
-        // angle, lateral l along (-cos, sin), forward f along (sin, cos); vertex (dx, 0, dz) * S, TRY = K S / 192,
-        // H = 192, offsets (160, 128): SX = 160 + l * 192 / f, SY = 128 + (K / 192) * 192 / f = 128 + K / f.
-        auto project = [&](uint32_t *row, int wz, int ta, int tb) {
-            int dz = wz * PS1_FLOOR_S - camZs;
-            dz     = dz < -32767 ? -32767 : dz > 32767 ? 32767 : dz;
-            for (int tx = ta; tx <= tb + 1; tx += 3) {
-                uint32_t xy[3];
-                for (int j = 0; j < 3; ++j) {
-                    int dx = ((tx + j) << 4) * PS1_FLOOR_S - camXs;
-                    dx     = dx < -32767 ? -32767 : dx > 32767 ? 32767 : dx;
-                    xy[j]  = (uint16_t)dx; // VY = 0
-                }
-                write<Register::VXY0, Unsafe>(xy[0]);
-                write<Register::VZ0, Unsafe>((uint32_t)dz);
-                write<Register::VXY1, Unsafe>(xy[1]);
-                write<Register::VZ1, Unsafe>((uint32_t)dz);
-                write<Register::VXY2, Unsafe>(xy[2]);
-                write<Register::VZ2, Safe>((uint32_t)dz);
-                Kernels::rtpt();
-                uint32_t s0 = readRaw<Register::SXY0, Safe>(), s1 = readRaw<Register::SXY1, Safe>(), s2 = readRaw<Register::SXY2, Safe>();
-                uint32_t z1 = readRaw<Register::SZ1, Safe>(), z2 = readRaw<Register::SZ2, Safe>(), z3 = readRaw<Register::SZ3, Safe>();
-                uint32_t *v = &row[tx - gx0];
-                v[0] = (z1 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s0;
-                v[1] = (z2 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s1;
-                v[2] = (z3 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s2;
-            }
-        };
-        PS1ChainDrawArea(0, 128 + iNear, SCREEN_XSIZE, SCREEN_YSIZE);
-        int yTop = 128 + iNear;
-        int taPrev, tbPrev, ta, tb, taNext, tbNext;
-        rowRange(tz0 << 4, (tz0 << 4) + 16, ta, tb);
-        rowRange((tz0 << 4) - 16, tz0 << 4, taPrev, tbPrev);
-        // top vertex row of the first tile row: covers this and the (empty) previous tile row
-        project(prev, tz0 << 4, ta < taPrev ? ta : taPrev, tb > tbPrev ? tb : tbPrev);
-        for (int tz = tz0; tz <= tz1 && quads < PS1_FLOOR_MAX_QUADS; ++tz) {
-            rowRange((tz + 1) << 4, ((tz + 1) << 4) + 16, taNext, tbNext);
-            int ua = ta < taNext ? ta : taNext, ub = tb > tbNext ? tb : tbNext;
-            if (ub + 2 - gx0 > PS1_FLOOR_GRID)
-                ub = gx0 + PS1_FLOOR_GRID - 2;
-            project(cur, (tz + 1) << 4, ua, ub);
-            const ushort *chunkRow = &layer->tiles[(tz >> 3) << 8];
-            int te = tb + 1 - gx0 > PS1_FLOOR_GRID - 1 ? gx0 + PS1_FLOOR_GRID - 2 : tb;
-            if (te - ta + 1 > PS1_FLOOR_MAX_QUADS - quads)
-                te = ta + PS1_FLOOR_MAX_QUADS - quads - 1;
-            // The row's quads go straight into the arena, one fragment each, linked once (PS1ChainBulkBegin).
-            uint32_t *q = nullptr;
-            if (te >= ta && !(q = PS1ChainBulkBegin(te - ta + 1, 9)))
-                break; // the arena is full
-            int rowQuads = 0;
-            for (int tx = ta; tx <= te; ++tx) {
-                ++cand;
-                uint32_t A = prev[tx - gx0], B = prev[tx - gx0 + 1], C = cur[tx - gx0], D = cur[tx - gx0 + 1];
-                if (A == 0x7FFF || B == 0x7FFF || C == 0x7FFF || D == 0x7FFF)
-                    continue; // a corner under 12 px ahead: the whole tile is below the screen
-                int ax = (int16_t)A, bx = (int16_t)B, cx = (int16_t)C, dx = (int16_t)D;
-                int ay = (int32_t)A >> 16, by = (int32_t)B >> 16, cy = (int32_t)C >> 16, dy = (int32_t)D >> 16;
-                int x0 = ax < bx ? ax : bx, x1 = ax < bx ? bx : ax, y0 = ay < by ? ay : by, y1 = ay < by ? by : ay;
-                x0 = cx < x0 ? cx : x0, x1 = cx > x1 ? cx : x1, y0 = cy < y0 ? cy : y0, y1 = cy > y1 ? cy : y1;
-                x0 = dx < x0 ? dx : x0, x1 = dx > x1 ? dx : x1, y0 = dy < y0 ? dy : y0, y1 = dy > y1 ? dy : y1;
-                if (x1 < 0 || x0 >= SCREEN_XSIZE || y1 < yTop || y0 >= SCREEN_YSIZE || x1 - x0 > 1023 || y1 - y0 > 511)
-                    continue;
-                uint16_t tv = s_tileVis[(chunkRow[tx >> 3] << 6) + (tx & 7) + ((tz & 7) << 3)];
-                if (!(tv & PS1_TV_SOLID))
-                    continue;
-                int t = tv & PS1_TV_INDEX, dir = (tv >> PS1_TV_DIR_SHIFT) & 3;
-                int page = t >> 8, pt = t & 0xFF;
-                int u = (pt & 0xF) << 4, v = (pt >> 4) << 4;
-                int uL = u, uR = u + 15, vT = v, vB = v + 15;
-                if (dir & FLIP_X)
-                    uL = u + 15, uR = u;
-                if (dir & FLIP_Y)
-                    vT = v + 15, vB = v;
-                uint32_t tpage = (uint32_t)((PS1_TILE_PAGE_X + 2 * (page & 1)) | ((PS1_TILE_PAGE_Y + (page >> 1)) << 4) | (1 << 7));
-                q[0] = 0x2C808080;
-                q[1] = A;
-                q[2] = s_tileClutWord | ((uint32_t)vT << 8) | (uint32_t)uL;
-                q[3] = B;
-                q[4] = (tpage << 16) | ((uint32_t)vT << 8) | (uint32_t)uR;
-                q[5] = C;
-                q[6] = ((uint32_t)vB << 8) | (uint32_t)uL;
-                q[7] = D;
-                q[8] = ((uint32_t)vB << 8) | (uint32_t)uR;
-                q += 10;
-                ++rowQuads;
-            }
-            if (q)
-                PS1ChainBulkEnd(rowQuads);
-            quads += rowQuads;
-            uint32_t *tmp = prev;
-            prev          = cur;
-            cur           = tmp;
-            ta = taNext, tb = tbNext;
-        }
-    }
-    g_ps1FloorCand = cand;
-    PS1ChainDrawAreaReset();
-    g_ps1FloorQuads = quads;
-    g_ps1FloorHbl   = PS1HblanksSince(t0);
-    g_ps1ProfFloorsHbl = g_ps1ProfFloorsHbl + g_ps1FloorHbl;
-}
-

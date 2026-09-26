@@ -25,13 +25,14 @@ upstream RSDKModding (read-only), `fork` = github.com/danielgpinheiro/RSDKv4-ps1
 
 ## Build / run / debug
 ```bash
-make -j8                        # rsdkv4.ps-exe (+ .elf, .map): the engine (headless until phase 3); must fit 2 MB
+make -j8                        # rsdkv4.ps-exe (+ .elf, .map): the engine; must fit 2 MB
 make -j8 BOOT=Zone01 [BOOT_ID=2] [BOOT_PLAYER=0..3]   # start in a stage (0 Sonic, 1 Tails, 2 Knuckles, 3 Sonic & Tails);
                                 # touch RSDKv4/main.cpp RSDKv4/RetroEngine.cpp when switching
 make PLATFORM_TEST=1            # the phase 0 smoke-test app (ps1/platform_test.cpp)
 tools/data_disc.sh              # game disc from ../Sonic2_Extracted (Data/ + Bytecode/, no sources / menus / ZoneM)
                                 # + manifests (tools/rsdkmanifest), atlases per variant, tile pages (phase 3.1)
 tools/vram_test.sh Zone01_st [OUT] [F]        # BOOT= build: tile pages + atlas + palette in VRAM == the files
+[MASK=8 FROM=240] tools/frame_capture.sh N OUT                  # both framebuffers as PNGs at frame N + renderer counters
 tools/boot_test.sh [OUT] [F1] [F2]            # headless boot over GDB: loads, fps, heap, VM/array guards
 tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, land (g_ps1PadTestMask) + dumps
 python3 tools/tiles_check.py ../Sonic2_Extracted/Data/Stages/Zone01 OUT     # packed chunk tiles == file
@@ -52,7 +53,7 @@ than watchpoints. GDB convenience variables must not be register names (`$v0`, `
 |---|---|
 | `RSDKv4/` | the engine (upstream decompilation) + PS1 code behind `RETRO_PLATFORM == RETRO_PS1` (`main.cpp` = the psyqo app, `RetroEngine::RunFrame`; arrays sized from the data, `../docs/30` phase 2 appendix) |
 | `RSDKv4/NativeObjects/` | the 2013 menus as native C++ objects (drawn by `RSDKv4/Renderer.cpp`): phase 1 research |
-| `ps1/` | PS1 platform layer (see `ps1/README.md`); `render_headless.cpp` / `audio_headless.cpp` = phase 2 stand-ins; `platform_test.cpp` = phase 0 app; `render`, `tileset`, `sprite_atlas`, `fmv` (from Sonic CD) join in phase 3 |
+| `ps1/` | PS1 platform layer (see `ps1/README.md`); `render.cpp` = the GPU renderer (phase 3, from Sonic CD; tiles from the packed chunk table), `tileset` / `sprite_atlas` = stage-load VRAM uploads; `audio_headless.cpp` = stand-in until phase 5; `platform_test.cpp` = phase 0 app |
 | `tools/disc/` | mkpsxiso BIN/CUE builder (file index, two mastering passes) + byte-level verifier |
 | `tools/loading/`, `tools/memcard/` | loading / save icon builders and checks |
 | `tools/smoke_*.sh`, `vramshot.py`, `pad.lua`, `frame_capture.sh`, `boot_test.sh` | harness |
