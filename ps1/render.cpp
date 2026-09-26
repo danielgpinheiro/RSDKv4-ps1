@@ -1952,11 +1952,32 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
 volatile uint32_t g_ps1Faces        = 0; // faces chained (flat + textured), total
 volatile uint32_t g_ps1FaceTexMiss  = 0; // textured faces whose UVs span no single atlas cluster (skipped)
 
+// Upstream's software rasterizer fills the convex hull of a face's 4 corners, in any order (its scan edges join every
+// pair); the GPU's quad is a triangle strip (0 1 2, 1 2 3). Strip order: the diagonal (1-2) is the corner pair whose
+// line has the other two corners on opposite sides.
+static void PS1QuadStrip(const Vertex *in, Vertex *out)
+{
+    auto side = [&](int i, int j, int k) {
+        long long d = (long long)(in[j].x - in[i].x) * (in[k].y - in[i].y) - (long long)(in[j].y - in[i].y) * (in[k].x - in[i].x);
+        return d > 0 ? 1 : d < 0 ? -1 : 0;
+    };
+    static const int pairs[3][4] = { { 1, 2, 0, 3 }, { 0, 3, 1, 2 }, { 0, 2, 1, 3 } }; // diagonal i j, others k l
+    for (const int *p : pairs) {
+        if (side(p[0], p[1], p[2]) * side(p[0], p[1], p[3]) < 0) {
+            out[0] = in[p[2]], out[1] = in[p[0]], out[2] = in[p[1]], out[3] = in[p[3]];
+            return;
+        }
+    }
+    for (int k = 0; k < 4; ++k) out[k] = in[k]; // degenerate (collinear corners): as given
+}
+
 void DrawFace(void *v, uint colour)
 {
     if (!s_frameOpen || PS1ObjectsHidden())
         return;
-    const Vertex *q = (const Vertex *)v;
+    Vertex strip[4];
+    PS1QuadStrip((const Vertex *)v, strip);
+    const Vertex *q = strip;
     int alpha       = (int)((colour & 0x7F000000) >> 23); // upstream: 0-254, 0xFE = opaque
     int level       = alpha >= 0xFE ? 3 : PS1AlphaLevel(alpha);
     if (!level)
@@ -1989,12 +2010,15 @@ void DrawFace(void *v, uint colour)
     g_ps1Faces = g_ps1Faces + 1;
 }
 
-void DrawTexturedFace(void *v, byte sheetID)
+volatile int32_t g_ps1FaceMissSheet = -1, g_ps1FaceMissU0 = 0, g_ps1FaceMissV0 = 0, g_ps1FaceMissU1 = 0, g_ps1FaceMissV1 = 0;
+
+// Textured quads (Draw3DScene's TEXTURED_* faces); blended: B/2 + F/2 on the texels (upstream DrawTexturedFaceBlended:
+// (texel & 0xF7BC) >> 1 + (pixel & 0xF7BC) >> 1), the PS1's semi-transparency mode 0.
+static void PS1TexturedFace(const Vertex *q, byte sheetID, bool blended)
 {
     if (!s_frameOpen || PS1ObjectsHidden())
         return;
-    const Vertex *q = (const Vertex *)v;
-    int sheet       = PS1SurfaceSheet(sheetID);
+    int sheet = PS1SurfaceSheet(sheetID);
     if (sheet < 0) {
         g_ps1SheetUnbound = g_ps1SheetUnbound + 1;
         return;
@@ -2016,7 +2040,9 @@ void DrawTexturedFace(void *v, byte sheetID)
     const PS1AtlasCluster *c = PS1FindCluster(sheet, u0, v0);
     // UV edges may reach the cluster's far edge (u1 == srcX + w): texel u1 itself is never sampled.
     if (!c || u1 > c->srcX + c->w || v1 > c->srcY + c->h) {
-        g_ps1FaceTexMiss = g_ps1FaceTexMiss + 1;
+        g_ps1FaceTexMiss   = g_ps1FaceTexMiss + 1;
+        g_ps1FaceMissSheet = sheet;
+        g_ps1FaceMissU0 = u0, g_ps1FaceMissV0 = v0, g_ps1FaceMissU1 = u1, g_ps1FaceMissV1 = v1;
         return;
     }
     psyqo::PrimPieces::TPageAttr tp = PS1ClusterTPage(c);
@@ -2028,8 +2054,14 @@ void DrawTexturedFace(void *v, byte sheetID)
         int u = c->u + q[k].u - c->srcX, vv = c->v + q[k].v - c->srcY;
         return (uint32_t)(uint8_t)(u > 255 ? 255 : u) | ((uint32_t)(uint8_t)(vv > 255 ? 255 : vv) << 8);
     };
+    if (blended) {
+        psyqo::PrimPieces::TPageAttr attr;
+        memcpy(&attr, &tpage, 2);
+        attr.set(psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront);
+        memcpy(&tpage, &attr, 2);
+    }
     uint32_t w[9];
-    w[0] = 0x2C808080; // GP0 2Ch textured quad, colour 0x80 (texels unchanged)
+    w[0] = (blended ? 0x2E808080u : 0x2C808080u); // GP0 2Ch / 2Eh textured quad (semi-transparent), colour 0x80
     for (int k = 0; k < 4; ++k) w[1 + 2 * k] = (uint32_t)(uint16_t)q[k].x | ((uint32_t)(uint16_t)q[k].y << 16);
     w[2] = uv(0) | ((uint32_t)clut << 16);
     w[4] = uv(1) | ((uint32_t)tpage << 16);
@@ -2038,8 +2070,29 @@ void DrawTexturedFace(void *v, byte sheetID)
     PS1ChainPrimsRawN(w, 9, 1);
     g_ps1Faces = g_ps1Faces + 1;
 }
-void DrawFadedFace(void *v, uint color, uint fogColor, int alpha) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }  // special stage: phase 7
-void DrawTexturedFaceBlended(void *v, byte sheetID) { g_ps1DrawTodo = g_ps1DrawTodo + 1; } // special stage: phase 7
+void DrawTexturedFace(void *v, byte sheetID) { PS1TexturedFace((const Vertex *)v, sheetID, false); }
+void DrawTexturedFaceBlended(void *v, byte sheetID) { PS1TexturedFace((const Vertex *)v, sheetID, true); }
+
+// Upstream DrawFadedFace (the special stage's half-pipe): an opaque flat quad of the colour faded toward fogColor, per
+// 5-bit channel fog * (255 - alpha) >> 8 + colour * alpha >> 8 (its blendLookupTable), then DrawFace's flat quad.
+void DrawFadedFace(void *v, uint color, uint fogColor, int alpha)
+{
+    const Vertex *q = (const Vertex *)v;
+    if (alpha > 0xFF)
+        alpha = 0xFF;
+    if (alpha < 1)
+        return;
+    if ((q[0].x < 0 && q[1].x < 0 && q[2].x < 0 && q[3].x < 0) || (q[0].x > SCREEN_XSIZE && q[1].x > SCREEN_XSIZE && q[2].x > SCREEN_XSIZE && q[3].x > SCREEN_XSIZE)
+        || (q[0].y < 0 && q[1].y < 0 && q[2].y < 0 && q[3].y < 0) || (q[0].y > SCREEN_YSIZE && q[1].y > SCREEN_YSIZE && q[2].y > SCREEN_YSIZE && q[3].y > SCREEN_YSIZE))
+        return;
+    if ((q[0].x == q[1].x && q[1].x == q[2].x && q[2].x == q[3].x) || (q[0].y == q[1].y && q[1].y == q[2].y && q[2].y == q[3].y))
+        return;
+    auto ch = [&](int shift) {
+        int c5 = ((color >> shift) & 0xFF) >> 3, f5 = ((fogColor >> shift) & 0xFF) >> 3;
+        return (uint32_t)((f5 * (0xFF - alpha) >> 8) + (c5 * alpha >> 8)) << 3;
+    };
+    DrawFace(v, 0x7F000000u | ch(16) << 16 | ch(8) << 8 | ch(0)); // alpha 0xFE: opaque
+}
 
 // Text menus (the scripts' DrawMenu: the level select and its results screens): upstream's code as is. Each character is
 // an 8 x 8 DrawSprite of the object's sheet (LevelSelect/Text.gif: the ASCII grid, the highlighted copy 128 lines
