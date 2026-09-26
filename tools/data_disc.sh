@@ -11,7 +11,7 @@
 # BG line strips (phase 3.5, after both: they fill the VRAM each atlas leaves free): tools/bgstrips ->
 # Data/Stages/<Stage>/BGStrips<suffix>.bin.
 # SFX (phase 5.1): tools/audio/build_sfx.py -> Data/Game/PS1SfxResident.bin, PS1SfxMenu.bin,
-# Data/Stages/<Stage>/PS1Sfx.bin. Music joins in phase 5.2.
+# Data/Stages/<Stage>/PS1Sfx.bin. Music (5.2): tools/audio/build_music.py -> Data/Music/Music.xa + Music.bin.
 set -eu
 cd "$(dirname "$0")/.."
 SRC=${SRC:-../Sonic2_Extracted}
@@ -34,5 +34,7 @@ done
 /usr/bin/python3 tools/menu/build_menu.py "$SRC/Data" build/iso/Data # menu art + fonts + strings (phase 4.2)
 # SFX banks (phase 5.1): resident + menu + one per stage, SPU-ADPCM, from the original scripts' reachable sets
 /usr/bin/python3 tools/audio/build_sfx.py "$SRC/Data" build/iso/Data "$SRC/Bytecode"
+# Music (phase 5.2): 44 Ogg tracks -> Data/Music/Music.xa (CD-XA, 8 channels, loop rows from the scripts) + Music.bin
+/usr/bin/python3 tools/audio/build_music.py "$SRC/Data" build/iso/Data "$SRC/Bytecode"
 echo "iso root: $(find build/iso -type f | wc -l | tr -d ' ') files, $(du -sh build/iso | cut -f1)"
 make -s disc

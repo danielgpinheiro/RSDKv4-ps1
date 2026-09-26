@@ -48,6 +48,11 @@ bool useSGame = false;
 bool ReadSaveRAMData()
 {
     useSGame = false;
+#if RETRO_PLATFORM == RETRO_PS1
+    // saveRAM lives for the session until phase 8 writes it to the memory card; no file access (a CD file open
+    // would stop the CD-XA music: one CD action at a time).
+    return true;
+#endif
     char buffer[0x180];
 #if RETRO_USE_MOD_LOADER
 #if RETRO_PLATFORM == RETRO_UWP
@@ -119,6 +124,11 @@ bool ReadSaveRAMData()
 
 bool WriteSaveRAMData()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    // saveRAM lives for the session until phase 8 writes it to the memory card; no file access (a CD file open
+    // would stop the CD-XA music: one CD action at a time).
+    return true;
+#endif
     char buffer[0x180];
 
     if (!useSGame) {
@@ -853,6 +863,9 @@ void ReadUserdata()
 
 void WriteUserdata()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    return; // achievements / leaderboards have no PS1 store; a CD file open would stop the CD-XA music
+#endif
     char buffer[0x100];
 #if RETRO_USE_MOD_LOADER
 #if RETRO_PLATFORM == RETRO_UWP

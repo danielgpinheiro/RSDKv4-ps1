@@ -7,7 +7,9 @@
 // the menu screens run, the menus' bank. LoadSfx only records the path; a sample is playable once a bank set its
 // sfxList entry. RSDK channel c plays on SPU voice c + 1 (voices 1 and 3 have SPU capture buffers: evidence).
 //
-// Music (5.2: CD-XA): the engine's state only until then.
+// Music (5.2): CD-XA (tools/audio/build_music.py, ps1/xa_music): the drive decodes, the SPU mixes its CD input. A
+// track loops at its script loop point (row-exact); SwapMusicTrack starts the new track at the old position times
+// its ratio, as upstream's Ogg seek.
 #include "RetroEngine.hpp"
 
 #include <stdio.h>
@@ -15,6 +17,7 @@
 #include <psyqo/alloc.h>
 
 #include "spu.hh"
+#include "xa_music.hh"
 
 int globalSFXCount = 0;
 int stageSFXCount  = 0;
@@ -39,7 +42,8 @@ StreamInfo streamInfo[STREAMFILE_COUNT];
 
 ChannelInfo sfxChannels[CHANNEL_COUNT];
 
-static int s_currentMusicTrack = -1;
+static int currentMusicTrack = -1;
+static bool s_xaReady         = false; // Music.xa found (PS1XaInit)
 
 // ---- SFX banks -------------------------------------------------------------------------------------
 
@@ -186,11 +190,37 @@ static void PS1SpuDebugService()
     }
 }
 
+volatile uint32_t g_ps1MusicSilentFrames = 0; // frames with musicStatus PLAYING but no XA stream (GDB)
+volatile int32_t g_ps1MusicTestPlay      = -1; // GDB test hooks: >= 0 -> PlayMusic(n) next frame, like a script,
+volatile int32_t g_ps1MusicTestRow       = -1; // ... then from this row (loop checks near a track's end)
+volatile int32_t g_ps1MusicTestSwap      = 0;  // 1 -> Wing Fortress's SwapMusicTrack("Invincibility.ogg", 2, 38679, 12500)
+
 void PS1AudioUpdate()
 {
     if (!audioEnabled)
         return;
     PS1SpuDebugService();
+    if (g_ps1MusicTestPlay >= 0) {
+        PlayMusic(g_ps1MusicTestPlay, 0);
+        if (g_ps1MusicTestRow >= 0)
+            PS1XaPlayAt(PS1XaCurrentTrack(), PS1XaCurrentLoop(), (uint32_t)g_ps1MusicTestRow);
+        g_ps1MusicTestPlay = -1;
+        g_ps1MusicTestRow  = -1;
+    }
+    if (g_ps1MusicTestSwap) {
+        SwapMusicTrack("Invincibility.ogg", 2, 38679, 12500);
+        g_ps1MusicTestSwap = 0;
+    }
+    // Music: the PC gain bgmVolume * masterVolume (script fades) on the SPU CD input (0x7FFF = 1.0); a non-looping
+    // track that reached its end stops like the Ogg stream at the end of its file.
+    if (musicStatus == MUSIC_PLAYING && PS1XaEnded())
+        musicStatus = MUSIC_STOPPED;
+    // The engine thinks music plays but the drive isn't streaming it (a file read stopped it and nothing played
+    // again): silence the PC wouldn't have.
+    if (musicStatus == MUSIC_PLAYING && !PS1XaPlaying())
+        g_ps1MusicSilentFrames = g_ps1MusicSilentFrames + 1;
+    int cdVol = musicStatus == MUSIC_PLAYING ? 0x7fff * bgmVolume / MAX_VOLUME * masterVolume / MAX_VOLUME : 0;
+    PS1SpuSetCdVolume((uint16_t)cdVol, (uint16_t)cdVol);
     // PC mixer: a channel's sample that runs out restarts when it loops, else the channel is freed (StopSfx). On the
     // SPU the voice's envelope drops to 0 at the sample's end block (spu.hh).
     for (int c = 0; c < CHANNEL_COUNT; ++c) {
@@ -209,6 +239,7 @@ int InitAudioPlayback()
     PS1SpuInit();
     audioEnabled   = true;
     s_spuStageBase = PS1SfxLoadBank("Data/Game/PS1SfxResident.bin", PS1_SPU_SAMPLE_START, true);
+    s_xaReady      = PS1XaInit(); // Data/Music/Music.bin + Music.xa
     StopAllSfx(); //"init"
     LoadGlobalSfx();
     return true;
@@ -290,10 +321,70 @@ void LoadGlobalSfx()
     for (int i = 0; i < CHANNEL_COUNT; ++i) sfxChannels[i].sfxID = -1;
 }
 
-// ---- music (phase 5.2: CD-XA) ------------------------------------------------------------------------
+// ---- music (RSDKv4/Audio.cpp semantics on CD-XA) --------------------------------------------------------
 
-void PS1MusicStop() {}
-void PS1MusicPause(bool pause) { (void)pause; }
+void PS1MusicStop() { PS1XaStop(); }
+void PS1MusicPause(bool pause)
+{
+    if (pause)
+        PS1XaPause();
+    else
+        PS1XaResume();
+}
+
+// A file read stops the drive (one CD action at a time): the menus hold their track around their own loads and
+// restart it at the same row after.
+static int s_holdTrack = -1;
+static bool s_holdLoop = false;
+static uint32_t s_holdRow = 0;
+void PS1MusicHold()
+{
+    s_holdTrack = musicStatus == MUSIC_PLAYING && PS1XaPlaying() ? PS1XaCurrentTrack() : -1;
+    if (s_holdTrack >= 0) {
+        s_holdLoop = PS1XaCurrentLoop();
+        s_holdRow  = PS1XaPositionRows();
+        PS1XaStop();
+    }
+}
+void PS1MusicRestore()
+{
+    if (s_holdTrack >= 0 && musicStatus == MUSIC_PLAYING)
+        PS1XaPlayAt(s_holdTrack, s_holdLoop, s_holdRow);
+    s_holdTrack = -1;
+}
+
+volatile int32_t g_ps1MusicSwapRow = -1; // GDB: the row the last SwapMusicTrack started at
+
+// Upstream LoadMusic: the track is a stretch of one channel of Music.xa; a track that isn't there behaves like a
+// failed LoadFile (nothing plays).
+static void PS1LoadMusic()
+{
+    uint32_t oldRows = musicStartPos ? PS1XaPositionRows() : 0; // the playing track's position (swap)
+    if (streamInfo[currentStreamIndex].loaded)
+        StopMusic(false);
+    int track = s_xaReady ? PS1XaFindTrack(musicTracks[currentMusicTrack].fileName) : -1;
+    if (track < 0) {
+        musicStatus = MUSIC_STOPPED;
+        return;
+    }
+    uint32_t row = 0;
+    if (musicStartPos) { // newPos = oldPos * ratio / 10,000, mod the new track's length (8,000 == 0.8)
+        uint32_t n = PS1XaTrackRows(track);
+        row        = n ? (uint32_t)((uint64_t)oldRows * (uint32_t)musicRatio / 10000 % n) : 0;
+        g_ps1MusicSwapRow = (int32_t)row;
+    }
+    musicStartPos = 0;
+    PS1XaPlayAt(track, musicTracks[currentMusicTrack].trackLoop, row);
+    StreamInfo *strmInfo = &streamInfo[currentStreamIndex];
+    musicStatus          = MUSIC_PLAYING;
+    masterVolume         = MAX_VOLUME;
+    trackID              = currentMusicTrack;
+    strmInfo->trackLoop  = musicTracks[currentMusicTrack].trackLoop;
+    strmInfo->loopPoint  = musicTracks[currentMusicTrack].loopPoint;
+    strmInfo->loaded     = true;
+    currentMusicTrack    = -1;
+    musicPosition        = 0;
+}
 
 void SetMusicTrack(const char *filePath, byte trackID, bool loop, uint loopPoint)
 {
@@ -320,14 +411,26 @@ void SwapMusicTrack(const char *filePath, byte trackID, uint loopPoint, uint rat
 }
 bool PlayMusic(int track, int musStartPos)
 {
-    if (track < 0 || track >= TRACK_COUNT || !musicTracks[track].fileName[0]) {
+    if (!audioEnabled)
+        return false;
+    if ((uint)track >= TRACK_COUNT) { // upstream reads musicTracks[track] before this check
         StopMusic(true);
+        currentMusicTrack = -1;
         return false;
     }
-    musicStartPos       = musStartPos;
-    s_currentMusicTrack = track;
-    musicStatus         = MUSIC_PLAYING;
-    return true;
+    if (musicTracks[track].fileName[0]) {
+        if (musicStatus != MUSIC_LOADING) {
+            musicStartPos     = musStartPos;
+            currentMusicTrack = track;
+            musicStatus       = MUSIC_LOADING;
+            PS1LoadMusic();
+            return true;
+        }
+    }
+    else {
+        StopMusic(true);
+    }
+    return false;
 }
 
 // ---- SFX (RSDKv4/Audio.cpp semantics) -------------------------------------------------------------------

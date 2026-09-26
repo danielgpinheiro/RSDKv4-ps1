@@ -197,6 +197,8 @@ void PS1SfxReleaseStage();
 void PS1SfxLoadStageBank(); // Data/Stages/<folder>/PS1Sfx.bin, after the stage's LoadSfx calls
 void PS1SfxLoadMenuBank();  // Data/Game/PS1SfxMenu.bin into the stage area (the menus run no stage)
 void PS1AudioUpdate();      // once per frame: frees channels whose sample ended (PC mixer semantics), music volume
+void PS1MusicHold();        // before a file read under music (the menus): stop, remembering the track and its row
+void PS1MusicRestore();     // after it: the same track from that row
 #endif
 
 void LoadMusic(void *userdata);

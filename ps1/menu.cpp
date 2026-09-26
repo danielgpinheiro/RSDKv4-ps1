@@ -470,6 +470,11 @@ void formatTime(char *out, int time) {
     *out   = 0;
 }
 
+void playMainMenuMusic() { // MenuControl_Create / FadeScreen
+    SetMusicTrack("MainMenu.ogg", 0, true, 106596);
+    PlayMusic(0, 0);
+}
+
 void go(int screen, int sel = 0) {
     s_m.screen = screen;
     s_m.sel    = sel;
@@ -486,6 +491,7 @@ void titleScreen(bool ok, bool back) {
         drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(PS1_STR_PRESS_START), 160, 170, 1);
     if (ok) {
         PlaySfxByName("Menu Select", false);
+        playMainMenuMusic();
         go(PS1_MENU_MAIN);
     }
 }
@@ -759,6 +765,7 @@ void PS1MenuResetGame() {
 
 void PS1MenuOpen(int screen) {
     if (!g_ps1MenuScreens.imageCount) {
+        StopMusic(true); // the game's track (ENDGAME / RESETGAME): the menus play theirs after the load
         PS1LoadingBegin();
         PS1MenuPackLoad(g_ps1MenuScreens, "Data/Game/Menu/PS1Menu.pmn", s_screensMem, sizeof(s_screensMem));
         PS1SfxLoadMenuBank(); // the menus' sounds into the stage's SPU area (no stage runs under the menus)
@@ -768,6 +775,13 @@ void PS1MenuOpen(int screen) {
     s_m.saveSlot = -1;
     go(screen);
     Engine.gameMode = ENGINE_PS1MENU;
+    if (screen == PS1_MENU_TITLE) { // TitleScreen.cpp: the intro jingle once
+        SetMusicTrack("MenuIntro.ogg", 0, false, 0);
+        SetMusicTrack("MainMenu.ogg", 1, true, 106596);
+        PlayMusic(0, 0);
+    }
+    else
+        playMainMenuMusic(); // FadeScreen MENUFADEIN: back from a game
 }
 
 void PS1MenuFrame() {
@@ -780,9 +794,11 @@ void PS1MenuFrame() {
         PlaySfxByName("Menu Move", false);
     ++s_m.timer;
     if ((s_m.screen == PS1_MENU_TIMEATTACK || s_m.screen == PS1_MENU_RECORDS) && !s_taPack.imageCount) {
+        PS1MusicHold(); // one CD action at a time: the menu track resumes at its row after the load
         PS1LoadingBegin(); // 256 KB of act pictures: the loading indicator while they upload
         PS1MenuPackLoad(s_taPack, "Data/Game/Menu/PS1TimeAttack.pmn", s_taMem, sizeof(s_taMem));
         PS1LoadingEnd();
+        PS1MusicRestore();
     }
     PS1RenderMenuFrame(true);
     drawBackground();
