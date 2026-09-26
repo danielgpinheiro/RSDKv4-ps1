@@ -783,6 +783,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1MPZSetup", 0),
     FunctionInfo("PS1Monitor", 0),
     FunctionInfo("PS1InvisibleBlock", 0),
+    FunctionInfo("PS1SpecialRing", 0),
 #endif
 };
 
@@ -1325,6 +1326,7 @@ enum ScrFunc {
     FUNC_PS1MPZSETUP,
     FUNC_PS1MONITOR,
     FUNC_PS1INVISIBLEBLOCK,
+    FUNC_PS1SPECIALRING,
 #endif
     FUNC_MAX_CNT
 };
@@ -7254,6 +7256,166 @@ static void PS1InvisibleBlockUpdate()
             break;
     }
 }
+// Scene3D counts as the VM writes them (VAR_SCENE3DVERTEXCOUNT / FACECOUNT: high-water marks, then mapped/clamped).
+static inline void PS1SetVertexCount(int n)
+{
+    if (n > g_ps1Scene3DMaxCountV)
+        g_ps1Scene3DMaxCountV = n;
+    vertexCount = PS1_VTX_COUNT(n);
+}
+static inline void PS1SetFaceCount(int n)
+{
+    if (n > g_ps1Scene3DMaxCountF)
+        g_ps1Scene3DMaxCountF = n;
+    faceCount = PS1_FACE_COUNT(n);
+}
+// The special stage's Ring update sub (stage object "Ring" in Special, every ring in range each frame), natively: one
+// statement per script instruction, in order. Its shadow face (value7 == 1: TEXTURED_C_BLEND) and ring face
+// (TEXTURED_C, U / V from tables by the ring's frame) go into the Scene3D buffers; the players (type 4) it touches
+// collect it (type 9, the sparkle). Patched in only when the sub and its jump-table entries match SPECIALRING_SIG.
+static void PS1SpecialRingUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    auto scale = [&]() { // the ring's size from its height over the player's
+        t[0] = PS1_OBJ(0).ypos;
+        t[0] -= 14680064;
+        me.scale = me.ypos;
+        me.scale -= t[0];
+        if (me.scale > 0) {
+            me.scale >>= 14;
+            me.scale += 1024;
+        }
+        else
+            me.scale = 1024;
+    };
+    ap[0] = vertexCount;
+    ap[1] = faceCount;
+    if (v[7] == 1) {
+        Face &f = faceBuffer[PS1_FACE(ap[1])];
+        f.flag  = 6;
+        f.a     = ap[0];
+        Vertex *q = &vertexBuffer[PS1_VTX(ap[0])];
+        q->x    = v[11];
+        q->y    = v[12];
+        q->z    = v[13];
+        q->u    = v[14];
+        q->v    = 50;
+        ap[0]++;
+        f.b  = ap[0];
+        q    = &vertexBuffer[PS1_VTX(ap[0])];
+        q->x = v[11];
+        q->y = v[12];
+        q->z = v[13];
+        scale();
+        q->u = me.scale;
+        q->v = me.scale;
+        ap[0]++;
+        f.c  = ap[0];
+        q    = &vertexBuffer[PS1_VTX(ap[0])];
+        q->x = v[11];
+        q->y = v[12];
+        q->z = v[13];
+        q->u = 17;
+        q->v = 16;
+        ap[0]++;
+        f.d  = ap[0];
+        q    = &vertexBuffer[PS1_VTX(ap[0])];
+        q->x = v[11];
+        q->y = v[12];
+        q->z = v[13];
+        ap[0]++;
+        ap[1]++;
+        PS1SetVertexCount(vertexCount + 4);
+        PS1SetFaceCount(faceCount + 1);
+    }
+    Face &f = faceBuffer[PS1_FACE(ap[1])];
+    f.flag  = 5;
+    f.a     = ap[0];
+    Vertex *q = &vertexBuffer[PS1_VTX(ap[0])];
+    q->x    = v[4];
+    q->y    = v[5];
+    q->z    = v[6];
+    if (G[19] >= 0 && G[19] < scriptCode[13793]) // GetTableValue VERTEXBUFFERU GLOBAL19 13793
+        q->u = scriptCode[13793 + G[19] + 1];
+    if (G[19] >= 0 && G[19] < scriptCode[13802]) // GetTableValue VERTEXBUFFERV GLOBAL19 13802
+        q->v = scriptCode[13802 + G[19] + 1];
+    ap[0]++;
+    f.b  = ap[0];
+    q    = &vertexBuffer[PS1_VTX(ap[0])];
+    q->x = v[4];
+    q->y = v[5];
+    q->z = v[6];
+    scale();
+    q->u = me.scale;
+    q->v = me.scale;
+    ap[0]++;
+    f.c  = ap[0];
+    q    = &vertexBuffer[PS1_VTX(ap[0])];
+    q->x = v[4];
+    q->y = v[5];
+    q->z = v[6];
+    q->u = 16;
+    q->v = 16;
+    ap[0]++;
+    f.d  = ap[0];
+    q    = &vertexBuffer[PS1_VTX(ap[0])];
+    q->x = v[4];
+    q->y = v[5];
+    q->z = v[6];
+    PS1SetVertexCount(vertexCount + 4);
+    PS1SetFaceCount(faceCount + 1);
+    if (v[3] < PS1_OBJ(0).values[13]) {
+        me.type = 0;
+        return;
+    }
+    TypeGroupList &players = objectTypeGroupList[4];
+    for (int loop = 0; loop < players.listSize; ++loop) { // ForEachActive 4, ARRAYPOS6
+        ap[6] = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[1] = v[3];
+        t[1] -= 131072;
+        t[2] = v[3];
+        t[2] += 131072;
+        if (p.values[14] > t[1] && p.values[14] < t[2]) {
+            t[0] = p.values[15];
+            t[0] -= v[1];
+            t[1] = t[0];
+            t[1] = (int)((uint)t[1] * (uint)t[0]);
+            t[0] = p.values[16];
+            t[0] -= v[2];
+            t[2] = t[0];
+            t[2] = (int)((uint)t[2] * (uint)t[0]);
+            t[1] += t[2];
+            if (t[1] < 12845056) {
+                if (G[13] == 0)
+                    p.values[0]++;
+                else if (G[140] > -1) {
+                    if (ap[6] == 2)
+                        p.values[0]++;
+                }
+                else
+                    p.values[0]++;
+                me.type           = 9;
+                me.animationTimer = 0;
+                me.frame          = 0;
+                if (G[20] == 0) {
+                    PlaySfx(1, 0);
+                    SetSfxAttributes(1, -1, -100);
+                    G[20] = 1;
+                }
+                else {
+                    PlaySfx(2, 0);
+                    SetSfxAttributes(2, -1, 100);
+                    G[20] = 0;
+                }
+            }
+        }
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -9543,6 +9705,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1INVISIBLEBLOCK:
                 opcodeSize = 0;
                 PS1InvisibleBlockUpdate();
+                break;
+            case FUNC_PS1SPECIALRING:
+                opcodeSize = 0;
+                PS1SpecialRingUpdate();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
