@@ -58,10 +58,20 @@ void PS1MenuTestService();                    // main.cpp frame(): services g_ps
 
 // Menu screens (phase 4.3). The PS1 engine modes ENGINE_PS1MENU / ENGINE_PS1PAUSE (RetroEngine.hpp) run them from
 // RetroEngine::RunFrame instead of the stage.
-enum PS1MenuScreen { PS1_MENU_TITLE, PS1_MENU_MAIN, PS1_MENU_SAVE, PS1_MENU_PLAYER, PS1_MENU_OPTIONS };
+enum PS1MenuScreen {
+    PS1_MENU_TITLE,
+    PS1_MENU_MAIN,
+    PS1_MENU_SAVE,
+    PS1_MENU_PLAYER,
+    PS1_MENU_OPTIONS,
+    PS1_MENU_TIMEATTACK,
+    PS1_MENU_RECORDS
+};
 void PS1MenuOpen(int screen); // loads PS1Menu.pmn (VRAM: the stage's sprite / tile columns) and enters ENGINE_PS1MENU
 void PS1MenuFrame();          // one frame of the open screen: input, actions, drawing
 extern volatile uint32_t g_ps1MenuScreen, g_ps1MenuSel; // GDB: the screen and its selection
+void PS1MenuResetGame(); // ENGINE_RESETGAME: back to the records after a Time Attack run, else the main menu
+extern volatile uint32_t g_ps1TAZone, g_ps1TAAct, g_ps1TARank; // GDB: Time Attack selection and the last new rank
 void PS1PauseOpen();  // ENGINE_INITPAUSE (a script's Start): the pause menu over the frozen stage, ENGINE_PS1PAUSE
 void PS1PauseFrame(); // one frame of the pause menu
 extern volatile uint32_t g_ps1PauseSel, g_ps1PauseDialog; // GDB

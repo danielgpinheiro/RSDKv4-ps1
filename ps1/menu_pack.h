@@ -19,6 +19,7 @@
 #define PS1_MENU_EMERALD_OFF 147
 #define PS1_MENU_LOCK 148
 #define PS1_MENU_WATERMARK 149
+#define PS1_TA_PICTURES 20 // PS1TimeAttack.pmn: acts 0-16, Wing Fortress, Boss Attack, Hidden Palace
 
 #define PS1_STR_START_GAME 0
 #define PS1_STR_TIME_ATTACK 1

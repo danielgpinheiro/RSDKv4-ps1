@@ -591,7 +591,7 @@ void RetroEngine::RunFrame()
                     stageListPosition = 0;
                     PS1MenuOpen(PS1_MENU_MAIN);
                     break;
-                case ENGINE_RESETGAME: PS1MenuOpen(PS1_MENU_MAIN); break;
+                case ENGINE_RESETGAME: PS1MenuResetGame(); break; // Time Attack: RestoreNativeObjects -> the records
 #else
                 case ENGINE_ENDGAME:
                 case ENGINE_RESETGAME:
