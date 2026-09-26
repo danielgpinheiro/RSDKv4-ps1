@@ -21,6 +21,8 @@
 // g_ps1DrawTodo): tint, VScroll layers, 3D faces (phase 7). Sonic 2 has no 3D floor / sky layer.
 #include "RetroEngine.hpp"
 
+#include <psyqo/gte-kernels.hh>
+#include <psyqo/gte-registers.hh>
 #include <stdio.h>
 #include <string.h>
 
@@ -82,6 +84,9 @@ volatile uint32_t g_ps1TileFlipped    = 0; // this frame: tiles drawn as flipped
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
 volatile int32_t g_ps1MissSheet = -1, g_ps1MissX = 0, g_ps1MissY = 0; // the last miss (atlas sheet, texel)
 volatile uint32_t g_ps1SheetUnbound   = 0; // draws from a sheet the stage atlas doesn't have
+volatile uint32_t g_ps1GteVertices    = 0; // Draw3DScene vertices projected on the GTE (GDB)
+volatile uint32_t g_ps1GteFallbacks   = 0; // ... of them left to the CPU's exact division (a GTE flag)
+volatile uint32_t g_ps1GteLastFlag    = 0;
 volatile uint32_t g_ps1DrawTodo       = 0; // draw calls of later steps (ink effects, faces, text...), skipped
 volatile uint32_t g_ps1SurfaceGen     = 1; // bumped by Sprite.cpp when a sheet name is (un)registered
 volatile uint8_t g_ps1DebugDrawMask   = 0; // bit 0: drop object-list primitives (layers-only frames); bit 1: tile bands chain nothing (profiling)
@@ -1957,8 +1962,13 @@ volatile uint32_t g_ps1FaceTexMiss  = 0; // textured faces whose UVs span no sin
 // line has the other two corners on opposite sides.
 static void PS1QuadStrip(const Vertex *in, Vertex *out)
 {
+    int cx[4], cy[4]; // clamped for the side test only (32-bit products; far corners keep their direction)
+    for (int k = 0; k < 4; ++k) {
+        cx[k] = in[k].x < -8191 ? -8191 : in[k].x > 8191 ? 8191 : in[k].x;
+        cy[k] = in[k].y < -8191 ? -8191 : in[k].y > 8191 ? 8191 : in[k].y;
+    }
     auto side = [&](int i, int j, int k) {
-        long long d = (long long)(in[j].x - in[i].x) * (in[k].y - in[i].y) - (long long)(in[j].y - in[i].y) * (in[k].x - in[i].x);
+        int d = (cx[j] - cx[i]) * (cy[k] - cy[i]) - (cy[j] - cy[i]) * (cx[k] - cx[i]);
         return d > 0 ? 1 : d < 0 ? -1 : 0;
     };
     static const int pairs[3][4] = { { 1, 2, 0, 3 }, { 0, 3, 1, 2 }, { 0, 2, 1, 3 } }; // diagonal i j, others k l
@@ -1969,6 +1979,123 @@ static void PS1QuadStrip(const Vertex *in, Vertex *out)
         }
     }
     for (int k = 0; k < 4; ++k) out[k] = in[k]; // degenerate (collinear corners): as given
+}
+
+// Draw3DScene's screen positions (RSDKv4/Scene3D.cpp PS1ProjectedVertex; docs/30 phase 7): every transformed vertex once
+// on the GTE (RTPS, psx-spx "GTE Coordinate Calculation Commands"): V = T >> s (the smallest s that fits x, y, z in 15
+// bits: the ratio T / T.z is kept), R = diag(1, -projectionY / projectionX, 1), TR 0, H = projectionX, OF = the screen
+// centre -> SX = CX + projectionX * x / z, SY = CY - projectionY * y / z (the GTE's division and flooring: within
+// +-1 px of upstream's). z <= 0 (the faces skip it) or a GTE flag (IR1 / IR2 or SX / SY saturated, divide overflow:
+// near the camera or far off-screen) -> marked for the exact CPU division.
+void PS1Project3DVertices(uint32_t *out, int count)
+{
+    using namespace psyqo::GTE;
+    int r22 = -(projectionY * 4096 + projectionX / 2) / projectionX;
+    write<Register::R11R12, Unsafe>(4096u); // R11 1.0, R12 0
+    clear<Register::R13R21, Unsafe>();
+    write<Register::R22R23, Unsafe>((uint32_t)(uint16_t)(int16_t)r22);
+    clear<Register::R31R32, Unsafe>();
+    write<Register::R33, Unsafe>(4096u);
+    clear<Register::TRX, Unsafe>();
+    clear<Register::TRY, Unsafe>();
+    clear<Register::TRZ, Unsafe>();
+    write<Register::OFX, Unsafe>((uint32_t)(SCREEN_CENTERX << 16));
+    write<Register::OFY, Unsafe>((uint32_t)(SCREEN_CENTERY << 16));
+    write<Register::H, Safe>((uint32_t)projectionX);
+    const uint32_t bad = (1u << 24) | (1u << 23) | (1u << 17) | (1u << 14) | (1u << 13);
+    for (int i = 0; i < count; ++i) {
+        const Vertex &t = vertexBufferT[i];
+        if (t.z <= 0) {
+            out[i] = 0x8000u;
+            continue;
+        }
+        int ax = t.x < 0 ? -t.x : t.x, ay = t.y < 0 ? -t.y : t.y, m = t.z;
+        m     = ax > m ? ax : m;
+        m     = ay > m ? ay : m;
+        int s = 0;
+        while ((m >> s) > 32767) ++s;
+        write<Register::VXY0, Unsafe>((uint32_t)(uint16_t)(t.x >> s) | ((uint32_t)(uint16_t)(t.y >> s) << 16));
+        write<Register::VZ0, Safe>((uint32_t)(t.z >> s));
+        Kernels::rtps();
+        uint32_t flag = readRaw<Register::FLAG, Safe>();
+        if (flag & bad) {
+            out[i]    = 0x8000u;
+            g_ps1GteFallbacks = g_ps1GteFallbacks + 1;
+            g_ps1GteLastFlag  = flag;
+        }
+        else
+            out[i] = readRaw<Register::SXY2, Safe>();
+    }
+    g_ps1GteVertices = g_ps1GteVertices + count;
+}
+
+// Draw3DScene's faded faces (the half-pipe: ~700 a frame) in one pass (docs/30 phase 7): the four packed GTE screen
+// positions, upstream's DrawFadedFace early-outs and fog blend, the strip order from one or two side tests, and the flat
+// quads written straight into bulk runs of the chain (no per-face fragment call). A face of another type ends the run
+// (PS1FadedRunFlush) so the draw order stays the sorted one.
+static uint32_t *s_fadedRun = nullptr;
+static int s_fadedCap = 0, s_fadedUsed = 0;
+volatile uint32_t g_ps1FadedFast = 0; // faded faces through the fast path (GDB)
+
+void PS1FadedRunFlush()
+{
+    if (s_fadedRun)
+        PS1ChainBulkEnd(s_fadedUsed);
+    s_fadedRun = nullptr;
+    s_fadedCap = s_fadedUsed = 0;
+}
+
+bool PS1FadedRunAdd(uint32_t pa, uint32_t pb, uint32_t pc, uint32_t pd, uint color, uint fogColor, int alpha)
+{
+    if (!s_frameOpen || PS1ObjectsHidden())
+        return true;
+    if (alpha > 0xFF)
+        alpha = 0xFF;
+    if (alpha < 1)
+        return true;
+    int x[4] = { (int16_t)(pa & 0xFFFF), (int16_t)(pb & 0xFFFF), (int16_t)(pc & 0xFFFF), (int16_t)(pd & 0xFFFF) };
+    int y[4] = { (int16_t)(pa >> 16), (int16_t)(pb >> 16), (int16_t)(pc >> 16), (int16_t)(pd >> 16) };
+    if ((x[0] < 0 && x[1] < 0 && x[2] < 0 && x[3] < 0) || (x[0] > SCREEN_XSIZE && x[1] > SCREEN_XSIZE && x[2] > SCREEN_XSIZE && x[3] > SCREEN_XSIZE)
+        || (y[0] < 0 && y[1] < 0 && y[2] < 0 && y[3] < 0) || (y[0] > SCREEN_YSIZE && y[1] > SCREEN_YSIZE && y[2] > SCREEN_YSIZE && y[3] > SCREEN_YSIZE))
+        return true;
+    if ((x[0] == x[1] && x[1] == x[2] && x[2] == x[3]) || (y[0] == y[1] && y[1] == y[2] && y[2] == y[3]))
+        return true;
+    // strip order (PS1QuadStrip): the diagonal is the pair whose line separates the other two; faces listed around their
+    // outline (a-c diagonal) are tested first. Coordinates are GTE screen positions (-1024..1023): 32-bit products.
+    auto side = [&](int i, int j, int k) { return (x[j] - x[i]) * (y[k] - y[i]) - (y[j] - y[i]) * (x[k] - x[i]); };
+    int o0 = 0, o1 = 1, o2 = 2, o3 = 3;
+    int s1 = side(0, 2, 1), s3 = side(0, 2, 3);
+    if ((s1 < 0 && s3 > 0) || (s1 > 0 && s3 < 0))
+        o0 = 1, o1 = 0, o2 = 2, o3 = 3; // diagonal a-c: strip b a c d
+    else {
+        int t0 = side(1, 2, 0), t3 = side(1, 2, 3);
+        if (!((t0 < 0 && t3 > 0) || (t0 > 0 && t3 < 0))) {
+            int u1 = side(0, 3, 1), u2 = side(0, 3, 2);
+            if ((u1 < 0 && u2 > 0) || (u1 > 0 && u2 < 0))
+                o0 = 1, o1 = 0, o2 = 3, o3 = 2; // diagonal a-d
+        }
+    }
+    auto ch = [&](int shift) {
+        int c5 = ((color >> shift) & 0xFF) >> 3, f5 = ((fogColor >> shift) & 0xFF) >> 3;
+        return (uint32_t)((f5 * (0xFF - alpha) >> 8) + (c5 * alpha >> 8)) << 3;
+    };
+    if (s_fadedUsed == s_fadedCap) {
+        PS1FadedRunFlush();
+        s_fadedRun = PS1ChainBulkBegin(128, 5);
+        if (!s_fadedRun)
+            return true;
+        s_fadedCap = 128;
+    }
+    uint32_t *w = s_fadedRun + s_fadedUsed * 6;
+    w[0]        = 0x28000000u | ch(0) << 16 | ch(8) << 8 | ch(16); // GP0 28h flat quad, BGR
+    w[1]        = (uint32_t)(uint16_t)x[o0] | ((uint32_t)(uint16_t)y[o0] << 16);
+    w[2]        = (uint32_t)(uint16_t)x[o1] | ((uint32_t)(uint16_t)y[o1] << 16);
+    w[3]        = (uint32_t)(uint16_t)x[o2] | ((uint32_t)(uint16_t)y[o2] << 16);
+    w[4]        = (uint32_t)(uint16_t)x[o3] | ((uint32_t)(uint16_t)y[o3] << 16);
+    ++s_fadedUsed;
+    g_ps1Faces     = g_ps1Faces + 1;
+    g_ps1FadedFast = g_ps1FadedFast + 1;
+    return true;
 }
 
 void DrawFace(void *v, uint colour)

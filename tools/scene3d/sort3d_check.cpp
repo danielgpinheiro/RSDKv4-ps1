@@ -1,4 +1,4 @@
-// Host check (docs/30 phase 2.3; from the Sonic CD port): the PS1 merge sort of the 3D draw list (RSDKv4/Scene3D.cpp,
+// Host check (docs/30 phase 2.3 / 7; from the Sonic CD port): the PS1 sort (now radix) of the 3D draw list (RSDKv4/Scene3D.cpp,
 // PS1SortDrawList3D) gives exactly upstream's bubble-sort order, on random depths with many ties.
 // Run: tools/scene3d/sort3d_check.sh (extracts the function, builds and runs this).
 #include <cstdio>
@@ -13,6 +13,7 @@ struct DrawListEntry3D {
 #define PS1_SORT3D_CHECK
 #define RETRO_PLATFORM 0
 #define RETRO_PS1 1
+static DrawListEntry3D g_ps1Scene3DScratch[FACEBUFFER_SIZE]; // Scene3D.cpp's shared scratch
 // the function under test, extracted verbatim from Scene3D.cpp
 #include SORT3D_EXTRACT
 
