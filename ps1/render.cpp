@@ -598,6 +598,8 @@ int InitRenderDevice()
 volatile uint32_t g_ps1BankRegions = 0; // palette-bank regions (runs of equal gfxLineBuffer) in the last frame
 volatile uint32_t g_ps1BankMask    = 0; // banks used by the last frame (bit per bank)
 volatile uint32_t g_ps1BankReplays = 0; // regions drawn again with their own bank (total)
+volatile uint32_t g_ps1BankHbl     = 0; // CPU time of the last frame's bank regions (replays), hblanks
+extern volatile uint32_t g_ps1ReplayWalked, g_ps1ReplayKept; // ps1/gpu_chain.cpp
 
 // Per-line palette banks (upstream SetActivePalette / gfxLineBuffer; user decision 2026-09-24: replay
 // per region). The frame's first pass gets the bank covering the most lines; every further run of lines with another bank
@@ -607,6 +609,19 @@ static int s_baseBank = 0; // bank of the frame's first pass (the one covering t
 
 static void PS1DrawBankRegions(psyqo::Color clear)
 {
+    // Nearly every frame uses one bank on every line: 60 word compares instead of the region scan.
+    typedef uint32_t __attribute__((may_alias)) PS1Word;
+    static_assert(SCREEN_YSIZE % 4 == 0, "gfxLineBuffer words");
+    const PS1Word *lw = (const PS1Word *)gfxLineBuffer; // aligned(4) on PS1 (Palette.cpp)
+    uint32_t w0       = gfxLineBuffer[0] * 0x01010101u;
+    int i             = 0;
+    while (i < SCREEN_YSIZE / 4 && lw[i] == w0) ++i;
+    if (i == SCREEN_YSIZE / 4) {
+        s_baseBank       = gfxLineBuffer[0] & (PALETTE_COUNT - 1);
+        g_ps1BankRegions = 1;
+        g_ps1BankMask    = 1u << s_baseBank;
+        return;
+    }
     uint32_t *sceneEnd = PS1ChainMark();
     int lines[PALETTE_COUNT] = {};
     for (int y = 0; y < SCREEN_YSIZE; ++y) lines[gfxLineBuffer[y] & (PALETTE_COUNT - 1)]++;
@@ -666,7 +681,11 @@ void FlipScreen()
         g_ps1FadeDirect = g_ps1FadeDirect + s_directCount;
     }
     int frameChunks = s_palChunkCount;
+    uint32_t tb     = PS1Hblanks();
+    g_ps1ReplayWalked = 0;
+    g_ps1ReplayKept   = 0;
     PS1DrawBankRegions(clear);
+    g_ps1BankHbl = PS1HblanksSince(tb);
     int end         = s_palChunkCount; // the regions filled their own chunks: refill only the frame-start rows
     s_palChunkCount = frameChunks;
     PS1FillPalette(s_baseBank); // the first pass is drawn with the base bank
@@ -1289,9 +1308,9 @@ void DrawHLineScrollLayer(int layerID)
     tileYPos %= fullH;
 
     // The FG without deformation scrolls every line by xScrollOffset (upstream sets every
-    // hParallax.linePos to it above): one band per tile row, no per-line pass (the Nexus fast path).
-    bool uniform = fg;
-    for (int i = 0; i < PARALLAX_COUNT && uniform; ++i) uniform = !hParallax.deform[i];
+    // hParallax.linePos to it above): one band per tile row, no per-line pass (the Nexus fast path). Its line
+    // scroll is all zero (Scene.cpp), so only parallax entry 0's deform flag matters (BG entries' ripples don't).
+    bool uniform = fg && !hParallax.deform[0];
     int ly = tileYPos;
     if (uniform) {
         int chunkX = xScrollOffset % fullW;

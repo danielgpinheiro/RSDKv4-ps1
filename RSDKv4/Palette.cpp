@@ -8,7 +8,11 @@ PaletteEntry *activePalette32 = fullPalette32[0];
 ushort fullPalette[PALETTE_COUNT][PALETTE_COLOR_COUNT];
 ushort *activePalette = fullPalette[0]; // Ptr to the 256 color set thats active
 
+#if RETRO_PLATFORM == RETRO_PS1
+byte gfxLineBuffer[SCREEN_YSIZE] __attribute__((aligned(4))); // Pointers to active palette (PS1: read 4 lines a word)
+#else
 byte gfxLineBuffer[SCREEN_YSIZE]; // Pointers to active palette
+#endif
 int GFX_LINESIZE;
 int GFX_LINESIZE_MINUSONE;
 int GFX_LINESIZE_DOUBLE;

@@ -562,6 +562,7 @@ static bool packetsYRange(const uint32_t *w, unsigned n, int &ymin, int &ymax) {
     return drawn;
 }
 
+volatile uint32_t g_ps1ReplayWalked = 0, g_ps1ReplayKept = 0; // this frame's replays: packets visited / copied
 int PS1ChainReplayLines(uint32_t *from, uint32_t *to, int y0, int y1) {
     flushBatch();
     int words = 0;
@@ -580,7 +581,9 @@ int PS1ChainReplayLines(uint32_t *from, uint32_t *to, int y0, int y1) {
             memcpy(f->data, p + 1, n * 4);
             s_gpu->chain(*f);
             words += n + 1;
+            g_ps1ReplayKept = g_ps1ReplayKept + 1;
         }
+        g_ps1ReplayWalked = g_ps1ReplayWalked + 1;
         p = next;
     }
     g_ps1ChainReplayWords = g_ps1ChainReplayWords + words;
