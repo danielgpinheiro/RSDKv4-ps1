@@ -5,7 +5,7 @@
 #
 # The RSDKv4 engine (RSDKv4/, PS1 app in RSDKv4/main.cpp) on the PS1 platform layer (ps1/, copied from
 # RSDKv3-ps1 at 1e583ad). Phase 3: the GPU renderer (ps1/render.cpp, 3.2) over the tile pages and sprite atlas
-# uploaded at stage load (ps1/tileset, ps1/sprite_atlas, 3.1); audio still headless (ps1/audio_headless.cpp,
+# uploaded at stage load (ps1/tileset, ps1/sprite_atlas, 3.1); audio: ps1/audio.cpp (SPU SFX banks, phase 5;
 # phase 5). Not built
 # on PS1: Drawing.cpp, Renderer.cpp, Audio.cpp, Networking.cpp and the native menu objects
 # (docs/30: the scripted Title + 2D PS1 menus in phase 4).
@@ -34,7 +34,7 @@ RSDKv4/Text.cpp \
 RSDKv4/Userdata.cpp \
 RSDKv4/main.cpp \
 ps1/render.cpp \
-ps1/audio_headless.cpp \
+ps1/audio.cpp \
 ps1/tileset.cpp \
 ps1/sprite_atlas.cpp \
 ps1/menu.cpp \

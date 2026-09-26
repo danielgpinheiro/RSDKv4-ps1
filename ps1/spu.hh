@@ -24,6 +24,7 @@ void PS1SpuWrite(uint32_t addr, const void *data, uint32_t len);
 void PS1SpuRead(uint32_t addr, void *data, uint32_t len);
 // Start `voice` on the sample at `addr` (key on). Volumes 0..0x3FFF (fixed, no sweep).
 void PS1SpuVoicePlay(int voice, uint32_t addr, uint32_t rate, uint16_t volL, uint16_t volR);
+void PS1SpuVoiceVolume(int voice, uint16_t volL, uint16_t volR); // a playing voice's volumes (no key on)
 void PS1SpuVoiceStop(uint32_t voiceMask); // key off
 // Current ADSR envelope (ENVX). 0 once a key-on'd sample has ended: psxavenc ends every sample
 // with an end-without-repeat block, which releases the voice with a zero envelope (psx-spx);

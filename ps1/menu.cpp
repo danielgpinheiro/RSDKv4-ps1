@@ -761,6 +761,7 @@ void PS1MenuOpen(int screen) {
     if (!g_ps1MenuScreens.imageCount) {
         PS1LoadingBegin();
         PS1MenuPackLoad(g_ps1MenuScreens, "Data/Game/Menu/PS1Menu.pmn", s_screensMem, sizeof(s_screensMem));
+        PS1SfxLoadMenuBank(); // the menus' sounds into the stage's SPU area (no stage runs under the menus)
         PS1LoadingEnd();
     }
     s_m          = MenuState();

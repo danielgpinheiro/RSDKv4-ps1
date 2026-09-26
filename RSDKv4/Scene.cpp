@@ -808,6 +808,13 @@ void LoadStageFiles(void)
                 LoadSfx(strBuffer, globalSFXCount + i);
                 SetFileInfo(&infoStore);
             }
+#if RETRO_PLATFORM == RETRO_PS1
+            // The samples: the stage's SFX bank (every SFX its scripts can play, global ones included; docs/30 5.1).
+            GetFileInfo(&infoStore);
+            CloseFile();
+            PS1SfxLoadStageBank();
+            SetFileInfo(&infoStore);
+#endif
 
             byte stageObjectCount = 0;
             FileRead(&stageObjectCount, 1);

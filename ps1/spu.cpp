@@ -130,6 +130,12 @@ void PS1SpuVoicePlay(int voice, uint32_t addr, uint32_t rate, uint16_t volL, uin
         SPU_KEY_ON_HIGH = (uint16_t)(1u << (voice - 16));
 }
 
+void PS1SpuVoiceVolume(int voice, uint16_t volL, uint16_t volR) {
+    volatile SPUVoice &v = SPU_VOICES[voice];
+    v.volumeLeft         = volL & 0x3fff;
+    v.volumeRight        = volR & 0x3fff;
+}
+
 void PS1SpuVoiceStop(uint32_t voiceMask) {
     SPU_KEY_OFF_LOW  = (uint16_t)(voiceMask & 0xffff);
     SPU_KEY_OFF_HIGH = (uint16_t)(voiceMask >> 16);

@@ -54,7 +54,7 @@ than watchpoints. GDB convenience variables must not be register names (`$v0`, `
 |---|---|
 | `RSDKv4/` | the engine (upstream decompilation) + PS1 code behind `RETRO_PLATFORM == RETRO_PS1` (`main.cpp` = the psyqo app, `RetroEngine::RunFrame`; arrays sized from the data, `../docs/30` phase 2 appendix) |
 | `RSDKv4/NativeObjects/` | the 2013 menus as native C++ objects (drawn by `RSDKv4/Renderer.cpp`): phase 1 research |
-| `ps1/` | PS1 platform layer (see `ps1/README.md`); `render.cpp` = the GPU renderer (phase 3, from Sonic CD; tiles from the packed chunk table), `tileset` / `sprite_atlas` = stage-load VRAM uploads; `audio_headless.cpp` = stand-in until phase 5; `platform_test.cpp` = phase 0 app |
+| `ps1/` | PS1 platform layer (see `ps1/README.md`); `render.cpp` = the GPU renderer (phase 3, from Sonic CD; tiles from the packed chunk table), `tileset` / `sprite_atlas` = stage-load VRAM uploads; `audio.cpp` = RSDKv4/Audio.cpp on the SPU (per-stage SFX banks, phase 5.1) + music (5.2); `platform_test.cpp` = phase 0 app |
 | `tools/disc/` | mkpsxiso BIN/CUE builder (file index, two mastering passes) + byte-level verifier |
 | `tools/loading/`, `tools/memcard/` | loading / save icon builders and checks |
 | `tools/smoke_*.sh`, `vramshot.py`, `pad.lua`, `frame_capture.sh`, `boot_test.sh` | harness |

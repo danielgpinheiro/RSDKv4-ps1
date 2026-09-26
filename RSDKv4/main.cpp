@@ -113,6 +113,7 @@ class RSDKv4PS1App final : public psyqo::Application {
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
         PS1RenderEndFrame();
+        PS1AudioUpdate(); // ps1/audio.cpp: ended SFX channels, music volume
         uint32_t cpu     = PS1HblanksSince(t0);
         g_ps1PerfLastHbl = cpu;
         if (cpu > g_ps1PerfMaxHbl)

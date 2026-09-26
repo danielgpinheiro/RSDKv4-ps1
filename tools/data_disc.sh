@@ -10,7 +10,8 @@
 # _k Knuckles, _st Sonic & Tails). Tile pages: tools/tiles/convert_tiles.py -> Data/Stages/<Stage>/16x16Tiles.vram.
 # BG line strips (phase 3.5, after both: they fill the VRAM each atlas leaves free): tools/bgstrips ->
 # Data/Stages/<Stage>/BGStrips<suffix>.bin.
-# SFX and music join in later phases.
+# SFX (phase 5.1): tools/audio/build_sfx.py -> Data/Game/PS1SfxResident.bin, PS1SfxMenu.bin,
+# Data/Stages/<Stage>/PS1Sfx.bin. Music joins in phase 5.2.
 set -eu
 cd "$(dirname "$0")/.."
 SRC=${SRC:-../Sonic2_Extracted}
@@ -31,5 +32,7 @@ done
 /usr/bin/python3 tools/tiles/convert_tiles.py "$SRC/Data" build/iso/Data
 /usr/bin/python3 tools/bgstrips/build_bgstrips.py build/iso/Data > build/manifest/bgstrips.log || { cat build/manifest/bgstrips.log; exit 1; }
 /usr/bin/python3 tools/menu/build_menu.py "$SRC/Data" build/iso/Data # menu art + fonts + strings (phase 4.2)
+# SFX banks (phase 5.1): resident + menu + one per stage, SPU-ADPCM, from the original scripts' reachable sets
+/usr/bin/python3 tools/audio/build_sfx.py "$SRC/Data" build/iso/Data "$SRC/Bytecode"
 echo "iso root: $(find build/iso -type f | wc -l | tr -d ' ') files, $(du -sh build/iso | cut -f1)"
 make -s disc

@@ -75,6 +75,14 @@ void SetMusicTrack(const char *filePath, byte trackID, bool loop, uint loopPoint
 void SetPaletteFade(byte destPaletteID, byte srcPaletteA, byte srcPaletteB, ushort blendAmount, int startIndex, int endIndex) {}
 void SetSfxAttributes(int sfx, int loopCount, sbyte pan) {}
 void SetSfxName(const char *sfxName, int sfxID) {}
+void PS1SfxChannelStop(int channel) {}
+void PS1SfxReleaseStage() {}
+void PS1SfxLoadStageBank() {}
+void PS1SfxLoadMenuBank() {}
+void PS1MusicStop() {}
+void PS1MusicPause(bool pause) {}
+int currentStreamIndex = 0; // FreeMusInfo (Audio.hpp, PS1)
+StreamInfo streamInfo[STREAMFILE_COUNT];
 void SetupTextMenu(TextMenu *menu, int rowCount) {}
 void Sort3DDrawList() {}
 void SwapMusicTrack(const char *filePath, byte trackID, uint loopPoint, uint ratio) {}
