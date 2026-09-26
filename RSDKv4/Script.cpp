@@ -781,6 +781,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1TailsFn67", 0),
     FunctionInfo("PS1MPZSetup", 0),
     FunctionInfo("PS1Monitor", 0),
+    FunctionInfo("PS1InvisibleBlock", 0),
 #endif
 };
 
@@ -1322,6 +1323,7 @@ enum ScrFunc {
     FUNC_PS1TAILSFN67,
     FUNC_PS1MPZSETUP,
     FUNC_PS1MONITOR,
+    FUNC_PS1INVISIBLEBLOCK,
 #endif
     FUNC_MAX_CNT
 };
@@ -7152,6 +7154,105 @@ static void PS1MonitorUpdate()
         }
     }
 }
+
+// Sonic 2's Invisible Block (GlobalCode object "Invisible Block"; update 81 VM instructions), natively: one statement
+// per script instruction, in order (the temps keep growing across the player loop, as in the script). Solid (state 0:
+// crushing a player against it long enough runs function 50, the death, in the VM from inside the loop), right wall
+// (1), left wall (2). Patched in only when the sub and its jump-table entries match INVBLOCK_SIG.
+static void PS1InvisibleBlockUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    t[0] = v[0];
+    t[0] = -t[0];
+    t[1] = v[1];
+    t[1] = -t[1];
+    switch (me.state) {
+        case 0:
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                if (PS1_OBJ(ap[6]).state == 25)
+                    continue;
+                BoxCollision(&PS1_OBJ(self), t[0], t[1], v[0], v[1], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                switch (cr) {
+                    case 0:
+                        t[0] += 2;
+                        t[1] += 2;
+                        t[2] = v[0];
+                        t[3] = v[1];
+                        t[2] -= 2;
+                        t[3] -= 2;
+                        TouchCollision(&PS1_OBJ(self), t[0], t[1], t[2], t[3], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                        if (cr == 1)
+                            PS1_OBJ(ap[6]).gravity = 0;
+                        if (ap[6] == 0)
+                            v[2] = 0;
+                        else
+                            v[3] = 0;
+                        break;
+                    case 4:
+                        if (PS1_OBJ(ap[6]).gravity == 0) {
+                            if (ap[6] == 0) {
+                                v[2]++;
+                                if (v[2] > scriptCode[61439])
+                                    PS1CallScriptFunction(50, 1);
+                            }
+                            else {
+                                v[3]++;
+                                if (v[3] > scriptCode[61439])
+                                    PS1CallScriptFunction(50, 1);
+                            }
+                        }
+                        break;
+                }
+            }
+            break;
+        case 1:
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                if (PS1_OBJ(ap[6]).state == 25)
+                    continue;
+                TouchCollision(&PS1_OBJ(self), t[0], t[1], v[0], v[1], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                if (cr == 1) {
+                    Entity &p = PS1_OBJ(ap[6]);
+                    if (p.gravity == 0) {
+                        p.xpos = PS1CollisionRight(p);
+                        p.xpos = -p.xpos;
+                        p.xpos -= v[0];
+                        p.xpos <<= 16;
+                        p.xpos += me.xpos;
+                        if (p.speed > 0)
+                            p.speed = 0;
+                    }
+                }
+            }
+            break;
+        case 2:
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                if (PS1_OBJ(ap[6]).state == 25)
+                    continue;
+                TouchCollision(&PS1_OBJ(self), t[0], t[1], v[0], v[1], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                if (cr == 1) {
+                    Entity &p = PS1_OBJ(ap[6]);
+                    if (p.gravity == 0) {
+                        p.xpos = PS1CollisionLeft(p);
+                        p.xpos = -p.xpos;
+                        p.xpos += v[0];
+                        p.xpos <<= 16;
+                        p.xpos += me.xpos;
+                        if (p.speed < 0)
+                            p.speed = 0;
+                    }
+                }
+            }
+            break;
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -9423,6 +9524,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1MONITOR:
                 opcodeSize = 0;
                 PS1MonitorUpdate();
+                break;
+            case FUNC_PS1INVISIBLEBLOCK:
+                opcodeSize = 0;
+                PS1InvisibleBlockUpdate();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
