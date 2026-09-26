@@ -2013,6 +2013,238 @@ def patch_global_function(bcdir, sig, op_name):
     return '%s native: function %d (%d instructions)' % (op_name, f, len(sig))
 
 
+# GlobalCode function 0 (the player's input, touch rectangles and timers; every frame, every zone), transcribed by
+# PS1PlayerInput.
+PLAYERINPUT_FN_SIG = [
+    'IfEqual 0 GLOBAL[1,0,5] 0',
+    'IfEqual 2 OBJECTCONTROLMODE 0',
+    'CheckTouchRect 0 96 SCREENXCENTER SCREENYSIZE',
+    'IfGreater 4 CHECKRESULT -1',
+    'Equal ARRAYPOS0 CHECKRESULT',
+    'Equal TEMP0 TOUCHSCREENXPOS[1,1,0]',
+    'Sub TEMP0 SAVERAM[1,0,39]',
+    'Equal TEMP1 TOUCHSCREENYPOS[1,1,0]',
+    'Sub TEMP1 SAVERAM[1,0,40]',
+    'ATan2 TEMP2 TEMP0 TEMP1',
+    'Add TEMP2 32',
+    'And TEMP2 255',
+    'ShR TEMP2 6',
+    'switch 6 TEMP2',
+    'Equal KEYDOWNRIGHT 1',
+    'break',
+    'Equal KEYDOWNDOWN 1',
+    'break',
+    'Equal KEYDOWNLEFT 1',
+    'break',
+    'Equal KEYDOWNUP 1',
+    'break',
+    'endswitch',
+    'endif',
+    'CheckTouchRect SCREENXCENTER 96 SCREENXSIZE 240',
+    'IfGreater 14 CHECKRESULT -1',
+    'Equal KEYDOWNBUTTONA 1',
+    'endif',
+    'IfEqual 16 GLOBAL[1,0,102] 0',
+    'Or KEYPRESSBUTTONA KEYDOWNBUTTONA',
+    'endif',
+    'Equal GLOBAL[1,0,102] KEYDOWNBUTTONA',
+    'IfEqual 18 STAGEDEBUGMODE 1',
+    'CheckTouchRect 0 0 112 56',
+    'IfGreater 20 CHECKRESULT -1',
+    'Equal KEYDOWNBUTTONB 1',
+    'endif',
+    'IfEqual 22 GLOBAL[1,0,103] 0',
+    'Or KEYPRESSBUTTONB KEYDOWNBUTTONB',
+    'endif',
+    'Equal GLOBAL[1,0,103] KEYDOWNBUTTONB',
+    'endif',
+    'CheckTouchRect 240 0 SCREENXSIZE 40',
+    'IfGreater 24 CHECKRESULT -1',
+    'IfEqual 26 GLOBAL[1,0,13] 0',
+    'PlaySfx 23 0',
+    'StopSfx 19',
+    'StopSfx 20',
+    'Equal ENGINESTATE 5',
+    'endif',
+    'endif',
+    'IfEqual 28 KEYPRESSSTART 1',
+    'IfEqual 30 GLOBAL[1,0,13] 0',
+    'PlaySfx 23 0',
+    'StopSfx 19',
+    'StopSfx 20',
+    'Equal ENGINESTATE 5',
+    'endif',
+    'endif',
+    'IfEqual 32 KEYDOWNBUTTONB 1',
+    'IfEqual 34 GLOBAL[1,0,13] 0',
+    'PlaySfx 23 0',
+    'StopSfx 19',
+    'StopSfx 20',
+    'Equal ENGINESTATE 5',
+    'endif',
+    'endif',
+    'endif',
+    'ProcessObjectControl',
+    'IfEqual 36 GLOBAL[1,0,13] 1',
+    'CallNativeFunction2 GLOBAL[1,0,137] 0 0',
+    'endif',
+    'else',
+    'IfEqual 38 GLOBAL[1,0,106] 0',
+    'CheckTouchRect 0 0 SCREENXSIZE SCREENYSIZE',
+    'IfEqual 40 KEYPRESSSTART 1',
+    'Equal CHECKRESULT 0',
+    'endif',
+    'IfGreater 42 CHECKRESULT -1',
+    'IfGreater 44 LOCAL[1,0,12] 1',
+    'Equal LOCAL[1,0,12] 1',
+    'endif',
+    'endif',
+    'IfEqual 46 KEYPRESSSTART 1',
+    'IfGreater 48 LOCAL[1,0,12] 1',
+    'Equal LOCAL[1,0,12] 1',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 50 OBJECTCONTROLMODE 0',
+    'Dec LOCAL[1,0,11]',
+    'IfLower 52 LOCAL[1,0,11] 1',
+    'IfLower 54 LOCAL[1,0,9] LOCAL[1,0,10]',
+    'GetTableValue TEMP0 LOCAL[1,0,9] LOCAL[1,0,8]',
+    'GetBit OBJECTUP TEMP0 0',
+    'GetBit OBJECTDOWN TEMP0 1',
+    'GetBit OBJECTLEFT TEMP0 2',
+    'GetBit OBJECTRIGHT TEMP0 3',
+    'GetBit OBJECTJUMPPRESS TEMP0 4',
+    'GetBit OBJECTJUMPHOLD TEMP0 5',
+    'Inc LOCAL[1,0,9]',
+    'GetTableValue LOCAL[1,0,11] LOCAL[1,0,9] LOCAL[1,0,8]',
+    'Inc LOCAL[1,0,9]',
+    'endif',
+    'else',
+    'IfEqual 56 OBJECTJUMPPRESS 1',
+    'Equal OBJECTJUMPPRESS 0',
+    'endif',
+    'endif',
+    'IfGreater 58 LOCAL[1,0,12] 0',
+    'Dec LOCAL[1,0,12]',
+    'IfLower 60 LOCAL[1,0,12] 1',
+    'ResetObjectEntity 11 6 0 0 0',
+    'Equal OBJECTSTATE[1,0,11] 8',
+    'Equal OBJECTPRIORITY[1,0,11] 1',
+    'Equal OBJECTDRAWORDER[1,0,11] 6',
+    'Equal OBJECTVALUE7 80',
+    'Equal SCREENCAMERAENABLED 0',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreater 62 OBJECTVALUE6 0',
+    'Dec OBJECTVALUE6',
+    'IfLower 64 OBJECTVALUE6 1',
+    'Equal ARRAYPOS6 OBJECTENTITYPOS',
+    'CallFunction 41',
+    'Equal TEMP0 0',
+    'ForEachActive 66 256 ARRAYPOS6',
+    'Add TEMP0 OBJECTVALUE6[1,1,6]',
+    'next',
+    'IfEqual 68 TEMP0 0',
+    'IfNotEqual 70 GLOBAL[1,0,100] 0',
+    'CallFunction GLOBAL[1,0,100]',
+    'endif',
+    'endif',
+    'Equal OBJECTVALUE6 0',
+    'endif',
+    'endif',
+    'IfNotEqual 72 OBJECTSTATE 27',
+    'IfGreater 74 OBJECTVALUE8 0',
+    'Dec OBJECTVALUE8',
+    'GetBit TEMP0 OBJECTVALUE8 2',
+    'IfEqual 76 TEMP0 1',
+    'Equal OBJECTVISIBLE 0',
+    'else',
+    'Equal OBJECTVISIBLE 1',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreater 78 OBJECTVALUE7 0',
+    'Dec OBJECTVALUE7',
+    'IfEqual 80 OBJECTVALUE7 0',
+    'Equal TEMP0 0',
+    'ForEachActive 82 256 ARRAYPOS6',
+    'Add TEMP0 OBJECTVALUE7[1,1,6]',
+    'next',
+    'IfEqual 84 TEMP0 0',
+    'IfEqual 86 MUSICCURRENTTRACK 2',
+    'PlayMusic 0',
+    'endif',
+    'endif',
+    'IfEqual 88 OBJECTTYPE[2,1,7] GLOBAL[1,0,42]',
+    'Equal ARRAYPOS6 OBJECTENTITYPOS',
+    'Equal ARRAYPOS0 ARRAYPOS6',
+    'Add ARRAYPOS0 ARRAYPOS7',
+    'CallFunction 37',
+    'endif',
+    'endif',
+    'endif',
+    'IfNotEqual 90 OBJECTSTATE 16',
+    'IfNotEqual 92 OBJECTSTATE 17',
+    'IfGreater 94 OBJECTLOOKPOSY 0',
+    'Sub OBJECTLOOKPOSY 2',
+    'endif',
+    'IfLower 96 OBJECTLOOKPOSY 0',
+    'Add OBJECTLOOKPOSY 2',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreater 98 OBJECTVALUE11 0',
+    'Dec OBJECTVALUE11',
+    'IfEqual 100 OBJECTVALUE11 0',
+    'IfEqual 102 OBJECTENTITYPOS SCREENCAMERATARGET',
+    'Equal SCREENCAMERASTYLE 0',
+    'endif',
+    'endif',
+    'endif',
+    'IfNotEqual 104 OBJECTSTATE 19',
+    'IfNotEqual 106 OBJECTVALUE26 0',
+    'StopSfx 19',
+    'StopSfx 20',
+    'Equal OBJECTVALUE26 0',
+    'endif',
+    'endif',
+    'return',
+]
+
+
+def returns_balanced(bcdir):
+    """None when no function of any bytecode file returns from inside a while / switch / ForEach, else the first one:
+    a native may then run any script function in the VM, even through a variable CallFunction, if it re-reads its
+    entity (objectEntityPos) after the call (RSDKv4/Script.cpp PS1PlayerInput)."""
+    names, vars_ = bs.tables(3)
+    for f in sorted(os.listdir(bcdir)):
+        if not f.endswith('.bin'):
+            continue
+        code, _, _, _, fns, _ = bs.full_code(os.path.join(bcdir, f))
+        for i, (start, _) in enumerate(fns):
+            if not 0 <= start < len(code):
+                continue
+            stack = []
+            for _, n, _ in instructions(code, start, names, vars_):
+                if n in LOOP_OPS or n in IF_OPS:
+                    stack.append(n)
+                elif n in ('loop', 'endswitch', 'next', 'endif') and stack:
+                    stack.pop()
+                elif n == 'return' and any(x in LOOP_OPS for x in stack):
+                    return '%s function %d returns inside a loop / switch' % (f, i)
+    return None
+
+
+def patch_player_input(bcdir):
+    why = returns_balanced(bcdir)
+    if why:
+        sys.exit('ERROR patch_bytecode: PS1PlayerInput calls script functions it cannot run natively: %s' % why)
+    return patch_global_function(bcdir, PLAYERINPUT_FN_SIG, 'PS1PlayerInput')
+
+
 def patch_global_sub(bcdir, obj_name, sub, sig, op_name, with_jumps=False, calls=()):
     """GlobalCode object `obj_name`'s sub `sub` (0 update, 1 draw) -> op / End when it is exactly `sig` (with_jumps:
     with its jump-table entries; calls: the script functions the native runs in the VM, callable_from_native)."""
@@ -2129,7 +2361,8 @@ def main():
                      ('hflipper', lambda d: patch_stage_sub(d, 'H Flipper', 0, HFLIPPER_SIG, 'PS1HFlipper', with_jumps=True,
                                                             funcs={122: HFLIPPER_FN_SIG})),
                      ('earthquake', lambda d: patch_stage_sub(d, 'Earthquake', 0, EARTHQUAKE_SIG, 'PS1Earthquake',
-                                                              with_jumps=True, calls=(46, 50)))):
+                                                              with_jumps=True, calls=(46, 50))),
+                     ('playerinput', patch_player_input)):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 

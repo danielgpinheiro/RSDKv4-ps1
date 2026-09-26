@@ -762,6 +762,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1HFlipper", 0),
     FunctionInfo("PS1Earthquake", 0),
     FunctionInfo("PS1Spikes", 0),
+    FunctionInfo("PS1PlayerInput", 0),
 #endif
 };
 
@@ -1284,6 +1285,7 @@ enum ScrFunc {
     FUNC_PS1HFLIPPER,
     FUNC_PS1EARTHQUAKE,
     FUNC_PS1SPIKES,
+    FUNC_PS1PLAYERINPUT,
 #endif
     FUNC_MAX_CNT
 };
@@ -5201,6 +5203,237 @@ static void PS1EarthquakeUpdate()
     v[15] = L(63683);
 }
 
+// Sonic 2's player input / timers (GlobalCode function 0, called by the Player Object's update every frame in every
+// zone; ~60 VM instructions a frame), natively: one statement per script instruction, in order. The mobile touch
+// rectangles (CheckTouchRect: no touches on the PS1, but its debug hitbox is kept), the key variables with the VM's
+// inputCheck (their array index is the running entity), ProcessObjectControl, the shield / invincibility / blink
+// timers. The functions it calls (37, 41, the variable GLOBAL[100]) run in the VM (PS1CallScriptFunction); the
+// running entity is re-read after each call, as the VM re-reads objectEntityPos. The body is patched to
+// `PS1PlayerInput / return` only when it matches PLAYERINPUT_FN_SIG and no function of the file returns inside a loop.
+static void PS1PlayerInput()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr = scriptEng.checkResult;
+    int *G  = globalVariables;
+    auto E  = []() -> Entity & { return objectEntityList[objectEntityPos]; };
+    auto ic = []() { return !(forceUseScripts || Engine.usingOrigins) || objectEntityPos <= 1; }; // inputCheck
+    auto L  = [](int pos) { return (int)scriptCode[pos]; };
+    auto touch = [&](int l, int tp, int r, int b) { // FUNC_CHECKTOUCHRECT
+        cr = -1;
+#if !RETRO_USE_ORIGINAL_CODE
+        AddDebugHitbox(H_TYPE_FINGER, NULL, l, tp, r, b);
+#endif
+        for (int f = 0; f < touches; ++f) {
+            if (touchDown[f] && touchX[f] > l && touchX[f] < r && touchY[f] > tp && touchY[f] < b)
+                cr = f;
+        }
+    };
+    auto pause = [&]() {
+        if (G[13] == 0) {
+            PlaySfx(23, 0);
+            StopSfx(19);
+            StopSfx(20);
+            Engine.gameMode = 5;
+        }
+    };
+    if (G[5] == 0) {
+        if (E().controlMode == 0) {
+            touch(0, 96, SCREEN_CENTERX, SCREEN_YSIZE);
+            if (cr > -1) {
+                ap[0] = cr;
+                t[0]  = touchX[ap[0]];
+                t[0] -= saveRAM[39];
+                t[1] = touchY[ap[0]];
+                t[1] -= saveRAM[40];
+                t[2] = ArcTanLookup(t[0], t[1]);
+                t[2] += 32;
+                t[2] &= 255;
+                t[2] >>= 6;
+                switch (t[2]) {
+                    case 0:
+                        if (ic())
+                            keyDown.right = 1;
+                        break;
+                    case 1:
+                        if (ic())
+                            keyDown.down = 1;
+                        break;
+                    case 2:
+                        if (ic())
+                            keyDown.left = 1;
+                        break;
+                    case 3:
+                        if (ic())
+                            keyDown.up = 1;
+                        break;
+                }
+            }
+            touch(SCREEN_CENTERX, 96, SCREEN_XSIZE, 240);
+            if (cr > -1) {
+                if (ic())
+                    keyDown.A = 1;
+            }
+            if (G[102] == 0) { // Or KEYPRESSBUTTONA KEYDOWNBUTTONA
+                int a = keyPress.A && ic();
+                a |= keyDown.A && ic();
+                if (ic())
+                    keyPress.A = a;
+            }
+            G[102] = keyDown.A && ic();
+            if (debugMode == 1) {
+                touch(0, 0, 112, 56);
+                if (cr > -1) {
+                    if (ic())
+                        keyDown.B = 1;
+                }
+                if (G[103] == 0) {
+                    int b = keyPress.B && ic();
+                    b |= keyDown.B && ic();
+                    if (ic())
+                        keyPress.B = b;
+                }
+                G[103] = keyDown.B && ic();
+            }
+            touch(240, 0, SCREEN_XSIZE, 40);
+            if (cr > -1)
+                pause();
+            if ((keyPress.start && ic()) == 1)
+                pause();
+            if ((keyDown.B && ic()) == 1)
+                pause();
+        }
+        ProcessObjectControl(&E());
+        if (G[13] == 1) { // CallNativeFunction2 GLOBAL[137] 0 0
+            int op0 = G[137], op1 = 0, op2 = 0;
+            if (op0 >= 0 && op0 < NATIIVEFUNCTION_COUNT) {
+                void (*func)(int *, int *) = (void (*)(int *, int *))nativeFunction[op0];
+                if (func)
+                    func(&op1, &op2);
+            }
+        }
+    }
+    else {
+        if (G[106] == 0) {
+            touch(0, 0, SCREEN_XSIZE, SCREEN_YSIZE);
+            if ((keyPress.start && ic()) == 1)
+                cr = 0;
+            if (cr > -1) {
+                if (L(12) > 1)
+                    PS1ScriptWrite(12, 1);
+            }
+            if ((keyPress.start && ic()) == 1) {
+                if (L(12) > 1)
+                    PS1ScriptWrite(12, 1);
+            }
+        }
+        if (E().controlMode == 0) {
+            PS1ScriptWrite(11, L(11) - 1);
+            if (L(11) < 1) {
+                if (L(9) < L(10)) {
+                    if (L(9) >= 0 && L(9) < scriptCode[L(8)]) // GetTableValue TEMP0 LOCAL9 LOCAL8
+                        t[0] = scriptCode[L(8) + L(9) + 1];
+                    E().up        = (t[0] & (1 << 0)) >> 0;
+                    E().down      = (t[0] & (1 << 1)) >> 1;
+                    E().left      = (t[0] & (1 << 2)) >> 2;
+                    E().right     = (t[0] & (1 << 3)) >> 3;
+                    E().jumpPress = (t[0] & (1 << 4)) >> 4;
+                    E().jumpHold  = (t[0] & (1 << 5)) >> 5;
+                    PS1ScriptWrite(9, L(9) + 1);
+                    if (L(9) >= 0 && L(9) < scriptCode[L(8)]) // GetTableValue LOCAL11 LOCAL9 LOCAL8
+                        PS1ScriptWrite(11, scriptCode[L(8) + L(9) + 1]);
+                    PS1ScriptWrite(9, L(9) + 1);
+                }
+            }
+            else {
+                if (E().jumpPress == 1)
+                    E().jumpPress = 0;
+            }
+            if (L(12) > 0) {
+                PS1ScriptWrite(12, L(12) - 1);
+                if (L(12) < 1) {
+                    PS1ResetObjectEntity(11, 6, 0, 0, 0);
+                    PS1_OBJ(11).state     = 8;
+                    PS1_OBJ(11).priority  = 1;
+                    PS1_OBJ(11).drawOrder = 6;
+                    E().values[7]         = 80;
+                    cameraEnabled         = 0;
+                }
+            }
+        }
+    }
+    if (E().values[6] > 0) {
+        E().values[6]--;
+        if (E().values[6] < 1) {
+            ap[6] = objectEntityPos;
+            PS1CallScriptFunction(41, 0);
+            t[0]                   = 0;
+            TypeGroupList &players = objectTypeGroupList[256];
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                t[0] += PS1_OBJ(ap[6]).values[6];
+            }
+            if (t[0] == 0) {
+                if (G[100] != 0)
+                    PS1CallScriptFunction(G[100], 0);
+            }
+            E().values[6] = 0;
+        }
+    }
+    if (E().state != 27) {
+        if (E().values[8] > 0) {
+            E().values[8]--;
+            t[0] = (E().values[8] & (1 << 2)) >> 2;
+            if (t[0] == 1)
+                E().visible = 0;
+            else
+                E().visible = 1;
+        }
+    }
+    if (E().values[7] > 0) {
+        E().values[7]--;
+        if (E().values[7] == 0) {
+            t[0]                   = 0;
+            TypeGroupList &players = objectTypeGroupList[256];
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                t[0] += PS1_OBJ(ap[6]).values[7];
+            }
+            if (t[0] == 0) {
+                if (trackID == 2)
+                    PlayMusic(0, 0);
+            }
+            if (PS1_OBJ(objectEntityPos + ap[7]).type == G[42]) { // OBJECTTYPE[2,1,7]: entity (this + arrayPos7)
+                ap[6] = objectEntityPos;
+                ap[0] = ap[6];
+                ap[0] += ap[7];
+                PS1CallScriptFunction(37, 0);
+            }
+        }
+    }
+    if (E().state != 16) {
+        if (E().state != 17) {
+            if (E().lookPosY > 0)
+                E().lookPosY -= 2;
+            if (E().lookPosY < 0)
+                E().lookPosY += 2;
+        }
+    }
+    if (E().values[11] > 0) {
+        E().values[11]--;
+        if (E().values[11] == 0) {
+            if (objectEntityPos == cameraTarget)
+                cameraStyle = 0;
+        }
+    }
+    if (E().state != 19) {
+        if (E().values[26] != 0) {
+            StopSfx(19);
+            StopSfx(20);
+            E().values[26] = 0;
+        }
+    }
+}
+
 // Sonic 2's Spikes (GlobalCode object "Spikes"; update 121 VM instructions, ~3 hblanks a frame each), natively: one
 // statement per script instruction, in order. The moving spikes' states (switch OBJECTSTATE 1-5), then the player
 // loop of their orientation (switch OBJECTPROPERTYVALUE 0-3); hurting (function 49) and killing (function 50) run in
@@ -7500,6 +7733,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPIKES:
                 opcodeSize = 0;
                 PS1SpikesUpdate();
+                break;
+            case FUNC_PS1PLAYERINPUT:
+                opcodeSize = 0;
+                PS1PlayerInput();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
