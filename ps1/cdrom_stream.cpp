@@ -20,8 +20,10 @@ void PS1FsStopStream(); // cdrom_fs.cpp: one CD action at a time
 
 #define CD_SECTOR 2048
 
-volatile uint32_t g_ps1StreamRestarts  = 0;
-volatile uint32_t g_ps1StreamDiscarded = 0;
+volatile uint32_t g_ps1StreamRestarts     = 0;
+volatile uint32_t g_ps1StreamDiscarded    = 0;
+volatile uint32_t g_ps1StreamInt1         = 0; // data-ready IRQs seen by the stream (delivered or dropped)
+volatile uint32_t g_ps1StreamCloseTimeout = 0; // closes that gave up waiting for the drive's PAUSE
 
 namespace {
 
@@ -61,7 +63,20 @@ class StreamAction : public psyqo::CDRomDevice::Action<StreamState> {
         msf.toBCD(bcd);
         psyqo::Hardware::CDRom::Command.send(psyqo::Hardware::CDRom::CDL::SETLOC, bcd[0], bcd[1], bcd[2]);
     }
+    // From the main loop (PS1StreamClose): pause now rather than on the next data sector. If the drive
+    // stopped delivering data (the FMV hang on real hardware: only its XA audio kept playing), waiting
+    // for a sector never ends. Mid-sequence, the next ack sees `stopping` and pauses.
+    void requestPause() {
+        psyqo::Kernel::fastEnterCriticalSection();
+        s_stream.stopping = true;
+        if (getState() == StreamState::READ_ACK) {
+            setState(StreamState::PAUSE);
+            psyqo::Hardware::CDRom::Command.send(psyqo::Hardware::CDRom::CDL::PAUSE);
+        }
+        psyqo::Kernel::fastLeaveCriticalSection();
+    }
     bool dataReady(const psyqo::CDRomDevice::Response &) override {
+        g_ps1StreamInt1 = g_ps1StreamInt1 + 1;
         StreamState st = getState();
         bool room = (s_stream.written - s_stream.consumed) < s_stream.ringSectors;
         if (s_stream.xa && st == StreamState::READ_ACK && !room && s_stream.written < s_stream.total && !s_stream.stopping) {
@@ -107,7 +122,13 @@ class StreamAction : public psyqo::CDRomDevice::Action<StreamState> {
         return true;
     }
     bool acknowledge(const psyqo::CDRomDevice::Response &) override {
-        switch (getState()) {
+        StreamState st = getState();
+        if (s_stream.stopping && st != StreamState::PAUSE && st != StreamState::PAUSE_ACK) {
+            setState(StreamState::PAUSE); // closed mid-sequence (requestPause): no further commands
+            psyqo::Hardware::CDRom::Command.send(psyqo::Hardware::CDRom::CDL::PAUSE);
+            return false;
+        }
+        switch (st) {
             case StreamState::SETLOC:
                 if (s_stream.xa) {
                     setState(StreamState::SETFILTER);
@@ -220,11 +241,33 @@ bool PS1StreamEnded() {
 
 bool PS1StreamError() { return s_stream.error; }
 
+uint32_t PS1StreamDelivered() {
+    eastl::atomic_signal_fence(eastl::memory_order_acquire);
+    return s_stream.written;
+}
+
+uint32_t PS1Hblanks(); // video.cpp: root counter 1
+
+#define CLOSE_TIMEOUT_HBL (3 * 15734) // ~3 s (NTSC hblanks; PAL waits a little longer)
+
 void PS1StreamClose() {
+    if (s_stream.running)
+        s_action.requestPause(); // PAUSE now (or on the pending ack), never "on the next sector"
     s_stream.stopping = true;
     eastl::atomic_signal_fence(eastl::memory_order_release);
-    // A running action pauses on its next sector (dataReady checks `stopping`); wait for it.
-    while (s_stream.running && g_ps1GPU)
+    // Bounded: a drive that never answers must not hang the game (root counter 1 wraps at 16 bits,
+    // so the elapsed time is summed per iteration).
+    uint32_t last = PS1Hblanks(), waited = 0;
+    while (s_stream.running && g_ps1GPU) {
         g_ps1GPU->pumpCallbacks();
+        uint32_t now = PS1Hblanks();
+        waited += (now - last) & 0xffff;
+        last = now;
+        if (waited > CLOSE_TIMEOUT_HBL) {
+            g_ps1StreamCloseTimeout = g_ps1StreamCloseTimeout + 1;
+            s_stream.running = false; // give the CD back; the next action replaces this one
+            break;
+        }
+    }
     s_stream.open = false;
 }

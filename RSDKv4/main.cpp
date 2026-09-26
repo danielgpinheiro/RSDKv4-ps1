@@ -35,6 +35,7 @@ static uint32_t s_ps1PerfLastCount         = 0;
 psyqo::GPU *g_ps1GPU           = nullptr;
 psyqo::AdvancedPad *g_ps1Pad   = nullptr;
 psyqo::CDRomDevice *g_ps1CDRom = nullptr;
+void PS1IrqGuardInstall(); // ps1/irq_guard.cpp
 
 __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
 {
@@ -77,6 +78,7 @@ class RSDKv4PS1App final : public psyqo::Application {
     {
         m_cdrom.resetBlocking(gpu());
         g_ps1CDRom = &m_cdrom;
+        PS1IrqGuardInstall(); // re-raises CD / DMA IRQ edges lost to psyqo's I_STAT read-modify-write (docs/31)
         m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;
         PS1ProfTicksInit(); // per-object-type CPU profile (Object.cpp g_ps1TypeTicks)

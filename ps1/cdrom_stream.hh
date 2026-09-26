@@ -33,8 +33,11 @@ const uint8_t *PS1StreamSector(uint32_t i); // i-th ready sector (0 = oldest), v
 void     PS1StreamConsume(uint32_t n);    // release n sectors
 bool     PS1StreamEnded();                // all sectors delivered and consumed
 bool     PS1StreamError();                // the drive reported an error
-void     PS1StreamClose();                // stop reading (sends PAUSE if running); waits until idle
+uint32_t PS1StreamDelivered();            // sectors delivered into the ring since open
+void     PS1StreamClose();                // stop reading (sends PAUSE now if running); waits until idle, ~3 s at most
 
 // Verification counters (GDB).
-extern volatile uint32_t g_ps1StreamRestarts;  // SETLOC restarts after the ring filled up
-extern volatile uint32_t g_ps1StreamDiscarded; // sectors dropped while pausing (re-read later)
+extern volatile uint32_t g_ps1StreamRestarts;     // SETLOC restarts after the ring filled up
+extern volatile uint32_t g_ps1StreamDiscarded;    // sectors dropped while pausing (re-read later)
+extern volatile uint32_t g_ps1StreamInt1;         // data-ready IRQs seen by the stream
+extern volatile uint32_t g_ps1StreamCloseTimeout; // closes that gave up waiting for the drive
