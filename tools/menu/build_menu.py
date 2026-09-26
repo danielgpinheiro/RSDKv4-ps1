@@ -56,6 +56,7 @@ FONTS = [
     ('TEXT_S', 'Text_EN', 'Text_EN.png', 0.20, 'text', 'resident'),
     ('HEADING_L', 'Heading_EN', 'Heading_EN@1x.png', 0.20, 'heading', 'menu'),
     ('LABEL_L', 'Label_EN', 'Label_EN@1x.png', 0.14, 'label', 'menu'),
+    ('LABEL_M', 'Label_EN', 'Label_EN@1x.png', 0.10, 'label', 'menu'),  # save files' stage names (native: 0.08 vs 0.1)
 ]
 # Which strings each font style draws (their characters are the glyph set). The resident fonts (pause menu and its
 # dialogs, 14 VRAM rows tall) carry only what those screens show.
@@ -71,6 +72,9 @@ MENU_COLUMNS = list(range(5, 16))                 # x 320-1023: the atlas (5-8, 
 MENU_CLUT_ROWS = list(range(500, 512))            # 8-bit CLUTs: one row each (x 0-255); 4-bit CLUTs at x 256-319
 
 
+BLEND_ALL = {'WATERMARK'}  # pictures whose every texel blends (drawn +25 % additive: a faint line art)
+
+
 class PackError(Exception):
     pass
 
@@ -82,10 +86,13 @@ def ps1_colour(r, g, b, stp):
     return c if c else 0x0421  # opaque black: 0x0000 would be transparent
 
 
-def classify(img):
-    """RGBA -> (rgb array, level array: 0 transparent, 1 50 %, 2 opaque)."""
+def classify(img, blend_all=False):
+    """RGBA -> (rgb array, level array: 0 transparent, 1 50 %, 2 opaque). blend_all: every visible texel blends
+    (the watermark, drawn +25 % additive)."""
     a = np.array(img.convert('RGBA'), dtype=np.int32)
     lvl = np.where(a[..., 3] >= 192, 2, np.where(a[..., 3] >= 64, 1, 0))
+    if blend_all:
+        lvl = np.where(a[..., 3] >= 64, 1, 0)
     return a[..., :3], lvl
 
 
@@ -97,7 +104,7 @@ def quantize(rgb, lvl, depth):
     opaque, semi = rgb[lvl == 2], rgb[lvl == 1]
     uniq_o = np.unique(opaque.reshape(-1, 3), axis=0) if len(opaque) else np.zeros((0, 3), np.int32)
     uniq_s = np.unique(semi.reshape(-1, 3), axis=0) if len(semi) else np.zeros((0, 3), np.int32)
-    n_s = min(len(uniq_s), max(1, maxc // 4) if len(uniq_s) else 0)
+    n_s = min(len(uniq_s), (max(1, maxc // 4) if len(uniq_o) else maxc) if len(uniq_s) else 0)
     n_o = min(len(uniq_o), maxc - n_s)
     for level, uniq, n in ((2, uniq_o, n_o), (1, uniq_s, n_s)):
         if not n:
@@ -339,7 +346,7 @@ def build_pack(items, packer, clut_rows, clut_x4, name):
     clut4 = [(x, r) for r in clut_rows for x in clut_x4]
     for g, members in groups.items():
         depth = items[members[0]][3]
-        cls = [classify(items[i][2]) for i in members]
+        cls = [classify(items[i][2], items[i][1] in BLEND_ALL) for i in members]
         rgb = np.concatenate([c[0].reshape(-1, 3) for c in cls])[None]
         lvl = np.concatenate([c[1].reshape(-1) for c in cls])[None]
         idx_all, clut = quantize(rgb, lvl, depth)

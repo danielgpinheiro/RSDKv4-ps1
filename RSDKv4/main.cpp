@@ -99,6 +99,10 @@ class RSDKv4PS1App final : public psyqo::Application {
         PS1LoadingEnd();
         // The menus' resident fonts + strings (VRAM rows 242-255; docs/30 phase 4.2).
         PS1MenuResidentLoad();
+#ifndef PS1_BOOT_FOLDER
+        PS1MenuOpen(PS1_MENU_TITLE); // the mobile front end's flow (docs/30 phase 4): menus first, the scripted Title
+                                     // comes when a game starts
+#endif
         g_ps1InitDone = 1;
     }
 

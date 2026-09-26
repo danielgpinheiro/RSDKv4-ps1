@@ -55,3 +55,10 @@ extern volatile uint32_t g_ps1MenuPackLoads;  // packs loaded (GDB)
 extern volatile uint32_t g_ps1MenuPackBytes;  // texel + CLUT bytes uploaded by the last load
 extern volatile uint32_t g_ps1MenuTestLoad;   // GDB: 1 = load PS1Menu.pmn at the next frame (tools/menu_vram_test.sh)
 void PS1MenuTestService();                    // main.cpp frame(): services g_ps1MenuTestLoad
+
+// Menu screens (phase 4.3). The PS1 engine modes ENGINE_PS1MENU / ENGINE_PS1PAUSE (RetroEngine.hpp) run them from
+// RetroEngine::RunFrame instead of the stage.
+enum PS1MenuScreen { PS1_MENU_TITLE, PS1_MENU_MAIN, PS1_MENU_SAVE, PS1_MENU_PLAYER };
+void PS1MenuOpen(int screen); // loads PS1Menu.pmn (VRAM: the stage's sprite / tile columns) and enters ENGINE_PS1MENU
+void PS1MenuFrame();          // one frame of the open screen: input, actions, drawing
+extern volatile uint32_t g_ps1MenuScreen, g_ps1MenuSel; // GDB: the screen and its selection

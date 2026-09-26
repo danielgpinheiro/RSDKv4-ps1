@@ -294,6 +294,11 @@ enum RetroStates {
     ENGINE_EXITPAUSE   = 6,
     ENGINE_ENDGAME     = 7,
     ENGINE_RESETGAME   = 8,
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1 menus (ps1/menu.cpp, docs/30 phase 4): the 2D rebuild of the mobile front end and pause menu.
+    ENGINE_PS1MENU  = 0x40,
+    ENGINE_PS1PAUSE = 0x41,
+#endif
 
 #if !RETRO_USE_ORIGINAL_CODE && RETRO_USE_NETWORKING
     // Custom GameModes (required to make some features work)

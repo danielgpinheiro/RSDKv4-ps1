@@ -1,6 +1,7 @@
 #include "RetroEngine.hpp"
 
 #if RETRO_PLATFORM == RETRO_PS1
+#include "../ps1/menu.hh"
 // GameConfig stage entries / names that did not fit the PS1-sized stageList (Scene.hpp); for GDB.
 volatile uint32_t g_ps1StageListClamped = 0;
 #endif
@@ -577,9 +578,23 @@ void RetroEngine::RunFrame()
                     ResumeSound();
                     break;
 
+                case ENGINE_PS1MENU: PS1MenuFrame(); break;
+
+#ifndef PS1_BOOT_FOLDER
+                // RetroGameLoop's menu path (not skipStartMenu): back to the menus; the end of a game also reloads
+                // the GameConfig (global variables' initial values), as the native RestoreNativeObjects path does.
+                case ENGINE_ENDGAME:
+                    LoadGameConfig("Data/Game/GameConfig.bin");
+                    activeStageList   = 0;
+                    stageListPosition = 0;
+                    PS1MenuOpen(PS1_MENU_MAIN);
+                    break;
+                case ENGINE_RESETGAME: PS1MenuOpen(PS1_MENU_MAIN); break;
+#else
                 case ENGINE_ENDGAME:
                 case ENGINE_RESETGAME:
-                default: // back to the Title (RetroGameLoop's skipStartMenu paths)
+#endif
+                default: // back to the Title (RetroGameLoop's skipStartMenu paths; BOOT= test builds)
                     ClearScreen(1);
                     activeStageList   = 0;
                     stageListPosition = 0;
