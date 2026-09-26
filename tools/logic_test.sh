@@ -59,7 +59,7 @@ if g_ps1PerfFrames == $S3
   dump binary memory ${OUT}_code_end.bin &scriptCode.slot[0] &scriptCode.slot[scriptCodePos]
   dump binary memory ${OUT}_glob_end.bin &globalVariables[0] &globalVariables[256]
   printf "STATE scriptCodePos=%d jumpPos=%d big=%u scriptFrames=%d aniFrames=%d anims=%d | heap total=%u headroom=%u | 3D maxVertex=%d maxFace=%d\n", scriptCodePos, jumpTablePos, g_ps1ScriptBigCount, scriptFrameCount, animFrameCount, animationCount, g_ps1HeapTotal, g_ps1HeapHeadroom, g_ps1Scene3DMaxVertex, g_ps1Scene3DMaxFace
-  printf "GUARDS scriptOverflow=%u badPtr=%u divZero=%u badOpcode=%u entityOOR=%u rowsClamped=%u lineScrollClamped=%u textMenuClamped=%u aniOverflow=%u pause=%u copyTile=%u scene3D=%u nested=%u\n", g_ps1ScriptOverflow, g_ps1ScriptBadPtr, g_ps1ScriptDivZero, g_ps1ScriptBadOpcode, g_ps1EntityOutOfRange, g_ps1LayerRowsClamped, g_ps1LineScrollClamped, g_ps1TextMenuClamped, g_ps1AnimFrameOverflow, g_ps1PauseRequests, g_ps1Copy16x16Tile, g_ps1Scene3DOverflow, g_ps1ScriptNestedCalls
+  printf "GUARDS scriptOverflow=%u badPtr=%u divZero=%u badOpcode=%u entityOOR=%u rowsClamped=%u lineScrollClamped=%u textMenuClamped=%u aniOverflow=%u pause=%u copyTile=%u scene3D=%u nested=%u saveRAMClamped=%u\n", g_ps1ScriptOverflow, g_ps1ScriptBadPtr, g_ps1ScriptDivZero, g_ps1ScriptBadOpcode, g_ps1EntityOutOfRange, g_ps1LayerRowsClamped, g_ps1LineScrollClamped, g_ps1TextMenuClamped, g_ps1AnimFrameOverflow, g_ps1PauseRequests, g_ps1Copy16x16Tile, g_ps1Scene3DOverflow, g_ps1ScriptNestedCalls, g_ps1SaveRAMClamped
   printf "OOR last index=%d max=%d from slot=%d type=%d\n", g_ps1EntityOORIndex, g_ps1EntityOORMax, g_ps1EntityOORFrom, g_ps1EntityOORType
   detach
 else

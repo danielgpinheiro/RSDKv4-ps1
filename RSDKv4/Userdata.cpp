@@ -9,6 +9,9 @@ int nativeFunctionCount = 0;
 
 char gamePath[0x100];
 int saveRAM[SAVEDATA_SIZE];
+#if RETRO_PLATFORM == RETRO_PS1
+volatile uint32_t g_ps1SaveRAMClamped = 0; // script saveRAM accesses past SAVEDATA_SIZE (GDB)
+#endif
 Achievement achievements[ACHIEVEMENT_COUNT];
 int achievementCount = 0;
 

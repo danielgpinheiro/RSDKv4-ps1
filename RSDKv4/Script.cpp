@@ -8044,7 +8044,18 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].d; break;
                     case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].flag; break;
                     case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].color; break;
+#if RETRO_PLATFORM == RETRO_PS1
+                    case VAR_SAVERAM:
+                        if ((uint)arrayVal < SAVEDATA_SIZE)
+                            scriptEng.operands[i] = saveRAM[arrayVal];
+                        else {
+                            scriptEng.operands[i] = 0;
+                            g_ps1SaveRAMClamped   = g_ps1SaveRAMClamped + 1;
+                        }
+                        break;
+#else
                     case VAR_SAVERAM: scriptEng.operands[i] = saveRAM[arrayVal]; break;
+#endif
                     case VAR_ENGINESTATE: scriptEng.operands[i] = Engine.gameMode; break;
 #if RETRO_REV00
                     case VAR_ENGINEMESSAGE: scriptEng.operands[i] = Engine.message; break;
@@ -10731,7 +10742,16 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                     case VAR_FACEBUFFERD: faceBuffer[PS1_FACE(arrayVal)].d = scriptEng.operands[i]; break;
                     case VAR_FACEBUFFERFLAG: faceBuffer[PS1_FACE(arrayVal)].flag = scriptEng.operands[i]; break;
                     case VAR_FACEBUFFERCOLOR: faceBuffer[PS1_FACE(arrayVal)].color = scriptEng.operands[i]; break;
+#if RETRO_PLATFORM == RETRO_PS1
+                    case VAR_SAVERAM:
+                        if ((uint)arrayVal < SAVEDATA_SIZE)
+                            saveRAM[arrayVal] = scriptEng.operands[i];
+                        else
+                            g_ps1SaveRAMClamped = g_ps1SaveRAMClamped + 1;
+                        break;
+#else
                     case VAR_SAVERAM: saveRAM[arrayVal] = scriptEng.operands[i]; break;
+#endif
                     case VAR_ENGINESTATE: Engine.gameMode = scriptEng.operands[i]; break;
 #if RETRO_REV00
                     case VAR_ENGINEMESSAGE: break;

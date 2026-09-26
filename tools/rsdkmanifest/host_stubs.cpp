@@ -155,3 +155,4 @@ void PS1TileChanged(int) {}
 void PS1Copy16x16Tile(int, int) {}
 void PS1LoadBGStrips(const char *, int) {}
 void PS1PaletteLinesChanged() {}
+volatile uint32_t g_ps1SaveRAMClamped = 0;

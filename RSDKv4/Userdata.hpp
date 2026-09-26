@@ -6,7 +6,15 @@
 #define ACHIEVEMENT_COUNT (0x40)
 #define LEADERBOARD_COUNT (0x80)
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (2 MB, docs/30 phase 4.3): the scripts use the save files (0-31), settings (32-46) and the level select's 2P
+// results (1024 + 4 * round + ...); SaveGame's records sit at 64-192. customSS (2048+) is never touched: 2048 ints
+// instead of 8192 (saves 24 KB). Script accesses past it read 0 / are dropped, counted (g_ps1SaveRAMClamped).
+#define SAVEDATA_SIZE (0x800)
+extern volatile uint32_t g_ps1SaveRAMClamped;
+#else
 #define SAVEDATA_SIZE (0x2000)
+#endif
 
 #if RETRO_USE_MOD_LOADER
 #define NATIIVEFUNCTION_COUNT (0x30)
