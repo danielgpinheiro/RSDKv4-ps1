@@ -765,6 +765,14 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1PlayerInput", 0),
     FunctionInfo("PS1CLedge", 0),
     FunctionInfo("PS1SteamPiston", 0),
+    FunctionInfo("PS1PlayerFn2", 0),
+    FunctionInfo("PS1PlayerFn3", 0),
+    FunctionInfo("PS1PlayerFn4", 0),
+    FunctionInfo("PS1PlayerFn5", 0),
+    FunctionInfo("PS1PlayerFn6", 0),
+    FunctionInfo("PS1PlayerFn51", 0),
+    FunctionInfo("PS1PlayerFn52", 0),
+    FunctionInfo("PS1PlayerFn53", 0),
 #endif
 };
 
@@ -1290,6 +1298,14 @@ enum ScrFunc {
     FUNC_PS1PLAYERINPUT,
     FUNC_PS1CLEDGE,
     FUNC_PS1STEAMPISTON,
+    FUNC_PS1PLAYERFN2,
+    FUNC_PS1PLAYERFN3,
+    FUNC_PS1PLAYERFN4,
+    FUNC_PS1PLAYERFN5,
+    FUNC_PS1PLAYERFN6,
+    FUNC_PS1PLAYERFN51,
+    FUNC_PS1PLAYERFN52,
+    FUNC_PS1PLAYERFN53,
 #endif
     FUNC_MAX_CNT
 };
@@ -5792,6 +5808,380 @@ static void PS1SteamPistonUpdate()
         me.state          = 0;
     }
 }
+
+// The player's physics functions (GlobalCode functions 2-6 and 51-53, run by the player states every frame for each
+// player), natively: one statement per script instruction, in order, on the running entity. Each function's body is
+// patched to `op / return` only when all of them match PLAYERFN*_SIG (patch_bytecode.py patch_player_physics).
+static int PS1CollisionTop(Entity &e) // VAR_OBJECTCOLLISIONTOP's getter
+{
+    AnimationFile *animFile = objectScriptList[e.type].animFile;
+    if (!animFile)
+        return 0;
+    int h = animFrames[animationList[animFile->aniListOffset + e.animation].frameListOffset + e.frame].hitboxID;
+    return hitboxList[animFile->hitboxListOffset + h].top[0];
+}
+static void PS1PlayerFn51() // walking animation speed from the ground speed (value 5)
+{
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    if (me.propertyValue == 1) {
+        v[5] = 120;
+    }
+    else {
+        v[5] = me.speed;
+        if (v[5] < 0)
+            v[5] = -v[5];
+        v[5] *= 240;
+        v[5] = PS1ScriptDiv(v[5], 393216);
+        v[5] += 48;
+    }
+}
+static void PS1PlayerFn52()
+{
+    Entity &me        = objectEntityList[objectEntityPos];
+    me.animationSpeed = me.speed;
+    if (me.animationSpeed < 0)
+        me.animationSpeed = -me.animationSpeed;
+    me.animationSpeed *= 60;
+    me.animationSpeed = PS1ScriptDiv(me.animationSpeed, 393216);
+    me.animationSpeed += 20;
+}
+static void PS1PlayerFn53()
+{
+    Entity &me        = objectEntityList[objectEntityPos];
+    me.animationSpeed = me.speed;
+    if (me.animationSpeed < 0)
+        me.animationSpeed = -me.animationSpeed;
+    me.animationSpeed *= 80;
+    me.animationSpeed = PS1ScriptDiv(me.animationSpeed, 393216);
+}
+static void PS1PlayerFn5() // ground speed -> x / y velocity along the floor angle
+{
+    int *t             = scriptEng.temp;
+    Entity &me         = objectEntityList[objectEntityPos];
+    me.scrollTracking = 0;
+    t[0]               = Cos256(me.angle);
+    t[0] *= me.speed;
+    t[0] >>= 8;
+    me.xvel = t[0];
+    t[0]    = Sin256(me.angle);
+    t[0] *= me.speed;
+    t[0] >>= 8;
+    me.yvel = t[0];
+}
+static void PS1PlayerFn3() // air control
+{
+    int *t     = scriptEng.temp;
+    int *G     = globalVariables;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    if (me.yvel > -262144) {
+        if (me.yvel < 0) {
+            t[0] = me.speed;
+            t[0] >>= 5;
+            me.speed -= t[0];
+        }
+    }
+    t[0] = v[20];
+    t[0] = -t[0];
+    if (me.speed > t[0]) {
+        if (me.left == 1) {
+            me.speed -= v[23];
+            me.direction = 1;
+        }
+    }
+    else {
+        if (me.left == 1)
+            me.direction = 1;
+    }
+    if (me.speed < v[20]) {
+        if (me.right == 1) {
+            me.speed += v[23];
+            me.direction = 0;
+        }
+    }
+    else {
+        if (me.right == 1)
+            me.direction = 0;
+    }
+    if (G[9] == 1) {
+        if (me.left == 1) {
+            t[0] = v[20];
+            t[0] = -t[0];
+            if (me.speed < t[0])
+                me.speed = t[0];
+        }
+        if (me.right == 1) {
+            if (me.speed > v[20])
+                me.speed = v[20];
+        }
+    }
+}
+static void PS1PlayerFn4() // air movement: gravity, jump release, rotation
+{
+    int *t     = scriptEng.temp;
+    int *G     = globalVariables;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    me.scrollTracking = 1;
+    me.yvel += v[25];
+    if (me.yvel < v[28]) {
+        if (me.jumpHold == 0) {
+            if (v[1] > 0) {
+                me.yvel = v[28];
+                t[0]    = me.speed;
+                t[0] >>= 5;
+                me.speed -= t[0];
+            }
+        }
+    }
+    me.xvel = me.speed;
+    if (me.rotation < 256) {
+        if (me.rotation > 0)
+            me.rotation -= 4;
+        else
+            me.rotation = 0;
+    }
+    else {
+        if (me.rotation < 512)
+            me.rotation += 4;
+        else
+            me.rotation = 0;
+    }
+    me.collisionMode = 0;
+    if (me.animation == G[67])
+        me.animationSpeed = v[5];
+}
+static void PS1PlayerFn6() // the jump (roof check first)
+{
+    int *t     = scriptEng.temp;
+    int &cr    = scriptEng.checkResult;
+    int *G     = globalVariables;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    t[1]       = 0;
+    if (me.collisionMode == 0) {
+        t[6] = me.xpos;
+        t[7] = me.ypos;
+        t[0] = PS1CollisionTop(me);
+        t[0] -= 2;
+        ObjectRoofCollision(0, t[0] - 1, me.collisionPlane); // ObjectTileCollision CSIDE_ROOF
+        t[1]    = cr;
+        me.xpos = t[6];
+        me.ypos = t[7];
+        t[0]    = PS1CollisionBottom(me);
+        if (me.animation != G[67]) {
+            me.ypos = ((me.ypos >> 16) - v[30]) << 16; // Sub OBJECTIYPOS OBJECTVALUE30 (write-back)
+            t[0] += v[30];
+        }
+        ObjectFloorCollision(0, t[0], me.collisionPlane); // ObjectTileCollision CSIDE_FLOOR
+    }
+    if (t[1] == 0) {
+        me.controlLock = 0;
+        me.gravity     = 1;
+        t[1]           = v[27];
+        t[1] += v[25];
+        me.xvel = Sin256(me.angle);
+        me.xvel *= t[1];
+        t[0] = Cos256(me.angle);
+        t[0] *= me.speed;
+        me.xvel += t[0];
+        me.xvel >>= 8;
+        me.yvel = Sin256(me.angle);
+        me.yvel *= me.speed;
+        t[0] = Cos256(me.angle);
+        t[0] *= t[1];
+        me.yvel -= t[0];
+        me.yvel >>= 8;
+        me.speed          = me.xvel;
+        me.scrollTracking = 1;
+        me.animation      = G[67];
+        me.angle          = 0;
+        me.collisionMode  = 0;
+        v[1]              = 1;
+        PS1PlayerFn51(); // CallFunction 51
+        if (me.state == 14)
+            me.state = 15;
+        else
+            me.state = 12;
+        PlaySfx(0, 0);
+        v[34] = 1;
+        v[35] = 1;
+    }
+}
+static void PS1PlayerFn2() // ground acceleration / deceleration, slopes, falling off walls
+{
+    int *t     = scriptEng.temp;
+    int *G     = globalVariables;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    auto slope = [&]() {
+        t[0] = Sin256(me.angle);
+        t[0] *= 8192;
+        t[0] >>= 8;
+        me.speed += t[0];
+    };
+    auto fall = [&]() {
+        me.gravity       = 1;
+        me.angle         = 0;
+        me.collisionMode = 0;
+        me.speed         = me.xvel;
+    };
+    if (me.controlLock > 0) {
+        me.controlLock--;
+        slope();
+    }
+    else {
+        if (me.left == 1) {
+            t[0] = v[20];
+            t[0] = -t[0];
+            if (me.speed > t[0]) {
+                if (me.speed > 0) {
+                    if (me.collisionMode == 0) {
+                        if (me.speed > 262144)
+                            v[14] = 16;
+                    }
+                    if (me.speed < v[9]) {
+                        me.speed = v[9];
+                        me.speed = -me.speed;
+                        v[14]    = 0;
+                    }
+                    else {
+                        me.speed -= v[9];
+                    }
+                }
+                else {
+                    me.speed -= v[21];
+                    v[14] = 0;
+                }
+            }
+            if (me.speed <= 0)
+                me.direction = 1;
+        }
+        if (me.right == 1) {
+            if (me.speed < v[20]) {
+                if (me.speed < 0) {
+                    if (me.collisionMode == 0) {
+                        if (me.speed < -262144)
+                            v[14] = 16;
+                    }
+                    t[0] = v[9];
+                    t[0] = -t[0];
+                    if (me.speed > t[0]) {
+                        me.speed = v[9];
+                        v[14]    = 0;
+                    }
+                    else {
+                        me.speed += v[9];
+                    }
+                }
+                else {
+                    me.speed += v[21];
+                    v[14] = 0;
+                }
+            }
+            if (me.speed >= 0)
+                me.direction = 0;
+        }
+        t[0] = me.left;
+        t[0] |= me.right;
+        if (t[0] == 0) {
+            if (me.speed > 0) {
+                me.speed -= v[22];
+                if (me.speed < 0)
+                    me.speed = 0;
+            }
+            else {
+                me.speed += v[22];
+                if (me.speed > 0)
+                    me.speed = 0;
+            }
+            if (me.speed > 8192)
+                slope();
+            if (me.speed < -8192)
+                slope();
+            if (me.angle > 192) {
+                if (me.angle < 228) {
+                    if (me.speed > -65536) {
+                        if (me.speed < 65536)
+                            me.controlLock = 30;
+                    }
+                }
+            }
+            if (me.angle > 28) {
+                if (me.angle < 64) {
+                    if (me.speed > -65536) {
+                        if (me.speed < 65536)
+                            me.controlLock = 30;
+                    }
+                }
+            }
+        }
+        else {
+            slope();
+            if (me.right == 1) {
+                if (me.left == 0) {
+                    if (me.angle > 192) {
+                        if (me.angle < 228) {
+                            if (me.speed < 163840) {
+                                if (me.speed > -131072)
+                                    me.controlLock = 30;
+                            }
+                        }
+                    }
+                }
+            }
+            else {
+                if (me.left == 1) {
+                    if (me.angle > 28) {
+                        if (me.angle < 64) {
+                            if (me.speed > -163840) {
+                                if (me.speed < 131072)
+                                    me.controlLock = 30;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (G[1] == 1) {
+            if (me.left == 1) {
+                t[0] = v[20];
+                t[0] = -t[0];
+                if (me.speed < t[0])
+                    me.speed = t[0];
+            }
+            if (me.right == 1) {
+                if (me.speed > v[20])
+                    me.speed = v[20];
+            }
+        }
+    }
+    switch (me.collisionMode) {
+        case 1:
+            if (me.angle <= 192) {
+                if (me.speed > -131072) {
+                    if (me.speed < 131072)
+                        fall();
+                }
+            }
+            break;
+        case 2:
+            if (me.speed > -131072) {
+                if (me.speed < 131072)
+                    fall();
+            }
+            break;
+        case 3:
+            if (me.angle >= 64) {
+                if (me.speed > -131072) {
+                    if (me.speed < 131072)
+                        fall();
+                }
+            }
+            break;
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -7984,6 +8374,38 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1STEAMPISTON:
                 opcodeSize = 0;
                 PS1SteamPistonUpdate();
+                break;
+            case FUNC_PS1PLAYERFN2:
+                opcodeSize = 0;
+                PS1PlayerFn2();
+                break;
+            case FUNC_PS1PLAYERFN3:
+                opcodeSize = 0;
+                PS1PlayerFn3();
+                break;
+            case FUNC_PS1PLAYERFN4:
+                opcodeSize = 0;
+                PS1PlayerFn4();
+                break;
+            case FUNC_PS1PLAYERFN5:
+                opcodeSize = 0;
+                PS1PlayerFn5();
+                break;
+            case FUNC_PS1PLAYERFN6:
+                opcodeSize = 0;
+                PS1PlayerFn6();
+                break;
+            case FUNC_PS1PLAYERFN51:
+                opcodeSize = 0;
+                PS1PlayerFn51();
+                break;
+            case FUNC_PS1PLAYERFN52:
+                opcodeSize = 0;
+                PS1PlayerFn52();
+                break;
+            case FUNC_PS1PLAYERFN53:
+                opcodeSize = 0;
+                PS1PlayerFn53();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
