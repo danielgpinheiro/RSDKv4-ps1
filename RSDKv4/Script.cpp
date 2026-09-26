@@ -780,6 +780,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1TailsFn66", 0),
     FunctionInfo("PS1TailsFn67", 0),
     FunctionInfo("PS1MPZSetup", 0),
+    FunctionInfo("PS1Monitor", 0),
 #endif
 };
 
@@ -1320,6 +1321,7 @@ enum ScrFunc {
     FUNC_PS1TAILSFN66,
     FUNC_PS1TAILSFN67,
     FUNC_PS1MPZSETUP,
+    FUNC_PS1MONITOR,
 #endif
     FUNC_MAX_CNT
 };
@@ -7023,6 +7025,133 @@ static void PS1MPZSetupUpdate()
         }
     }
 }
+
+// Sonic 2's Monitor (GlobalCode object "Monitor", in most zones; update 112 VM instructions, ~21 a frame each),
+// natively: one statement per script instruction, in order. Falling after a hit from below, the solid box, and the
+// break (the power-up chosen by the script's random generator, GLOBAL[132]). Patched in only when the sub and its
+// jump-table entries match MONITOR_SIG.
+static void PS1MonitorUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    auto prop  = [&](int table, int index) { // GetTableValue OBJECTPROPERTYVALUE <index> <table>
+        if (index >= 0 && index < scriptCode[table])
+            me.propertyValue = scriptCode[table + index + 1];
+    };
+    if (me.state == 1) {
+        me.yvel += 14336;
+        me.ypos += me.yvel;
+        if (me.yvel >= 0) {
+            ObjectFloorCollision(0, 16, 0); // ObjectTileCollision CSIDE_FLOOR 0 16 0
+            if (cr == 1) {
+                me.yvel  = 0;
+                me.state = 0;
+            }
+        }
+    }
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        cr        = p.yvel > -1;
+        t[0]      = cr;
+        cr        = p.gravity == 0;
+        t[0] |= cr;
+        if (t[0] == 1) {
+            cr   = p.animation == G[67];
+            t[0] = cr;
+            cr   = p.animation == G[85];
+            t[0] |= cr;
+            cr = p.animation == G[87];
+            t[0] |= cr;
+            if (t[0] == 1) {
+                if (p.values[16] == 0) {
+                    TouchCollision(&PS1_OBJ(self), -16, -14, 16, 16, &PS1_OBJ(ap[6]), p.values[40], p.values[38], p.values[41],
+                                   p.values[39]);
+                    if (cr == 1) {
+                        me.state = 0;
+                        PS1CreateTempObject(19, 0, me.xpos, me.ypos);
+                        PS1_OBJ(ap[8]).drawOrder = 4;
+                        p.yvel += p.values[25];
+                        p.yvel += p.values[25];
+                        p.yvel       = -p.yvel;
+                        me.type      = 14;
+                        me.values[3] = ap[6];
+                        if (me.priority != 4)
+                            me.priority = 1;
+                        me.alpha     = 255;
+                        me.values[0] = me.ypos;
+                        me.values[1] = -196608;
+                        if (me.propertyValue == 14) {
+                            G[132] *= 1103515245;
+                            G[132] += 12345;
+                            G[132] &= 2147483647;
+                            t[0] = G[132];
+                            t[0] >>= 16;
+                            t[0] %= 10; // Mod (divisor never 0)
+                            if (G[13] == 1) {
+                                if (p.propertyValue == 0)
+                                    prop(36222, t[0]);
+                                else
+                                    prop(36211, t[0]);
+                                if (me.propertyValue == 13) {
+                                    if (PS1_OBJ(0).controlMode == -1)
+                                        me.propertyValue = 2;
+                                    if (PS1_OBJ(1).controlMode == -1)
+                                        me.propertyValue = 2;
+                                    if (PS1_OBJ(0).state == 1)
+                                        me.propertyValue = 1;
+                                    if (PS1_OBJ(1).state == 1)
+                                        me.propertyValue = 1;
+                                }
+                            }
+                            else {
+                                if (G[12] == 3)
+                                    prop(36222, t[0]);
+                                else
+                                    prop(36211, t[0]);
+                                if (me.propertyValue == 13)
+                                    me.propertyValue = 1;
+                            }
+                        }
+                        if (G[13] == 1) {
+                            if (G[108] == 0) {
+                                if (ap[6] == 0)
+                                    G[120]++;
+                                else
+                                    G[124]++;
+                            }
+                            else {
+                                if (ap[6] == 1)
+                                    G[120]++;
+                                else
+                                    G[124]++;
+                            }
+                        }
+                        PlaySfx(8, 0);
+                    }
+                }
+                else {
+                    BoxCollision(&PS1_OBJ(self), -15, -14, 15, 16, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                }
+            }
+            else {
+                BoxCollision(&PS1_OBJ(self), -15, -14, 15, 16, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            }
+        }
+        else {
+            BoxCollision(&PS1_OBJ(self), -15, -16, 15, 16, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 4) {
+                me.state = 1;
+                me.yvel  = -131072;
+                p.yvel   = 131072;
+            }
+        }
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -9290,6 +9419,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1MPZSETUP:
                 opcodeSize = 0;
                 PS1MPZSetupUpdate();
+                break;
+            case FUNC_PS1MONITOR:
+                opcodeSize = 0;
+                PS1MonitorUpdate();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
