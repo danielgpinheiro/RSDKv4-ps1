@@ -30,6 +30,8 @@ make -j8 BOOT=Zone01 [BOOT_ID=2] [BOOT_PLAYER=0..3]   # start in a stage (0 Soni
                                 # touch RSDKv4/main.cpp RSDKv4/RetroEngine.cpp when switching
 make PLATFORM_TEST=1            # the phase 0 smoke-test app (ps1/platform_test.cpp)
 tools/data_disc.sh              # game disc from ../Sonic2_Extracted (Data/ + Bytecode/, no sources / menus / ZoneM)
+                                # + manifests (tools/rsdkmanifest), atlases per variant, tile pages (phase 3.1)
+tools/vram_test.sh Zone01_st [OUT] [F]        # BOOT= build: tile pages + atlas + palette in VRAM == the files
 tools/boot_test.sh [OUT] [F1] [F2]            # headless boot over GDB: loads, fps, heap, VM/array guards
 tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, land (g_ps1PadTestMask) + dumps
 python3 tools/tiles_check.py ../Sonic2_Extracted/Data/Stages/Zone01 OUT     # packed chunk tiles == file

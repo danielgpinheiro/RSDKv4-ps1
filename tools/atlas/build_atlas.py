@@ -75,6 +75,12 @@ CLUT_SLOTS = [(x, 240) for x in range(256, 320, 16)] + \
              [(x, y) for y in list(range(241, 256)) + list(range(496, 504)) for x in range(0, 320, 16)]
 
 
+MAX_CLUTS = 64  # ps1/sprite_atlas.hh PS1_ATLAS_MAX_CLUTS (RAM table; Sonic 2 needs 19 at most)
+MAX_CLUSTERS = 768  # PS1_ATLAS_MAX_CLUSTERS
+MAX_SHEETS = 32  # PS1_ATLAS_MAX_SHEETS
+MAX_BLOCKS = 32  # ps1/sprite_atlas.cpp MAX_BLOCKS (VRAM upload blocks per atlas)
+
+
 class AtlasError(Exception):
     pass
 
@@ -308,6 +314,8 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0):
     clut_slots = CLUT_SLOTS + [(0, 1000 + i) for i in range(virtual * 64)]
     if len(groups) > len(clut_slots):
         raise AtlasError('%s: %d CLUTs > %d slots' % (name, len(groups), len(CLUT_SLOTS)))
+    if len(groups) > MAX_CLUTS and not virtual:
+        raise AtlasError('%s: %d CLUTs > the runtime table (%d, ps1/sprite_atlas.hh)' % (name, len(groups), MAX_CLUTS))
     clut_maps = [[0] + sorted(g) + [0] * (15 - len(g)) for g in groups]
 
     # Columns available (column, pageY); FMV page reserved when the stage plays a video; the picture
@@ -472,6 +480,9 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0):
     head_len = 20 + len(sheet_tab) + len(cl_tab) + len(clut_tab) + len(blk_tab)
     data_off = (head_len + 2047) // 2048 * 2048  # pixel data starts on a sector
     fx, fy = FMV_XY if video else (0xFFFF, 0xFFFF)
+    if not virtual and (len(sheets) > MAX_SHEETS or len(order) > MAX_CLUSTERS or len(blocks) > MAX_BLOCKS):
+        raise AtlasError('%s: %d sheets / %d clusters / %d blocks > the runtime tables (%d / %d / %d, ps1/sprite_atlas)'
+                         % (name, len(sheets), len(order), len(blocks), MAX_SHEETS, MAX_CLUSTERS, MAX_BLOCKS))
     out += struct.pack('<4sHHHHHHI', b'ATL1', len(sheets), len(order), len(clut_maps), len(blocks), fx, fy, data_off)
     out += sheet_tab + cl_tab + clut_tab + blk_tab
     out += bytes(data_off - len(out)) + pixels

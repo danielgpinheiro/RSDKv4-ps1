@@ -4,8 +4,9 @@
 # (../RSDKv3-ps1/Makefile). Plan: ../docs/30.
 #
 # The RSDKv4 engine (RSDKv4/, PS1 app in RSDKv4/main.cpp) on the PS1 platform layer (ps1/, copied from
-# RSDKv3-ps1 at 1e583ad). Phase 2: headless (ps1/render_headless.cpp, ps1/audio_headless.cpp); the
-# engine-bound layer files (render, tileset, sprite_atlas, fmv) join with the renderer (phase 3). Not built
+# RSDKv3-ps1 at 1e583ad). Phase 2: headless (ps1/render_headless.cpp, ps1/audio_headless.cpp); phase 3.1: the
+# stage loads upload the tile pages and the sprite atlas (ps1/tileset, ps1/sprite_atlas); render and fmv join with
+# the renderer (3.2). Not built
 # on PS1: Drawing.cpp, Renderer.cpp, Audio.cpp, Networking.cpp and the native menu objects
 # (docs/30: the scripted Title + 2D PS1 menus in phase 4).
 # `make PLATFORM_TEST=1`: the phase 0 smoke test (ps1/platform_test.cpp) instead.
@@ -34,6 +35,8 @@ RSDKv4/Userdata.cpp \
 RSDKv4/main.cpp \
 ps1/render_headless.cpp \
 ps1/audio_headless.cpp \
+ps1/tileset.cpp \
+ps1/sprite_atlas.cpp \
 ps1/libc/string.cpp \
 ps1/libc/stdlib.cpp \
 ps1/libc/math.cpp \

@@ -2,6 +2,8 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/loading.hh"
+#include "../ps1/sprite_atlas.hh"
+#include "../ps1/tileset.hh"
 #include "../ps1/video.hh"
 
 // Headless CPU profile of the NORMAL stage mode (hblanks of the last frame; GDB, tools/*_test.sh).
@@ -879,7 +881,20 @@ void LoadStageFiles(void)
             CloseFile();
         }
 
-#if RETRO_PLATFORM != RETRO_PS1 // PS1: tiles are pre-converted to VRAM pages at build time (phase 3), never decoded here
+#if RETRO_PLATFORM == RETRO_PS1
+        // Pre-converted at build time (tools/tiles, tools/atlas; docs/30 phase 3.1): the tile pages and the stage's
+        // sprite atlas for the player variant go straight to VRAM, never decoded here; the tile GIF's colours
+        // 0x80-0xFF go into the active palette as upstream LoadStageGIFFile does.
+        {
+            static uint8_t pal[768];
+            if (PS1TileSetLoad(stageList[activeStageList][stageListPosition].folder, pal))
+                for (int c = 0x80; c < 0x100; ++c) SetPaletteEntry(-1, c, pal[c * 3], pal[c * 3 + 1], pal[c * 3 + 2]);
+            // Sonic & Tails is playerListPos 3 on the first load only: the Player Object's startup turns it into 0 +
+            // stage.player2Enabled, which the later loads see.
+            int variant = playerListPos == 0 && GetGlobalVariableByName("stage.player2Enabled") ? 3 : playerListPos;
+            PS1AtlasLoad(stageList[activeStageList][stageListPosition].folder, variant);
+        }
+#else
         LoadStageGIFFile(stageListPosition);
 #endif
         LoadStageCollisions();

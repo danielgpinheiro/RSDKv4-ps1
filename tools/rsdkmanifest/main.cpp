@@ -8,7 +8,7 @@
  * there) with the PS1 configuration, and writes what the console will need in VRAM:
  *
  *   <out>/<folder>.txt   (list positions sharing a folder, and both options.region values, append their own `stage` block)
- *     stage <list> <position> <folder> <id> <player> <region>
+ *     stage <list> <position> <folder> <id> <playerListPos> <options.region>
  *     sheet <sheetID> <path under Data/Sprites/>
  *     frame <sheetID> <x> <y> <w> <h> obj <object name>          script frames (the object's final sheet)
  *     frame <sheetID> <x> <y> <w> <h> ani <file>                  animation (.ani) frames
@@ -138,14 +138,21 @@ int main(int argc, char **argv)
                 printf("skip  %-8s (no %s)\n", stageList[list][pos].folder, bytecode);
                 continue;
             }
-            for (int run = 0; run < (int)players.size() * 2; ++run) {
-                // Each variant twice: options.region 0 and 1 (the Title's code toggles it at runtime; startups pick
-                // frames by it, e.g. Act Finish / Special Finish "TAILS" vs "MILES"). The atlas takes the union.
-                int player = players[run >> 1], region = run & 1;
+            // Each variant with options.region 0 and 1 (the Title's code toggles it at runtime; startups pick frames
+            // by it, e.g. Act Finish / Special Finish "TAILS" vs "MILES"), Sonic & Tails also as the later loads see it:
+            // the Player Object's startup turns playerListPos 3 into 0 + stage.player2Enabled. The atlas takes the union.
+            std::vector<std::pair<int, int>> runs; // (variant, playerListPos)
+            for (int player : players) {
+                runs.push_back({player, player});
+                if (player == 3)
+                    runs.push_back({player, 0});
+            }
+            for (int run = 0; run < (int)runs.size() * 2; ++run) {
+                int player = runs[run >> 1].first, region = run & 1;
                 setGlobal("options.region", region);
                 activeStageList   = list;
                 stageListPosition = pos;
-                playerListPos     = player;
+                playerListPos     = runs[run >> 1].second;
                 setGlobal("stage.player2Enabled", player == 3); // as the PS1 boot (main.cpp) / the save-file start do
                 stageMode         = STAGEMODE_LOAD;
                 StrCopy(currentStageFolder, ""); // force a full load (CheckCurrentStageFolder)
@@ -168,8 +175,8 @@ int main(int argc, char **argv)
                     return 1;
                 }
                 written.insert(path);
-                fprintf(f, "stage %d %d %s %s %d %d\n", list, pos, stageList[list][pos].folder, stageList[list][pos].id, player,
-                        region);
+                fprintf(f, "stage %d %d %s %s %d %d\n", list, pos, stageList[list][pos].folder, stageList[list][pos].id,
+                        runs[run >> 1].second, region);
                 for (int s = 0; s < SURFACE_COUNT; ++s)
                     if (gfxSurface[s].fileName[0])
                         fprintf(f, "sheet %d %s\n", s, gfxSurface[s].fileName + 13); // strip "Data/Sprites/"
@@ -199,8 +206,8 @@ int main(int argc, char **argv)
                     }
                 }
                 fclose(f);
-                printf("%-5s %-8s p%d r%d %4d frames\n", list == 0 ? "pres" : list == 1 ? "reg" : list == 2 ? "bonus" : "spec",
-                       stageList[list][pos].folder, player, region, frames);
+                printf("%-5s %-8s p%d(%d) r%d %4d frames\n", list == 0 ? "pres" : list == 1 ? "reg" : list == 2 ? "bonus" : "spec",
+                       stageList[list][pos].folder, player, runs[run >> 1].second, region, frames);
             }
             ++stages;
         }

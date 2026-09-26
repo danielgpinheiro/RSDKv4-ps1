@@ -31,7 +31,7 @@ static_assert(sizeof(PS1AtlasClut) == 20, "atlas clut record");
 
 #define PS1_ATLAS_MAX_SHEETS   32
 #define PS1_ATLAS_MAX_CLUSTERS 768
-#define PS1_ATLAS_MAX_CLUTS    256
+#define PS1_ATLAS_MAX_CLUTS    64 // Sonic 2: 19 at most (docs/30 3.1); tools/atlas/build_atlas.py MAX_CLUTS checks it
 
 extern PS1AtlasSheet   g_ps1AtlasSheets[PS1_ATLAS_MAX_SHEETS];
 extern PS1AtlasCluster g_ps1AtlasClusters[PS1_ATLAS_MAX_CLUSTERS];
