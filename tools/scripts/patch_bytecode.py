@@ -3206,6 +3206,359 @@ def patch_player_states(bcdir):
         patch_global_function(bcdir, PLAYERSTATE12_SIG, 'PS1PlayerState12')
 
 
+# GlobalCode functions 61, 62, 66, 67 (Tails's CPU), transcribed by PS1TailsFn<N>.
+TAILSFN61_SIG = [
+    'IfGreater 0 OBJECTCONTROLMODE -1',
+    'ShL LOCAL[1,0,20210] 1',
+    'Or LOCAL[1,0,20210] OBJECTUP[1,0,0]',
+    'And LOCAL[1,0,20210] 65535',
+    'ShL LOCAL[1,0,20211] 1',
+    'Or LOCAL[1,0,20211] OBJECTDOWN[1,0,0]',
+    'And LOCAL[1,0,20211] 65535',
+    'ShL LOCAL[1,0,20212] 1',
+    'Or LOCAL[1,0,20212] OBJECTLEFT[1,0,0]',
+    'And LOCAL[1,0,20212] 65535',
+    'ShL LOCAL[1,0,20213] 1',
+    'Or LOCAL[1,0,20213] OBJECTRIGHT[1,0,0]',
+    'And LOCAL[1,0,20213] 65535',
+    'ShL LOCAL[1,0,20214] 1',
+    'Or LOCAL[1,0,20214] OBJECTJUMPPRESS[1,0,0]',
+    'And LOCAL[1,0,20214] 65535',
+    'ShL LOCAL[1,0,20215] 1',
+    'Or LOCAL[1,0,20215] OBJECTJUMPHOLD[1,0,0]',
+    'And LOCAL[1,0,20215] 65535',
+    'IfEqual 2 OBJECTSTATE[1,0,0] 34',
+    'ShL LOCAL[1,0,20211] 15',
+    'ShL LOCAL[1,0,20212] 15',
+    'ShL LOCAL[1,0,20213] 15',
+    'ShL LOCAL[1,0,20214] 15',
+    'ShL LOCAL[1,0,20215] 15',
+    'endif',
+    'Equal TEMP0 LOCAL[1,0,20210]',
+    'ShR TEMP0 15',
+    'Equal OBJECTUP TEMP0',
+    'Equal TEMP0 LOCAL[1,0,20211]',
+    'ShR TEMP0 15',
+    'Equal OBJECTDOWN TEMP0',
+    'Equal TEMP0 LOCAL[1,0,20212]',
+    'ShR TEMP0 15',
+    'Equal OBJECTLEFT TEMP0',
+    'Equal TEMP0 LOCAL[1,0,20213]',
+    'ShR TEMP0 15',
+    'Equal OBJECTRIGHT TEMP0',
+    'Equal TEMP0 LOCAL[1,0,20214]',
+    'ShR TEMP0 15',
+    'Equal OBJECTJUMPPRESS TEMP0',
+    'Equal TEMP0 LOCAL[1,0,20215]',
+    'ShR TEMP0 15',
+    'Equal OBJECTJUMPHOLD TEMP0',
+    'else',
+    'Equal LOCAL[1,0,20210] 0',
+    'Equal LOCAL[1,0,20211] 0',
+    'Equal LOCAL[1,0,20212] 0',
+    'Equal LOCAL[1,0,20213] 0',
+    'Equal LOCAL[1,0,20214] 0',
+    'Equal LOCAL[1,0,20215] 0',
+    'endif',
+    'IfNotEqual 4 OBJECTSTATE[1,0,0] 28',
+    'IfNotEqual 6 OBJECTTYPE[1,0,0] 7',
+    'SetTableValue OBJECTXPOS[1,0,0] LOCAL[1,0,20217] 20218',
+    'SetTableValue OBJECTYPOS[1,0,0] LOCAL[1,0,20217] 20235',
+    'Inc LOCAL[1,0,20217]',
+    'And LOCAL[1,0,20217] 15',
+    'Inc LOCAL[1,0,20216]',
+    'And LOCAL[1,0,20216] 15',
+    'CheckEqual OBJECTGRAVITY[1,0,0] 1',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTVALUE42[1,0,0] 0',
+    'And TEMP0 CHECKRESULT',
+    'IfEqual 8 TEMP0 0',
+    'GetTableValue OBJECTVALUE46 LOCAL[1,0,20216] 20218',
+    'GetTableValue OBJECTVALUE47 LOCAL[1,0,20216] 20235',
+    'else',
+    'Equal OBJECTVALUE46 OBJECTXPOS[1,0,0]',
+    'Equal OBJECTVALUE47 OBJECTYPOS[1,0,0]',
+    'endif',
+    'else',
+    'Equal TEMP0 LOCAL[1,0,20217]',
+    'Dec TEMP0',
+    'IfLower 10 TEMP0 0',
+    'Add TEMP0 16',
+    'endif',
+    'GetTableValue OBJECTVALUE46 TEMP0 20218',
+    'GetTableValue OBJECTVALUE47 TEMP0 20235',
+    'endif',
+    'else',
+    'Equal TEMP0 LOCAL[1,0,20217]',
+    'Dec TEMP0',
+    'IfLower 12 TEMP0 0',
+    'Add TEMP0 16',
+    'endif',
+    'GetTableValue OBJECTVALUE46 TEMP0 20218',
+    'GetTableValue OBJECTVALUE47 TEMP0 20235',
+    'endif',
+    'return',
+]
+TAILSFN62_SIG = [
+    'CallFunction 61',
+    'IfEqual 0 OBJECTTYPE[1,0,0] 1',
+    'Equal TEMP0 OBJECTANGLE',
+    'Add TEMP0 16',
+    'And TEMP0 224',
+    'IfEqual 2 TEMP0 0',
+    'IfEqual 4 OBJECTLEFT 1',
+    'Equal TEMP0 OBJECTXPOS[1,0,0]',
+    'Sub TEMP0 524288',
+    'IfLower 6 OBJECTXPOS TEMP0',
+    'IfLowerOrEqual 8 OBJECTXVEL 0',
+    'Equal OBJECTLEFT 0',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 10 OBJECTRIGHT 1',
+    'Equal TEMP0 OBJECTXPOS[1,0,0]',
+    'Add TEMP0 524288',
+    'IfGreater 12 OBJECTXPOS TEMP0',
+    'IfLowerOrEqual 14 OBJECTYVEL 0',
+    'Equal OBJECTRIGHT 0',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'IfNotEqual 16 OBJECTSTATE[1,0,0] 34',
+    'Equal TEMP0 OBJECTVALUE46',
+    'Equal TEMP1 OBJECTGRAVITY[1,0,0]',
+    'Or TEMP1 OBJECTVALUE42[1,0,0]',
+    'IfEqual 18 TEMP1 0',
+    'IfLower 20 OBJECTSPEED[1,0,0] 131072',
+    'IfGreater 22 OBJECTSPEED[1,0,0] -131072',
+    'IfEqual 24 OBJECTDIRECTION[1,0,0] 0',
+    'Sub TEMP0 2097152',
+    'else',
+    'Add TEMP0 2097152',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'Sub TEMP0 OBJECTXPOS',
+    'IfNotEqual 26 TEMP0 0',
+    'IfLower 28 TEMP0 0',
+    'IfLowerOrEqual 30 TEMP0 -3145728',
+    'Equal OBJECTRIGHT 0',
+    'Equal OBJECTLEFT 1',
+    'endif',
+    'IfNotEqual 32 OBJECTSPEED 0',
+    'IfEqual 34 OBJECTDIRECTION 1',
+    'Cos256 TEMP1 OBJECTANGLE',
+    'Mul TEMP1 192',
+    'Sub OBJECTXPOS TEMP1',
+    'endif',
+    'endif',
+    'else',
+    'IfGreaterOrEqual 36 TEMP0 3145728',
+    'Equal OBJECTLEFT 0',
+    'Equal OBJECTRIGHT 1',
+    'endif',
+    'IfNotEqual 38 OBJECTSPEED 0',
+    'IfEqual 40 OBJECTDIRECTION 0',
+    'Cos256 TEMP1 OBJECTANGLE',
+    'Mul TEMP1 192',
+    'Add OBJECTXPOS TEMP1',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 42 OBJECTANIMATION GLOBAL[1,0,74]',
+    'Inc OBJECTVALUE45',
+    'IfEqual 44 OBJECTDIRECTION[1,0,0] OBJECTDIRECTION',
+    'IfEqual 46 OBJECTANIMATION[1,0,0] GLOBAL[1,0,74]',
+    'Equal OBJECTVALUE45 0',
+    'endif',
+    'endif',
+    'IfGreaterOrEqual 48 OBJECTVALUE45 30',
+    'IfEqual 50 OBJECTGRAVITY 0',
+    'CallFunction 6',
+    'endif',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTVALUE45 0',
+    'endif',
+    'else',
+    'Equal TEMP0 OBJECTYPOS',
+    'Sub TEMP0 OBJECTVALUE47',
+    'IfGreater 52 TEMP0 2097152',
+    'Inc OBJECTVALUE45',
+    'IfGreaterOrEqual 54 OBJECTVALUE45 64',
+    'IfEqual 56 OBJECTGRAVITY 0',
+    'CallFunction 6',
+    'endif',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTVALUE45 0',
+    'endif',
+    'else',
+    'Equal OBJECTVALUE45 0',
+    'endif',
+    'endif',
+    'IfGreater 58 OBJECTCONTROLLOCK 0',
+    'IfLower 60 OBJECTSPEED 32768',
+    'IfGreater 62 OBJECTSPEED -32768',
+    'Equal OBJECTVALUE44 63',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'return',
+]
+TAILSFN66_SIG = [
+    'IfEqual 0 OBJECTTYPE[1,0,0] 1',
+    'IfEqual 2 OBJECTOUTOFBOUNDS 1',
+    'Inc OBJECTVALUE43',
+    'else',
+    'Equal OBJECTVALUE43 0',
+    'endif',
+    'IfGreater 4 OBJECTVALUE43 239',
+    'Equal OBJECTVALUE43 0',
+    'Equal OBJECTSTATE 65',
+    'Equal OBJECTXPOS OBJECTXPOS[1,0,0]',
+    'Equal OBJECTYPOS SCREENYOFFSET',
+    'Sub OBJECTYPOS 128',
+    'ShL OBJECTYPOS 16',
+    'Equal OBJECTXVEL 0',
+    'Equal OBJECTYVEL 0',
+    'Equal OBJECTSPEED 0',
+    'Equal OBJECTTILECOLLISIONS 0',
+    'Equal OBJECTINTERACTION 0',
+    'Equal OBJECTCONTROLMODE 1',
+    'Equal OBJECTVALUE18 4',
+    'Equal OBJECTVALUE3 0',
+    'Equal OBJECTVALUE4 0',
+    'endif',
+    'CheckEqual OBJECTSTATE[1,0,0] 28',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTTYPE[1,0,0] 7',
+    'Or TEMP0 CHECKRESULT',
+    'CheckNotEqual OBJECTSTATE 27',
+    'And TEMP0 CHECKRESULT',
+    'CheckNotEqual OBJECTSTATE 28',
+    'And TEMP0 CHECKRESULT',
+    'IfEqual 6 TEMP0 1',
+    'Equal OBJECTVALUE43 0',
+    'Equal OBJECTSTATE 65',
+    'Equal OBJECTXVEL 0',
+    'Equal OBJECTYVEL 0',
+    'Equal OBJECTSPEED 0',
+    'Equal OBJECTTILECOLLISIONS 0',
+    'Equal OBJECTINTERACTION 0',
+    'endif',
+    'endif',
+    'return',
+]
+TAILSFN67_SIG = [
+    'IfEqual 0 OBJECTSTATE 28',
+    'Equal OBJECTVALUE44 68',
+    'endif',
+    'IfEqual 2 OBJECTSTATE 29',
+    'Equal OBJECTVALUE44 68',
+    'endif',
+    'CallFunction OBJECTVALUE44',
+    'IfNotEqual 4 OBJECTSTATE 27',
+    'IfGreater 6 OBJECTVALUE8 0',
+    'Dec OBJECTVALUE8',
+    'GetBit TEMP0 OBJECTVALUE8 2',
+    'IfEqual 8 TEMP0 1',
+    'Equal OBJECTVISIBLE 0',
+    'else',
+    'Equal OBJECTVISIBLE 1',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreater 10 OBJECTVALUE7 0',
+    'IfNotEqual 12 OBJECTSTATE 27',
+    'IfGreater 14 OBJECTVALUE7 2000',
+    'Equal OBJECTVALUE7 120',
+    'Equal OBJECTVALUE8 3',
+    'endif',
+    'endif',
+    'Dec OBJECTVALUE7',
+    'IfEqual 16 OBJECTVALUE7 0',
+    'Equal OBJECTVALUE8 0',
+    'Equal OBJECTVISIBLE 1',
+    'endif',
+    'endif',
+    'IfNotEqual 18 OBJECTSTATE 16',
+    'IfNotEqual 20 OBJECTSTATE 17',
+    'IfGreater 22 OBJECTLOOKPOSY 0',
+    'Sub OBJECTLOOKPOSY 2',
+    'endif',
+    'IfLower 24 OBJECTLOOKPOSY 0',
+    'Add OBJECTLOOKPOSY 2',
+    'endif',
+    'endif',
+    'endif',
+    'IfNotEqual 26 OBJECTSTATE 19',
+    'IfNotEqual 28 OBJECTVALUE26 0',
+    'StopSfx 19',
+    'StopSfx 20',
+    'Equal OBJECTVALUE26 0',
+    'endif',
+    'endif',
+    'return',
+]
+
+
+def patch_function_group(bcdir, group, requires=(), what='functions'):
+    """GlobalCode functions found by signature -> op / return, all or none. group: [(op name, signature)];
+    requires: [(op name, signature)] of functions the natives call directly, each either that signature or already
+    rewritten to that op. Returns a report; exits on a missing or ambiguous function."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    ret = fn.index('return')
+    path = os.path.join(bcdir, 'GlobalCode.bin')
+    raw = open(path, 'rb').read()
+    code, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    starts = [s for s, _ in bs.load(path)[4]]
+
+    def find(op_name, sig):  # (function, start, already)
+        op = fn.index(op_name)
+        hits = []
+        for f, s in enumerate(starts):
+            if not 0 <= s < len(code):
+                continue
+            if code[s] == op:
+                return f, s, True
+            try:
+                if listing(instructions(code, s, names, vars_)) == sig:
+                    hits.append((f, s))
+            except (IndexError, KeyError):
+                continue
+        if len(hits) != 1:
+            sys.exit('ERROR patch_bytecode: expected one GlobalCode function for %s, found %d' % (op_name, len(hits)))
+        return hits[0][0], hits[0][1], False
+
+    for op_name, sig in requires:
+        find(op_name, sig)
+    found = [(op_name,) + find(op_name, sig) for op_name, sig in group]
+    already = [f for _, f, _, a in found if a]
+    if len(already) == len(found):
+        return '%s already native' % what
+    if already:
+        sys.exit('ERROR patch_bytecode: %s partly native' % what)
+    for op_name, f, s, _ in found:
+        code[s:s + 2] = [fn.index(op_name), ret]
+    open(path, 'wb').write(encode(code) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+    return '%s native: functions %s' % (what, ' '.join(str(f) for _, f, _, _ in found))
+
+
+def patch_tails_ai(bcdir):
+    why = returns_balanced(bcdir)
+    if why:
+        sys.exit('ERROR patch_bytecode: PS1TailsFn67 cannot run its variable call: %s' % why)
+    return patch_function_group(bcdir, [('PS1TailsFn%d' % n, globals()['TAILSFN%d_SIG' % n]) for n in (61, 62, 66, 67)],
+                                requires=[('PS1PlayerFn6', PLAYERFN6_SIG)], what="Tails's CPU")
+
+
 def patch_global_sub(bcdir, obj_name, sub, sig, op_name, with_jumps=False, calls=()):
     """GlobalCode object `obj_name`'s sub `sub` (0 update, 1 draw) -> op / End when it is exactly `sig` (with_jumps:
     with its jump-table entries; calls: the script functions the native runs in the VM, callable_from_native)."""
@@ -3328,7 +3681,8 @@ def main():
                      ('steampiston', lambda d: patch_stage_sub(d, 'Steam Piston', 0, STEAMPISTON_SIG, 'PS1SteamPiston',
                                                                with_jumps=True, funcs={45: PUSHPLAYER_FN_SIG})),
                      ('playerphys', patch_player_physics),
-                     ('playerstates', patch_player_states)):
+                     ('playerstates', patch_player_states),
+                     ('tailsai', patch_tails_ai)):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 

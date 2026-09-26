@@ -775,6 +775,10 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1PlayerFn53", 0),
     FunctionInfo("PS1PlayerState10", 0),
     FunctionInfo("PS1PlayerState12", 0),
+    FunctionInfo("PS1TailsFn61", 0),
+    FunctionInfo("PS1TailsFn62", 0),
+    FunctionInfo("PS1TailsFn66", 0),
+    FunctionInfo("PS1TailsFn67", 0),
 #endif
 };
 
@@ -1310,6 +1314,10 @@ enum ScrFunc {
     FUNC_PS1PLAYERFN53,
     FUNC_PS1PLAYERSTATE10,
     FUNC_PS1PLAYERSTATE12,
+    FUNC_PS1TAILSFN61,
+    FUNC_PS1TAILSFN62,
+    FUNC_PS1TAILSFN66,
+    FUNC_PS1TAILSFN67,
 #endif
     FUNC_MAX_CNT
 };
@@ -6524,6 +6532,316 @@ static void PS1PlayerState12() // in the air
         v[14] = 0;
     }
 }
+
+// Tails's CPU (GlobalCode functions 61, 62, 66, 67: every frame for the second player in Sonic & Tails), natively: one
+// statement per script instruction, in order, on the running entity (Tails; player 1 is slot 0). 61 delays player
+// 1's inputs through six 16-bit shift registers (script locals) and records his positions in two 16-entry script
+// tables; 62 follows him (calls 61 and the jump, PS1PlayerFn6, directly); 66 respawns Tails after 4 s off screen;
+// 67 runs the AI mode in value 44 (a variable call, in the VM) and the blink / look timers. Every local and table
+// write goes through PS1ScriptWrite, as the VM's. Patched as one group (patch_tails_ai).
+static void PS1TailsFn61()
+{
+    int *t     = scriptEng.temp;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    Entity &p  = PS1_OBJ(0);
+    auto L     = [](int pos) { return (int)scriptCode[pos]; };
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    auto set = [](int table, int index, int value) { // SetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            PS1ScriptWrite(table + index + 1, value);
+    };
+    auto shift = [&](int pos, int bit) { // ShL LOCAL 1 / Or LOCAL <bit> / And LOCAL 65535
+        PS1ScriptWrite(pos, L(pos) << 1);
+        PS1ScriptWrite(pos, L(pos) | bit);
+        PS1ScriptWrite(pos, L(pos) & 65535);
+    };
+    auto late = [&]() { // the position recorded one frame back
+        t[0] = L(20217);
+        t[0]--;
+        if (t[0] < 0)
+            t[0] += 16;
+        get(20218, t[0], me.values[46]);
+        get(20235, t[0], me.values[47]);
+    };
+    if (me.controlMode > -1) {
+        shift(20210, p.up);
+        shift(20211, p.down);
+        shift(20212, p.left);
+        shift(20213, p.right);
+        shift(20214, p.jumpPress);
+        shift(20215, p.jumpHold);
+        if (p.state == 34) {
+            for (int pos = 20211; pos <= 20215; ++pos)
+                PS1ScriptWrite(pos, L(pos) << 15);
+        }
+        t[0] = L(20210);
+        t[0] >>= 15;
+        me.up = t[0];
+        t[0]  = L(20211);
+        t[0] >>= 15;
+        me.down = t[0];
+        t[0]    = L(20212);
+        t[0] >>= 15;
+        me.left = t[0];
+        t[0]    = L(20213);
+        t[0] >>= 15;
+        me.right = t[0];
+        t[0]     = L(20214);
+        t[0] >>= 15;
+        me.jumpPress = t[0];
+        t[0]         = L(20215);
+        t[0] >>= 15;
+        me.jumpHold = t[0];
+    }
+    else {
+        for (int pos = 20210; pos <= 20215; ++pos)
+            PS1ScriptWrite(pos, 0);
+    }
+    if (p.state != 28) {
+        if (p.type != 7) {
+            set(20218, L(20217), p.xpos);
+            set(20235, L(20217), p.ypos);
+            PS1ScriptWrite(20217, L(20217) + 1);
+            PS1ScriptWrite(20217, L(20217) & 15);
+            PS1ScriptWrite(20216, L(20216) + 1);
+            PS1ScriptWrite(20216, L(20216) & 15);
+            cr   = p.gravity == 1;
+            t[0] = cr;
+            cr   = p.values[42] == 0;
+            t[0] &= cr;
+            if (t[0] == 0) {
+                get(20218, L(20216), me.values[46]);
+                get(20235, L(20216), me.values[47]);
+            }
+            else {
+                me.values[46] = p.xpos;
+                me.values[47] = p.ypos;
+            }
+        }
+        else {
+            late();
+        }
+    }
+    else {
+        late();
+    }
+}
+static void PS1TailsFn62()
+{
+    int *t = scriptEng.temp;
+    int *G = globalVariables;
+    PS1TailsFn61(); // CallFunction 61
+    Entity &me = objectEntityList[objectEntityPos];
+    Entity &p  = PS1_OBJ(0);
+    int *v     = me.values;
+    if (p.type != 1)
+        return;
+    t[0] = me.angle;
+    t[0] += 16;
+    t[0] &= 224;
+    if (t[0] == 0) {
+        if (me.left == 1) {
+            t[0] = p.xpos;
+            t[0] -= 524288;
+            if (me.xpos < t[0]) {
+                if (me.xvel <= 0)
+                    me.left = 0;
+            }
+        }
+        if (me.right == 1) {
+            t[0] = p.xpos;
+            t[0] += 524288;
+            if (me.xpos > t[0]) {
+                if (me.yvel <= 0)
+                    me.right = 0;
+            }
+        }
+    }
+    if (p.state == 34)
+        return;
+    t[0] = v[46];
+    t[1] = p.gravity;
+    t[1] |= p.values[42];
+    if (t[1] == 0) {
+        if (p.speed < 131072) {
+            if (p.speed > -131072) {
+                if (p.direction == 0)
+                    t[0] -= 2097152;
+                else
+                    t[0] += 2097152;
+            }
+        }
+    }
+    t[0] -= me.xpos;
+    if (t[0] != 0) {
+        if (t[0] < 0) {
+            if (t[0] <= -3145728) {
+                me.right = 0;
+                me.left  = 1;
+            }
+            if (me.speed != 0) {
+                if (me.direction == 1) {
+                    t[1] = Cos256(me.angle);
+                    t[1] *= 192;
+                    me.xpos -= t[1];
+                }
+            }
+        }
+        else {
+            if (t[0] >= 3145728) {
+                me.left  = 0;
+                me.right = 1;
+            }
+            if (me.speed != 0) {
+                if (me.direction == 0) {
+                    t[1] = Cos256(me.angle);
+                    t[1] *= 192;
+                    me.xpos += t[1];
+                }
+            }
+        }
+    }
+    if (me.animation == G[74]) {
+        v[45]++;
+        if (p.direction == me.direction) {
+            if (p.animation == G[74])
+                v[45] = 0;
+        }
+        if (v[45] >= 30) {
+            if (me.gravity == 0)
+                PS1PlayerFn6(); // CallFunction 6
+            v[1]  = 0;
+            v[45] = 0;
+        }
+    }
+    else {
+        t[0] = me.ypos;
+        t[0] -= v[47];
+        if (t[0] > 2097152) {
+            v[45]++;
+            if (v[45] >= 64) {
+                if (me.gravity == 0)
+                    PS1PlayerFn6();
+                v[1]  = 0;
+                v[45] = 0;
+            }
+        }
+        else {
+            v[45] = 0;
+        }
+    }
+    if (me.controlLock > 0) {
+        if (me.speed < 32768) {
+            if (me.speed > -32768)
+                v[44] = 63;
+        }
+    }
+}
+static void PS1TailsFn66()
+{
+    int *t     = scriptEng.temp;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    Entity &p  = PS1_OBJ(0);
+    int *v     = me.values;
+    auto park  = [&]() { // state 65 (flying back in), motion and interactions off
+        me.state              = 65;
+        me.xvel               = 0;
+        me.yvel               = 0;
+        me.speed              = 0;
+        me.tileCollisions     = 0;
+        me.objectInteractions = 0;
+    };
+    if (p.type != 1)
+        return;
+    if (PS1ObjectOutOfBounds(&me) == 1)
+        v[43]++;
+    else
+        v[43] = 0;
+    if (v[43] > 239) {
+        v[43]    = 0;
+        me.state = 65;
+        me.xpos  = p.xpos;
+        me.ypos  = yScrollOffset;
+        me.ypos -= 128;
+        me.ypos <<= 16;
+        me.xvel               = 0;
+        me.yvel               = 0;
+        me.speed              = 0;
+        me.tileCollisions     = 0;
+        me.objectInteractions = 0;
+        me.controlMode        = 1;
+        v[18]                 = 4;
+        v[3]                  = 0;
+        v[4]                  = 0;
+    }
+    cr   = p.state == 28;
+    t[0] = cr;
+    cr   = p.type == 7;
+    t[0] |= cr;
+    cr = me.state != 27;
+    t[0] &= cr;
+    cr = me.state != 28;
+    t[0] &= cr;
+    if (t[0] == 1) {
+        v[43] = 0;
+        park();
+    }
+}
+static void PS1TailsFn67()
+{
+    int *t  = scriptEng.temp;
+    auto E  = []() -> Entity & { return objectEntityList[objectEntityPos]; };
+    if (E().state == 28)
+        E().values[44] = 68;
+    if (E().state == 29)
+        E().values[44] = 68;
+    PS1CallScriptFunction(E().values[44], 0); // CallFunction OBJECTVALUE44 (the AI mode)
+    Entity &me = E();
+    int *v     = me.values;
+    if (me.state != 27) {
+        if (v[8] > 0) {
+            v[8]--;
+            t[0] = (v[8] & (1 << 2)) >> 2;
+            if (t[0] == 1)
+                me.visible = 0;
+            else
+                me.visible = 1;
+        }
+    }
+    if (v[7] > 0) {
+        if (me.state != 27) {
+            if (v[7] > 2000) {
+                v[7] = 120;
+                v[8] = 3;
+            }
+        }
+        v[7]--;
+        if (v[7] == 0) {
+            v[8]       = 0;
+            me.visible = 1;
+        }
+    }
+    if (me.state != 16) {
+        if (me.state != 17) {
+            if (me.lookPosY > 0)
+                me.lookPosY -= 2;
+            if (me.lookPosY < 0)
+                me.lookPosY += 2;
+        }
+    }
+    if (me.state != 19) {
+        if (v[26] != 0) {
+            StopSfx(19);
+            StopSfx(20);
+            v[26] = 0;
+        }
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -8771,6 +9089,22 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1PLAYERSTATE12:
                 opcodeSize = 0;
                 PS1PlayerState12();
+                break;
+            case FUNC_PS1TAILSFN61:
+                opcodeSize = 0;
+                PS1TailsFn61();
+                break;
+            case FUNC_PS1TAILSFN62:
+                opcodeSize = 0;
+                PS1TailsFn62();
+                break;
+            case FUNC_PS1TAILSFN66:
+                opcodeSize = 0;
+                PS1TailsFn66();
+                break;
+            case FUNC_PS1TAILSFN67:
+                opcodeSize = 0;
+                PS1TailsFn67();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
