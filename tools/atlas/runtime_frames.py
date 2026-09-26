@@ -40,6 +40,10 @@ RUNTIME = {
     'Pull Chain': {'add': [('SCZ/Objects.gif', 236, 31, 24, 225)]},
     # Special: the emerald line reads x 403 when specialStage.emeralds > 127 (the startup only saw 0).
     'Special Finish': {'add': [('Special/Objects.gif', 403, 311, 80, 16)]},
+    # LSelect: the text menus (DrawMenu -> DrawTextMenu: 8 x 8 characters at ((c & 15) * 8, (c >> 4) * 8 + 0 | 128) of
+    # the object's sheet, Text.gif: 128 x 256, the white and the highlighted grid). One atlas per stage: the other
+    # DrawMenu objects (VS menus, results) read the same rect.
+    'Menu Control': {'add': [('LevelSelect/Text.gif', 0, 0, 128, 256)]},
     # LSelect: the zone button's middle, frame 1 / 4 = (5, 151 | 200) (value1 - 8) x 48, up to the right cap at x 221.
     'Zone Button': {'add': [('LevelSelect/Icons.gif', 5, 151, 216, 48), ('LevelSelect/Icons.gif', 5, 200, 216, 48)]},
 }

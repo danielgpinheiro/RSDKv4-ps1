@@ -17,8 +17,8 @@
 //
 // Scope (docs/30 phase 3): chain + clear + palette (fades, per-line banks), atlas sprites (plain / flipped / scaled /
 // rotated / rotozoom / ink), HScroll tile layers from the packed chunk table (Scene.hpp Tiles128x128::ps1Tile) and
-// BG line strips. Not yet (counted in g_ps1DrawTodo): tint, VScroll layers, 3D faces (phase 7), menu text
-// (phase 4). Sonic 2 has no 3D floor / sky layer.
+// BG line strips, text menus (phase 4: the level select's DrawMenu, upstream's code). Not yet (counted in
+// g_ps1DrawTodo): tint, VScroll layers, 3D faces (phase 7). Sonic 2 has no 3D floor / sky layer.
 #include "RetroEngine.hpp"
 
 #include <stdio.h>
@@ -2041,5 +2041,160 @@ void DrawTexturedFace(void *v, byte sheetID)
 void DrawFadedFace(void *v, uint color, uint fogColor, int alpha) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }  // special stage: phase 7
 void DrawTexturedFaceBlended(void *v, byte sheetID) { g_ps1DrawTodo = g_ps1DrawTodo + 1; } // special stage: phase 7
 
-// Text menus (the scripts' DrawMenu: level select, results): phase 4 (2D menus). Counted.
-void DrawTextMenu(void *menu, int XPos, int YPos) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
+// Text menus (the scripts' DrawMenu: the level select and its results screens): upstream's code as is. Each character is
+// an 8 x 8 DrawSprite of the object's sheet (LevelSelect/Text.gif: the ASCII grid, the highlighted copy 128 lines
+// below), which the atlas holds whole (tools/atlas/runtime_frames.py, 'Menu Control').
+void DrawTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
+{
+    TextMenu *tMenu = (TextMenu *)menu;
+    int id          = tMenu->entryStart[rowID];
+    for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
+        DrawSprite(XPos + (i << 3) - (((tMenu->entrySize[rowID] % 2) & (tMenu->alignment == 2)) * 4), YPos, 8, 8, ((tMenu->textData[id] & 0xF) << 3),
+                   ((tMenu->textData[id] >> 4) << 3) + textHighlight, textMenuSurfaceNo);
+        id++;
+    }
+}
+void DrawStageTextEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
+{
+    TextMenu *tMenu = (TextMenu *)menu;
+    int id          = tMenu->entryStart[rowID];
+    for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
+        if (i == tMenu->entrySize[rowID] - 1) {
+            DrawSprite(XPos + (i << 3), YPos, 8, 8, ((tMenu->textData[id] & 0xF) << 3), ((tMenu->textData[id] >> 4) << 3), textMenuSurfaceNo);
+        }
+        else {
+            DrawSprite(XPos + (i << 3), YPos, 8, 8, ((tMenu->textData[id] & 0xF) << 3), ((tMenu->textData[id] >> 4) << 3) + textHighlight,
+                       textMenuSurfaceNo);
+        }
+        id++;
+    }
+}
+void DrawBlendedTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
+{
+    TextMenu *tMenu = (TextMenu *)menu;
+    int id          = tMenu->entryStart[rowID];
+    for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
+        DrawBlendedSprite(XPos + (i << 3), YPos, 8, 8, ((tMenu->textData[id] & 0xF) << 3), ((tMenu->textData[id] >> 4) << 3) + textHighlight,
+                          textMenuSurfaceNo);
+        id++;
+    }
+}
+void DrawTextMenu(void *menu, int XPos, int YPos)
+{
+    TextMenu *tMenu = (TextMenu *)menu;
+    int cnt         = 0;
+
+    if (tMenu->visibleRowCount > 0) {
+        cnt = (int)(tMenu->visibleRowCount + tMenu->visibleRowOffset);
+    }
+    else {
+        tMenu->visibleRowOffset = 0;
+        cnt                     = (int)tMenu->rowCount;
+    }
+
+    if (tMenu->selectionCount == 3) {
+        tMenu->selection2 = -1;
+        for (int i = 0; i <= tMenu->selection1; ++i) {
+            if (tMenu->entryHighlight[i]) {
+                tMenu->selection2 = i;
+            }
+        }
+    }
+
+    switch (tMenu->alignment) {
+        case 0:
+            for (int i = (int)tMenu->visibleRowOffset; i < cnt; ++i) {
+                switch (tMenu->selectionCount) {
+                    case 1:
+                        if (i == tMenu->selection1)
+                            DrawTextMenuEntry(tMenu, i, XPos, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, XPos, YPos, 0);
+                        break;
+
+                    case 2:
+                        if (i == tMenu->selection1 || i == tMenu->selection2)
+                            DrawTextMenuEntry(tMenu, i, XPos, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, XPos, YPos, 0);
+                        break;
+
+                    case 3:
+                        if (i == tMenu->selection1)
+                            DrawTextMenuEntry(tMenu, i, XPos, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, XPos, YPos, 0);
+
+                        if (i == tMenu->selection2 && i != tMenu->selection1)
+                            DrawStageTextEntry(tMenu, i, XPos, YPos, 128);
+                        break;
+                }
+                YPos += 8;
+            }
+            break;
+
+        case 1:
+            for (int i = (int)tMenu->visibleRowOffset; i < cnt; ++i) {
+                int entryX = XPos - (tMenu->entrySize[i] << 3);
+                switch (tMenu->selectionCount) {
+                    case 1:
+                        if (i == tMenu->selection1)
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 0);
+                        break;
+
+                    case 2:
+                        if (i == tMenu->selection1 || i == tMenu->selection2)
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 0);
+                        break;
+
+                    case 3:
+                        if (i == tMenu->selection1)
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 0);
+
+                        if (i == tMenu->selection2 && i != tMenu->selection1)
+                            DrawStageTextEntry(tMenu, i, entryX, YPos, 128);
+                        break;
+                }
+                YPos += 8;
+            }
+            break;
+
+        case 2:
+            for (int i = (int)tMenu->visibleRowOffset; i < cnt; ++i) {
+                int entryX = XPos - (tMenu->entrySize[i] >> 1 << 3);
+                switch (tMenu->selectionCount) {
+                    case 1:
+                        if (i == tMenu->selection1)
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 0);
+                        break;
+                    case 2:
+                        if (i == tMenu->selection1 || i == tMenu->selection2)
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 0);
+                        break;
+                    case 3:
+                        if (i == tMenu->selection1)
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 128);
+                        else
+                            DrawTextMenuEntry(tMenu, i, entryX, YPos, 0);
+
+                        if (i == tMenu->selection2 && i != tMenu->selection1)
+                            DrawStageTextEntry(tMenu, i, entryX, YPos, 128);
+                        break;
+                }
+                YPos += 8;
+            }
+            break;
+
+        default: break;
+    }
+}
