@@ -773,6 +773,8 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1PlayerFn51", 0),
     FunctionInfo("PS1PlayerFn52", 0),
     FunctionInfo("PS1PlayerFn53", 0),
+    FunctionInfo("PS1PlayerState10", 0),
+    FunctionInfo("PS1PlayerState12", 0),
 #endif
 };
 
@@ -1306,6 +1308,8 @@ enum ScrFunc {
     FUNC_PS1PLAYERFN51,
     FUNC_PS1PLAYERFN52,
     FUNC_PS1PLAYERFN53,
+    FUNC_PS1PLAYERSTATE10,
+    FUNC_PS1PLAYERSTATE12,
 #endif
     FUNC_MAX_CNT
 };
@@ -4501,19 +4505,28 @@ static void PS1HPZBridgeDraw()
     }
 }
 
-// CallFunction from a native opcode: the function runs in a nested ProcessScript. The natives replace whole subs, so
-// the VM's stacks are empty when they run; the nested run starts its foreach stack at the depth the transcribed script
-// had at that call (the ForEach loops around it), so the function's loops use the same foreachStack slots as in the
-// script. Exact because no Sonic 2 function returns from inside a loop or switch (the loops and switches it opens
-// all close before it returns, leaving the stacks where they were); the patcher checks that for every function of
-// a file before it patches in a native that calls one (patch_bytecode.py calls_safe).
-static int s_ps1CallForeachDepth = 0;
+// CallFunction from a native opcode: the function runs in a nested ProcessScript that continues the running script's
+// VM stacks where they are (a native may replace a sub, with empty stacks, or a function body, whose caller still has
+// its return frame on functionStack), with the foreach stack `foreachDepth` deeper (the ForEach loops the native
+// transcribes around the call), and a `return` back at that function-stack depth ends the nested run (as it would
+// return to the caller). The caller's stack positions are restored afterwards. Exact because the functions a native
+// may call never return from inside a loop or switch and never End the event (patch_bytecode.py
+// callable_from_native / returns_balanced).
+static bool s_ps1CallNested = false;
+static int s_ps1CallFuncPos, s_ps1CallJumpPos, s_ps1CallForeachPos;
 volatile uint32_t g_ps1ScriptNestedCalls = 0; // test evidence (logic_test.sh): nested calls made by natives
 static void PS1CallScriptFunction(int fn, int foreachDepth)
 {
     g_ps1ScriptNestedCalls = g_ps1ScriptNestedCalls + 1;
-    s_ps1CallForeachDepth  = foreachDepth;
+    int f = functionStackPos, j = jumpTableStackPos, e = foreachStackPos;
+    s_ps1CallNested     = true;
+    s_ps1CallFuncPos    = f;
+    s_ps1CallJumpPos    = j;
+    s_ps1CallForeachPos = e + foreachDepth;
     ProcessScript(scriptFunctionList[fn].ptr.scriptCodePtr, scriptFunctionList[fn].ptr.jumpTablePtr, EVENT_MAIN);
+    functionStackPos  = f;
+    jumpTableStackPos = j;
+    foreachStackPos   = e;
 }
 static int PS1CollisionLeft(Entity &e) // VAR_OBJECTCOLLISIONLEFT's getter
 {
@@ -6182,6 +6195,335 @@ static void PS1PlayerFn2() // ground acceleration / deceleration, slopes, fallin
             break;
     }
 }
+
+// The player's ground and air states (GlobalCode functions 10 and 12: CallFunction OBJECTSTATE, every frame for each
+// player on the ground / in the air), natively: one statement per script instruction, in order. They call the physics
+// functions' native bodies directly (patched as one group with them); the air state's variable call (OBJECTVALUE32,
+// the character's air action) runs in the VM.
+static void PS1PlayerState10() // on the ground
+{
+    int *t     = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int *G     = globalVariables;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    auto idle  = [&](int dir) { // the balance animation at a ledge (property value 2: restarted from frame 4 when turning)
+        v[1]         = 0;
+        me.animation = G[75];
+        if (me.direction == 1 - dir) {
+            me.prevAnimation  = G[75];
+            me.frame          = 4;
+            me.animationTimer = 0;
+            me.animationSpeed = 0;
+        }
+        me.direction = dir;
+    };
+    auto roll = [&]() {
+        me.state     = 14;
+        me.animation = G[67];
+        if (me.prevAnimation != G[67])
+            me.ypos = ((me.ypos >> 16) - v[30]) << 16; // Sub OBJECTIYPOS OBJECTVALUE30 (write-back)
+        v[2] = 1024;
+        PlaySfx(18, 0);
+    };
+    if (me.animation != G[64])
+        t[7] = 1;
+    else
+        t[7] = 0;
+    PS1PlayerFn2();
+    if (me.gravity == 1) {
+        me.state = 12;
+        PS1PlayerFn4();
+        return;
+    }
+    PS1PlayerFn5();
+    if (me.speed == 0) {
+        if (me.collisionMode == 0) {
+            switch (me.propertyValue) {
+                case 0:
+                    if (scriptCode[4] == 1) { // LOCAL[4]
+                        me.animation = G[57];
+                        v[1]         = 0;
+                        if (me.floorSensors[1] == 0) {
+                            if (me.floorSensors[2] == 0) {
+                                me.animation = G[75];
+                                me.direction = 0;
+                            }
+                            if (me.floorSensors[0] == 0) {
+                                me.animation = G[75];
+                                me.direction = 1;
+                            }
+                        }
+                    }
+                    else {
+                        if (v[1] < 240) {
+                            me.animation = G[57];
+                            v[1]++;
+                        }
+                        else {
+                            me.animation = G[58];
+                            v[1]++;
+                            if (v[1] == 1200) {
+                                v[1]     = 0;
+                                me.state = 11;
+                            }
+                        }
+                        if (me.direction == 0) {
+                            if (me.floorSensors[2] == 0) {
+                                if (me.floorSensors[1] == 0) {
+                                    v[1] = 0;
+                                    if (me.floorSensors[3] == 0)
+                                        me.animation = G[77];
+                                    else
+                                        me.animation = G[75];
+                                }
+                            }
+                            else {
+                                if (me.floorSensors[0] == 0) {
+                                    if (me.floorSensors[1] == 0) {
+                                        v[1]         = 0;
+                                        me.animation = G[76];
+                                    }
+                                }
+                            }
+                        }
+                        else {
+                            if (me.floorSensors[0] == 0) {
+                                if (me.floorSensors[1] == 0) {
+                                    v[1] = 0;
+                                    if (me.floorSensors[4] == 0)
+                                        me.animation = G[77];
+                                    else
+                                        me.animation = G[75];
+                                }
+                            }
+                            else {
+                                if (me.floorSensors[2] == 0) {
+                                    if (me.floorSensors[1] == 0) {
+                                        v[1]         = 0;
+                                        me.animation = G[76];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break;
+                case 1:
+                    if (v[1] < 240) {
+                        me.animation = G[57];
+                        v[1]++;
+                    }
+                    else {
+                        me.animation = G[58];
+                    }
+                    if (me.floorSensors[1] == 0) {
+                        if (me.floorSensors[2] == 0) {
+                            v[1]         = 0;
+                            me.animation = G[75];
+                            me.direction = 0;
+                        }
+                        if (me.floorSensors[0] == 0) {
+                            v[1]         = 0;
+                            me.animation = G[75];
+                            me.direction = 1;
+                        }
+                    }
+                    break;
+                case 2:
+                    if (v[1] < 240) {
+                        me.animation = G[57];
+                        v[1]++;
+                    }
+                    else {
+                        me.animation = G[58];
+                        v[1]++;
+                        if (v[1] == 834) {
+                            v[1]         = 0;
+                            me.animation = G[57];
+                        }
+                    }
+                    if (me.floorSensors[1] == 0) {
+                        if (me.floorSensors[2] == 0)
+                            idle(0);
+                        if (me.floorSensors[0] == 0)
+                            idle(1);
+                    }
+                    break;
+            }
+        }
+    }
+    else {
+        v[1] = 0;
+        if (me.speed > 0) {
+            if (me.speed < 390594) {
+                me.animation = G[62];
+                PS1PlayerFn52();
+            }
+            else {
+                if (me.speed > 655359)
+                    me.animation = G[65];
+                else
+                    me.animation = G[63];
+                PS1PlayerFn53();
+            }
+        }
+        else {
+            if (me.speed > -390594) {
+                me.animation = G[62];
+                PS1PlayerFn52();
+            }
+            else {
+                if (me.speed < -655359)
+                    me.animation = G[65];
+                else
+                    me.animation = G[63];
+                PS1PlayerFn53();
+            }
+        }
+    }
+    if (v[14] > 0) {
+        if (t[7] == 1)
+            PlaySfx(3, 0);
+        me.animation      = G[64];
+        me.animationSpeed = 0;
+        v[14]--;
+        if (G[18] == 0) {
+            PS1CreateTempObject(20, 0, me.xpos, me.ypos);
+            PS1_OBJ(ap[8]).ypos      = ((PS1_OBJ(ap[8]).ypos >> 16) + PS1CollisionBottom(me)) << 16; // Add OBJECTIYPOS[+8]
+            PS1_OBJ(ap[8]).drawOrder = v[18];
+        }
+        if (me.speed > 0)
+            me.direction = 0;
+        else
+            me.direction = 1;
+    }
+    if (me.collisionMode == 0) {
+        if (me.pushing == 2) {
+            me.animation      = G[74];
+            me.animationSpeed = 0;
+        }
+    }
+    if (me.jumpPress == 1) {
+        PS1PlayerFn6();
+        return;
+    }
+    if (me.up == 1) {
+        if (me.speed == 0) {
+            if (me.animation != G[75]) {
+                if (me.animation != G[76]) {
+                    me.state = 16;
+                    v[1]     = 0;
+                }
+                else {
+                    me.up   = 0;
+                    me.down = 0;
+                }
+            }
+            else {
+                me.up   = 0;
+                me.down = 0;
+            }
+        }
+    }
+    if (me.down == 1) {
+        if (me.speed == 0) {
+            if (me.animation != G[75]) {
+                if (me.animation != G[76]) {
+                    me.state = 17;
+                    v[1]     = 0;
+                }
+                else {
+                    me.up   = 0;
+                    me.down = 0;
+                }
+            }
+            else {
+                me.up   = 0;
+                me.down = 0;
+            }
+        }
+        else {
+            if (me.left == 0) {
+                if (me.right == 0) {
+                    if (me.speed > 0) {
+                        if (me.speed > 34816)
+                            roll();
+                    }
+                    else {
+                        if (me.speed < -34816)
+                            roll();
+                    }
+                }
+            }
+        }
+    }
+}
+static void PS1PlayerState12() // in the air
+{
+    int *G     = globalVariables;
+    Entity *me = &objectEntityList[objectEntityPos];
+    int *v     = me->values;
+    auto toWalk = [&]() { // animation G[62] from the start (speed 40)
+        me->animation     = G[62];
+        me->prevAnimation = G[62];
+        me->frame         = 0;
+    };
+    PS1PlayerFn3();
+    if (me->gravity == 1) {
+        PS1PlayerFn4();
+        if (me->yvel > 131072) {
+            if (me->animation == G[75])
+                me->animation = G[62];
+            if (me->animation == G[76])
+                me->animation = G[62];
+        }
+        if (me->animation == G[68]) {
+            if (me->yvel >= 0) {
+                if (v[10] == G[57])
+                    v[10] = G[62];
+                me->animation = v[10];
+            }
+        }
+        if (me->animation == G[64]) {
+            if (v[14] > 0) {
+                v[14]--;
+            }
+            else {
+                toWalk();
+                me->animationSpeed = 40;
+            }
+        }
+        if (me->animation == G[90]) {
+            if (me->animationSpeed == 40) {
+                if (me->frame >= 12)
+                    toWalk();
+            }
+            else {
+                if (me->frame >= 24) {
+                    toWalk();
+                    me->animationSpeed = 40;
+                }
+            }
+        }
+        if (me->animation == G[69]) {
+            if (me->yvel >= 0) {
+                if (v[10] == G[57])
+                    v[10] = G[62];
+                me->animation = v[10];
+            }
+        }
+        if (me->animation == G[67]) {
+            if (v[35] == 1) {
+                if (me->yvel >= v[28])
+                    PS1CallScriptFunction(v[32], 0); // CallFunction OBJECTVALUE32 (the character's air action)
+            }
+        }
+    }
+    else {
+        me->state = 10;
+        PS1PlayerFn5();
+        v[14] = 0;
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -6197,12 +6539,23 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 {
     bool running      = true;
     int scriptCodePtr = scriptCodeStart;
+#if RETRO_PLATFORM == RETRO_PS1
+    int ps1FuncBase = 0; // a native's PS1CallScriptFunction: the stacks go on from the caller's; `return` here ends the run
+    if (s_ps1CallNested) {
+        s_ps1CallNested   = false;
+        jumpTableStackPos = s_ps1CallJumpPos;
+        functionStackPos  = s_ps1CallFuncPos;
+        foreachStackPos   = s_ps1CallForeachPos;
+        ps1FuncBase       = functionStackPos;
+    }
+    else {
+        jumpTableStackPos = 0;
+        functionStackPos  = 0;
+        foreachStackPos   = 0;
+    }
+#else
     jumpTableStackPos = 0;
     functionStackPos  = 0;
-#if RETRO_PLATFORM == RETRO_PS1
-    foreachStackPos       = s_ps1CallForeachDepth; // 0, or a native's PS1CallScriptFunction: the script's depth there
-    s_ps1CallForeachDepth = 0;
-#else
     foreachStackPos   = 0;
 #endif
 
@@ -8134,7 +8487,11 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             }
             case FUNC_RETURN:
                 opcodeSize = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+                if (functionStackPos == ps1FuncBase) { // event (or a native's nested call), stop running
+#else
                 if (!functionStackPos) { // event, stop running
+#endif
                     running = false;
                 }
                 else { // function, jump out
@@ -8406,6 +8763,14 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1PLAYERFN53:
                 opcodeSize = 0;
                 PS1PlayerFn53();
+                break;
+            case FUNC_PS1PLAYERSTATE10:
+                opcodeSize = 0;
+                PS1PlayerState10();
+                break;
+            case FUNC_PS1PLAYERSTATE12:
+                opcodeSize = 0;
+                PS1PlayerState12();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:

@@ -1954,7 +1954,7 @@ IF_OPS = ('IfEqual', 'IfGreater', 'IfGreaterOrEqual', 'IfLower', 'IfLowerOrEqual
 def callable_from_native(path, roots):
     """None when the script functions `roots` (and every function they call) can run from a native opcode in a
     nested ProcessScript (RSDKv4/Script.cpp PS1CallScriptFunction), else the reason. Required: no return from
-    inside a while / switch / ForEach (the VM stacks end where the script leaves them), no variable CallFunction
+    inside a while / switch / ForEach and no End (the VM stacks end where the script leaves them), no variable CallFunction
     (every reachable function is checked), no STAGEENTITYPOS (the native keeps its entity)."""
     names, vars_ = bs.tables(3)
     code, _, _, _, fns, _ = bs.full_code(path)
@@ -1972,6 +1972,8 @@ def callable_from_native(path, roots):
                 stack.pop()
             elif n == 'return' and any(s in LOOP_OPS for s in stack):
                 return 'function %d returns inside a loop / switch' % f
+            elif n == 'End':
+                return 'function %d ends the event (End)' % f
             if n == 'CallFunction':
                 if ops[0][0] != 'int':
                     return 'function %d has a variable CallFunction' % f
@@ -2216,7 +2218,8 @@ PLAYERINPUT_FN_SIG = [
 
 
 def returns_balanced(bcdir):
-    """None when no function of any bytecode file returns from inside a while / switch / ForEach, else the first one:
+    """None when no function of any bytecode file returns from inside a while / switch / ForEach or Ends the event,
+    else the first one:
     a native may then run any script function in the VM, even through a variable CallFunction, if it re-reads its
     entity (objectEntityPos) after the call (RSDKv4/Script.cpp PS1PlayerInput)."""
     names, vars_ = bs.tables(3)
@@ -2235,6 +2238,8 @@ def returns_balanced(bcdir):
                     stack.pop()
                 elif n == 'return' and any(x in LOOP_OPS for x in stack):
                     return '%s function %d returns inside a loop / switch' % (f, i)
+                elif n == 'End':
+                    return '%s function %d ends the event (End)' % (f, i)
     return None
 
 
@@ -2843,6 +2848,364 @@ def patch_player_physics(bcdir):
     return 'player physics native: functions %s' % ' '.join(str(f) for _, _, (f, _) in found)
 
 
+# GlobalCode functions 10 / 12 (the player on the ground / in the air), transcribed by PS1PlayerState10 / 12.
+PLAYERSTATE10_SIG = [
+    'IfNotEqual 0 OBJECTANIMATION GLOBAL[1,0,64]',
+    'Equal TEMP7 1',
+    'else',
+    'Equal TEMP7 0',
+    'endif',
+    'CallFunction 2',
+    'IfEqual 2 OBJECTGRAVITY 1',
+    'Equal OBJECTSTATE 12',
+    'CallFunction 4',
+    'else',
+    'CallFunction 5',
+    'IfEqual 4 OBJECTSPEED 0',
+    'IfEqual 6 OBJECTCOLLISIONMODE 0',
+    'switch 8 OBJECTPROPERTYVALUE',
+    'IfEqual 15 LOCAL[1,0,4] 1',
+    'Equal OBJECTANIMATION GLOBAL[1,0,57]',
+    'Equal OBJECTVALUE1 0',
+    'IfEqual 17 OBJECTFLOORSENSORC 0',
+    'IfEqual 19 OBJECTFLOORSENSORR 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,75]',
+    'Equal OBJECTDIRECTION 0',
+    'endif',
+    'IfEqual 21 OBJECTFLOORSENSORL 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,75]',
+    'Equal OBJECTDIRECTION 1',
+    'endif',
+    'endif',
+    'else',
+    'IfLower 23 OBJECTVALUE1 240',
+    'Equal OBJECTANIMATION GLOBAL[1,0,57]',
+    'Inc OBJECTVALUE1',
+    'else',
+    'Equal OBJECTANIMATION GLOBAL[1,0,58]',
+    'Inc OBJECTVALUE1',
+    'IfEqual 25 OBJECTVALUE1 1200',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTSTATE 11',
+    'endif',
+    'endif',
+    'IfEqual 27 OBJECTDIRECTION 0',
+    'IfEqual 29 OBJECTFLOORSENSORR 0',
+    'IfEqual 31 OBJECTFLOORSENSORC 0',
+    'Equal OBJECTVALUE1 0',
+    'IfEqual 33 OBJECTFLOORSENSORLC 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,77]',
+    'else',
+    'Equal OBJECTANIMATION GLOBAL[1,0,75]',
+    'endif',
+    'endif',
+    'else',
+    'IfEqual 35 OBJECTFLOORSENSORL 0',
+    'IfEqual 37 OBJECTFLOORSENSORC 0',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,76]',
+    'endif',
+    'endif',
+    'endif',
+    'else',
+    'IfEqual 39 OBJECTFLOORSENSORL 0',
+    'IfEqual 41 OBJECTFLOORSENSORC 0',
+    'Equal OBJECTVALUE1 0',
+    'IfEqual 43 OBJECTFLOORSENSORRC 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,77]',
+    'else',
+    'Equal OBJECTANIMATION GLOBAL[1,0,75]',
+    'endif',
+    'endif',
+    'else',
+    'IfEqual 45 OBJECTFLOORSENSORR 0',
+    'IfEqual 47 OBJECTFLOORSENSORC 0',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,76]',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'break',
+    'IfLower 49 OBJECTVALUE1 240',
+    'Equal OBJECTANIMATION GLOBAL[1,0,57]',
+    'Inc OBJECTVALUE1',
+    'else',
+    'Equal OBJECTANIMATION GLOBAL[1,0,58]',
+    'endif',
+    'IfEqual 51 OBJECTFLOORSENSORC 0',
+    'IfEqual 53 OBJECTFLOORSENSORR 0',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,75]',
+    'Equal OBJECTDIRECTION 0',
+    'endif',
+    'IfEqual 55 OBJECTFLOORSENSORL 0',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,75]',
+    'Equal OBJECTDIRECTION 1',
+    'endif',
+    'endif',
+    'break',
+    'IfLower 57 OBJECTVALUE1 240',
+    'Equal OBJECTANIMATION GLOBAL[1,0,57]',
+    'Inc OBJECTVALUE1',
+    'else',
+    'Equal OBJECTANIMATION GLOBAL[1,0,58]',
+    'Inc OBJECTVALUE1',
+    'IfEqual 59 OBJECTVALUE1 834',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,57]',
+    'endif',
+    'endif',
+    'IfEqual 61 OBJECTFLOORSENSORC 0',
+    'IfEqual 63 OBJECTFLOORSENSORR 0',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,75]',
+    'IfEqual 65 OBJECTDIRECTION 1',
+    'Equal OBJECTPREVANIMATION GLOBAL[1,0,75]',
+    'Equal OBJECTFRAME 4',
+    'Equal OBJECTANIMATIONTIMER 0',
+    'Equal OBJECTANIMATIONSPEED 0',
+    'endif',
+    'Equal OBJECTDIRECTION 0',
+    'endif',
+    'IfEqual 67 OBJECTFLOORSENSORL 0',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTANIMATION GLOBAL[1,0,75]',
+    'IfEqual 69 OBJECTDIRECTION 0',
+    'Equal OBJECTPREVANIMATION GLOBAL[1,0,75]',
+    'Equal OBJECTFRAME 4',
+    'Equal OBJECTANIMATIONTIMER 0',
+    'Equal OBJECTANIMATIONSPEED 0',
+    'endif',
+    'Equal OBJECTDIRECTION 1',
+    'endif',
+    'endif',
+    'break',
+    'endswitch',
+    'endif',
+    'else',
+    'Equal OBJECTVALUE1 0',
+    'IfGreater 71 OBJECTSPEED 0',
+    'IfLower 73 OBJECTSPEED 390594',
+    'Equal OBJECTANIMATION GLOBAL[1,0,62]',
+    'CallFunction 52',
+    'else',
+    'IfGreater 75 OBJECTSPEED 655359',
+    'Equal OBJECTANIMATION GLOBAL[1,0,65]',
+    'else',
+    'Equal OBJECTANIMATION GLOBAL[1,0,63]',
+    'endif',
+    'CallFunction 53',
+    'endif',
+    'else',
+    'IfGreater 77 OBJECTSPEED -390594',
+    'Equal OBJECTANIMATION GLOBAL[1,0,62]',
+    'CallFunction 52',
+    'else',
+    'IfLower 79 OBJECTSPEED -655359',
+    'Equal OBJECTANIMATION GLOBAL[1,0,65]',
+    'else',
+    'Equal OBJECTANIMATION GLOBAL[1,0,63]',
+    'endif',
+    'CallFunction 53',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreater 81 OBJECTVALUE14 0',
+    'IfEqual 83 TEMP7 1',
+    'PlaySfx 3 0',
+    'endif',
+    'Equal OBJECTANIMATION GLOBAL[1,0,64]',
+    'Equal OBJECTANIMATIONSPEED 0',
+    'Dec OBJECTVALUE14',
+    'IfEqual 85 GLOBAL[1,0,18] 0',
+    'CreateTempObject 20 0 OBJECTXPOS OBJECTYPOS',
+    'Add OBJECTIYPOS[1,1,8] OBJECTCOLLISIONBOTTOM',
+    'Equal OBJECTDRAWORDER[1,1,8] OBJECTVALUE18',
+    'endif',
+    'IfGreater 87 OBJECTSPEED 0',
+    'Equal OBJECTDIRECTION 0',
+    'else',
+    'Equal OBJECTDIRECTION 1',
+    'endif',
+    'endif',
+    'IfEqual 89 OBJECTCOLLISIONMODE 0',
+    'IfEqual 91 OBJECTPUSHING 2',
+    'Equal OBJECTANIMATION GLOBAL[1,0,74]',
+    'Equal OBJECTANIMATIONSPEED 0',
+    'endif',
+    'endif',
+    'IfEqual 93 OBJECTJUMPPRESS 1',
+    'CallFunction 6',
+    'else',
+    'IfEqual 95 OBJECTUP 1',
+    'IfEqual 97 OBJECTSPEED 0',
+    'IfNotEqual 99 OBJECTANIMATION GLOBAL[1,0,75]',
+    'IfNotEqual 101 OBJECTANIMATION GLOBAL[1,0,76]',
+    'Equal OBJECTSTATE 16',
+    'Equal OBJECTVALUE1 0',
+    'else',
+    'Equal OBJECTUP 0',
+    'Equal OBJECTDOWN 0',
+    'endif',
+    'else',
+    'Equal OBJECTUP 0',
+    'Equal OBJECTDOWN 0',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 103 OBJECTDOWN 1',
+    'IfEqual 105 OBJECTSPEED 0',
+    'IfNotEqual 107 OBJECTANIMATION GLOBAL[1,0,75]',
+    'IfNotEqual 109 OBJECTANIMATION GLOBAL[1,0,76]',
+    'Equal OBJECTSTATE 17',
+    'Equal OBJECTVALUE1 0',
+    'else',
+    'Equal OBJECTUP 0',
+    'Equal OBJECTDOWN 0',
+    'endif',
+    'else',
+    'Equal OBJECTUP 0',
+    'Equal OBJECTDOWN 0',
+    'endif',
+    'else',
+    'IfEqual 111 OBJECTLEFT 0',
+    'IfEqual 113 OBJECTRIGHT 0',
+    'IfGreater 115 OBJECTSPEED 0',
+    'IfGreater 117 OBJECTSPEED 34816',
+    'Equal OBJECTSTATE 14',
+    'Equal OBJECTANIMATION GLOBAL[1,0,67]',
+    'IfNotEqual 119 OBJECTPREVANIMATION GLOBAL[1,0,67]',
+    'Sub OBJECTIYPOS OBJECTVALUE30',
+    'endif',
+    'Equal OBJECTVALUE2 1024',
+    'PlaySfx 18 0',
+    'endif',
+    'else',
+    'IfLower 121 OBJECTSPEED -34816',
+    'Equal OBJECTSTATE 14',
+    'Equal OBJECTANIMATION GLOBAL[1,0,67]',
+    'IfNotEqual 123 OBJECTPREVANIMATION GLOBAL[1,0,67]',
+    'Sub OBJECTIYPOS OBJECTVALUE30',
+    'endif',
+    'Equal OBJECTVALUE2 1024',
+    'PlaySfx 18 0',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'return',
+]
+PLAYERSTATE12_SIG = [
+    'CallFunction 3',
+    'IfEqual 0 OBJECTGRAVITY 1',
+    'CallFunction 4',
+    'IfGreater 2 OBJECTYVEL 131072',
+    'IfEqual 4 OBJECTANIMATION GLOBAL[1,0,75]',
+    'Equal OBJECTANIMATION GLOBAL[1,0,62]',
+    'endif',
+    'IfEqual 6 OBJECTANIMATION GLOBAL[1,0,76]',
+    'Equal OBJECTANIMATION GLOBAL[1,0,62]',
+    'endif',
+    'endif',
+    'IfEqual 8 OBJECTANIMATION GLOBAL[1,0,68]',
+    'IfGreaterOrEqual 10 OBJECTYVEL 0',
+    'IfEqual 12 OBJECTVALUE10 GLOBAL[1,0,57]',
+    'Equal OBJECTVALUE10 GLOBAL[1,0,62]',
+    'endif',
+    'Equal OBJECTANIMATION OBJECTVALUE10',
+    'endif',
+    'endif',
+    'IfEqual 14 OBJECTANIMATION GLOBAL[1,0,64]',
+    'IfGreater 16 OBJECTVALUE14 0',
+    'Dec OBJECTVALUE14',
+    'else',
+    'Equal OBJECTANIMATION GLOBAL[1,0,62]',
+    'Equal OBJECTPREVANIMATION GLOBAL[1,0,62]',
+    'Equal OBJECTFRAME 0',
+    'Equal OBJECTANIMATIONSPEED 40',
+    'endif',
+    'endif',
+    'IfEqual 18 OBJECTANIMATION GLOBAL[1,0,90]',
+    'IfEqual 20 OBJECTANIMATIONSPEED 40',
+    'IfGreaterOrEqual 22 OBJECTFRAME 12',
+    'Equal OBJECTANIMATION GLOBAL[1,0,62]',
+    'Equal OBJECTPREVANIMATION GLOBAL[1,0,62]',
+    'Equal OBJECTFRAME 0',
+    'endif',
+    'else',
+    'IfGreaterOrEqual 24 OBJECTFRAME 24',
+    'Equal OBJECTANIMATION GLOBAL[1,0,62]',
+    'Equal OBJECTPREVANIMATION GLOBAL[1,0,62]',
+    'Equal OBJECTFRAME 0',
+    'Equal OBJECTANIMATIONSPEED 40',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 26 OBJECTANIMATION GLOBAL[1,0,69]',
+    'IfGreaterOrEqual 28 OBJECTYVEL 0',
+    'IfEqual 30 OBJECTVALUE10 GLOBAL[1,0,57]',
+    'Equal OBJECTVALUE10 GLOBAL[1,0,62]',
+    'endif',
+    'Equal OBJECTANIMATION OBJECTVALUE10',
+    'endif',
+    'endif',
+    'IfEqual 32 OBJECTANIMATION GLOBAL[1,0,67]',
+    'IfEqual 34 OBJECTVALUE35 1',
+    'IfGreaterOrEqual 36 OBJECTYVEL OBJECTVALUE28',
+    'CallFunction OBJECTVALUE32',
+    'endif',
+    'endif',
+    'endif',
+    'else',
+    'Equal OBJECTSTATE 10',
+    'CallFunction 5',
+    'Equal OBJECTVALUE14 0',
+    'endif',
+    'return',
+]
+
+
+def patch_player_states(bcdir):
+    """GlobalCode functions 10 / 12 (PLAYERSTATE10/12_SIG) -> PS1PlayerState10 / 12 / return. Their natives call the
+    physics natives' C bodies directly, so every physics function must be the one they transcribe (its signature,
+    or already rewritten to its op); the air state's variable call needs returns_balanced()."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    path = os.path.join(bcdir, 'GlobalCode.bin')
+    code = bs.blocks(open(path, 'rb').read(), 0)[0]
+    starts = [s for s, _ in bs.load(path)[4]]
+    for n in (2, 3, 4, 5, 6, 51, 52, 53):
+        op = fn.index('PS1PlayerFn%d' % n)
+        sig = globals()['PLAYERFN%d_SIG' % n]
+        ok = False
+        for s in starts:
+            if not 0 <= s < len(code):
+                continue
+            if code[s] == op:
+                ok = True
+                break
+            try:
+                if listing(instructions(code, s, names, vars_)) == sig:
+                    ok = True
+                    break
+            except (IndexError, KeyError):
+                continue
+        if not ok:
+            sys.exit('ERROR patch_bytecode: the player states call PS1PlayerFn%d, but GlobalCode has no such function' % n)
+    why = returns_balanced(bcdir)
+    if why:
+        sys.exit('ERROR patch_bytecode: PS1PlayerState12 cannot run its variable call: %s' % why)
+    return patch_global_function(bcdir, PLAYERSTATE10_SIG, 'PS1PlayerState10') + ', ' + \
+        patch_global_function(bcdir, PLAYERSTATE12_SIG, 'PS1PlayerState12')
+
+
 def patch_global_sub(bcdir, obj_name, sub, sig, op_name, with_jumps=False, calls=()):
     """GlobalCode object `obj_name`'s sub `sub` (0 update, 1 draw) -> op / End when it is exactly `sig` (with_jumps:
     with its jump-table entries; calls: the script functions the native runs in the VM, callable_from_native)."""
@@ -2964,7 +3327,8 @@ def main():
                      ('cledge', lambda d: patch_stage_sub(d, 'C Ledge', 0, CLEDGE_SIG, 'PS1CLedge', with_jumps=True)),
                      ('steampiston', lambda d: patch_stage_sub(d, 'Steam Piston', 0, STEAMPISTON_SIG, 'PS1SteamPiston',
                                                                with_jumps=True, funcs={45: PUSHPLAYER_FN_SIG})),
-                     ('playerphys', patch_player_physics)):
+                     ('playerphys', patch_player_physics),
+                     ('playerstates', patch_player_states)):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 
