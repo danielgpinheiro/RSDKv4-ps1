@@ -30,5 +30,6 @@ for v in ":0" "_t:1" "_k:2" "_st:3"; do
 done
 /usr/bin/python3 tools/tiles/convert_tiles.py "$SRC/Data" build/iso/Data
 /usr/bin/python3 tools/bgstrips/build_bgstrips.py build/iso/Data > build/manifest/bgstrips.log || { cat build/manifest/bgstrips.log; exit 1; }
+/usr/bin/python3 tools/menu/build_menu.py "$SRC/Data" build/iso/Data # menu art + fonts + strings (phase 4.2)
 echo "iso root: $(find build/iso -type f | wc -l | tr -d ' ') files, $(du -sh build/iso | cut -f1)"
 make -s disc

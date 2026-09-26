@@ -37,6 +37,7 @@ psyqo::AdvancedPad *g_ps1Pad   = nullptr;
 psyqo::CDRomDevice *g_ps1CDRom = nullptr;
 void PS1IrqGuardInstall(); // ps1/irq_guard.cpp
 void PS1RenderBeginFrame(psyqo::GPU &gpu); // ps1/render.cpp
+#include "../ps1/menu.hh"
 void PS1RenderEndFrame();
 
 __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
@@ -96,12 +97,15 @@ class RSDKv4PS1App final : public psyqo::Application {
         SetGlobalVariableByName("stage.player2Enabled", PS1_BOOT_PLAYER == 3);
 #endif
         PS1LoadingEnd();
+        // The menus' resident fonts + strings (VRAM rows 242-255; docs/30 phase 4.2).
+        PS1MenuResidentLoad();
         g_ps1InitDone = 1;
     }
 
     void frame() override
     {
         uint32_t t0 = PS1Hblanks();
+        PS1MenuTestService(); // GDB: g_ps1MenuTestLoad
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
         PS1RenderEndFrame();

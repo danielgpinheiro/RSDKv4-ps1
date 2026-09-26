@@ -37,6 +37,7 @@ ps1/render.cpp \
 ps1/audio_headless.cpp \
 ps1/tileset.cpp \
 ps1/sprite_atlas.cpp \
+ps1/menu.cpp \
 ps1/libc/string.cpp \
 ps1/libc/stdlib.cpp \
 ps1/libc/math.cpp \
@@ -53,7 +54,7 @@ ps1/loading.cpp \
 ps1/memcard.cpp \
 
 ifeq ($(PLATFORM_TEST),1)
-SRCS := ps1/platform_test.cpp $(filter-out RSDKv4/% ps1/%_headless.cpp ps1/render.cpp ps1/tileset.cpp ps1/sprite_atlas.cpp,$(SRCS))
+SRCS := ps1/platform_test.cpp $(filter-out RSDKv4/% ps1/%_headless.cpp ps1/render.cpp ps1/tileset.cpp ps1/sprite_atlas.cpp ps1/menu.cpp,$(SRCS))
 endif
 
 # ps1/libc comes FIRST: its C/C++ shim headers (<string>, <cmath>, <stdio.h>, ...) shadow any
