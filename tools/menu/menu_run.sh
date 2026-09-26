@@ -23,7 +23,7 @@ for F in $ALL; do
   [ -n "$GDBSET" ] && [ "$F" = "${GDBAT:-0}" ] && echo "$GDBSET"
   if echo ",$CAPS," | grep -q ",$F,"; then
     echo "shell /usr/bin/python3 tools/vramshot.py ${OUT}_$F >/dev/null"
-    echo "printf \"STATE $F screen=%u sel=%u gameMode=%d stageMode=%d folder=%s list=%d pos=%d player=%d p2=%d gm=%d slot=%d | overflow=%u miss=%u\\n\", g_ps1MenuScreen, g_ps1MenuSel, Engine.gameMode, stageMode, stageList[activeStageList][stageListPosition].folder, activeStageList, stageListPosition, playerListPos, globalVariables[50], globalVariables[0], globalVariables[2], g_ps1ChainOverflow, g_ps1AtlasDrawMiss"
+    echo "printf \"STATE $F screen=%u sel=%u gameMode=%d stageMode=%d folder=%s list=%d pos=%d player=%d p2=%d gm=%d slot=%d lives=%d star=%d pause=%u/%u/%u vol=%d/%d | overflow=%u miss=%u\\n\", g_ps1MenuScreen, g_ps1MenuSel, Engine.gameMode, stageMode, stageList[activeStageList][stageListPosition].folder, activeStageList, stageListPosition, playerListPos, globalVariables[50], globalVariables[0], globalVariables[2], globalVariables[25], globalVariables[38], g_ps1PauseRequests, g_ps1PauseSel, g_ps1PauseDialog, saveRAM[33], saveRAM[34], g_ps1ChainOverflow, g_ps1AtlasDrawMiss"
   fi
 done
 echo detach

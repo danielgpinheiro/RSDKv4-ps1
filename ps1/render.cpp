@@ -353,7 +353,11 @@ void PS1RenderBeginFrame(psyqo::GPU &gpu)
 
 // The PS1 menus (ps1/menu.cpp) open their frame here: cleared (menu screens) or the last frame repeated (the pause
 // menu over the frozen stage). Palette rows as any frame (the menus use their own CLUT rows).
-void PS1RenderMenuFrame(bool clear) { PS1FrameStart(clear); }
+void PS1RenderMenuFrame(bool clear)
+{
+    PS1FrameStart(clear);
+    PS1FillPalette(gfxLineBuffer[0]); // no FlipScreen on menu frames: the stage rows as a repeated frame
+}
 
 void PS1RenderEndFrame()
 {

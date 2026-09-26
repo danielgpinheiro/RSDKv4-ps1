@@ -16,6 +16,7 @@ natively, leaving the same temps and table / local writes behind.
   its jump-table entries are exactly BUTTONBRIDGE_SIG.
 - Plane switches (GlobalCode objects "Plane Sw V" / "Plane Sw H": their update subs) -> PS1PlaneSwitchV / H / End
   when exactly PLANESWV_SIG / PLANESWH_SIG.
+- The mobile back key's pause (B held; Circle on the PS1 pad) is switched off: patch_back_pause.
 - Ring (GlobalCode object "Ring": its update sub, ~21 VM instructions a frame per ring) -> PS1Ring / End, only
   when the sub is exactly RING_SIG (the instructions RSDKv4/Script.cpp PS1RingUpdate transcribes, constants
   included).
@@ -2077,7 +2078,7 @@ PLAYERINPUT_FN_SIG = [
     'Equal ENGINESTATE 5',
     'endif',
     'endif',
-    'IfEqual 32 KEYDOWNBUTTONB 1',
+    'IfEqual 32 KEYDOWNBUTTONB 2',  # patch_back_pause (was 1)
     'IfEqual 34 GLOBAL[1,0,13] 0',
     'PlaySfx 23 0',
     'StopSfx 19',
@@ -2241,6 +2242,56 @@ def returns_balanced(bcdir):
                 elif n == 'End':
                     return '%s function %d ends the event (End)' % (f, i)
     return None
+
+
+def patch_back_pause(bcdir):
+    """The mobile back key (INPUT_B held) pauses the game in the player's input function (GlobalCode function 0)
+    and the special stage's (Special.bin): `IfEqual KEYDOWNBUTTONB 1` -> `... 2` (never true: a key is 0 or 1). On
+    the PS1 pad B is Circle, a jump button as Cross and Square (ProcessObjectControl: A || B || C); Start still pauses
+    (user decision 2026-09-26). Found by the pattern (the If, then the GLOBAL[13] check and `Equal ENGINESTATE 5`)."""
+    names, vars_ = bs.tables(3)
+    glen = len(bs.load(os.path.join(bcdir, 'GlobalCode.bin'))[0])
+    done, already = [], []
+    for f in sorted(os.listdir(bcdir)):
+        if not f.endswith('.bin'):
+            continue
+        path = os.path.join(bcdir, f)
+        raw = open(path, 'rb').read()
+        own, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        full, _, subs, _, fns, _ = bs.full_code(path)
+        base = len(full) - len(own)
+        assert base in (0, glen)
+        starts = sorted({s for t in subs for s in t if base <= s < len(full)} | {c for c, _ in fns if base <= c < len(full)})
+        sites = set()
+        for s in starts:
+            try:
+                ins = instructions(full, s, names, vars_)
+            except (IndexError, KeyError):
+                continue
+            L = listing(ins)
+            for k, l in enumerate(L):
+                w = l.split()
+                if len(w) == 4 and w[0] == 'IfEqual' and w[2] == 'KEYDOWNBUTTONB' and w[3] in ('1', '2') and \
+                        L[k + 1].startswith('IfEqual ') and L[k + 1].endswith(' GLOBAL[1,0,13] 0') and \
+                        'Equal ENGINESTATE 5' in L[k + 2:k + 6]:
+                    sites.add((ins[k][2][2][2], w[3]))
+        for pos, v in sorted(sites):
+            if v == '2':
+                already.append(f[:-4])
+                continue
+            assert own[pos - base] == 1
+            own[pos - base] = 2
+            done.append(f[:-4])
+        if any(v == '1' for _, v in sites):
+            open(path, 'wb').write(encode(own) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    gcode, _, _, _, gfns, _ = bs.load(os.path.join(bcdir, 'GlobalCode.bin'))
+    if 'GlobalCode' not in done + already:
+        if gcode[gfns[0][0]] != [n for n, _ in names].index('PS1PlayerInput'):  # native already: patched before it
+            sys.exit('ERROR patch_bytecode: the back-key pause of GlobalCode function 0 was not found')
+        already.append('GlobalCode')
+    return 'B-held pause off in %s%s' % (' '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
 
 
 def patch_player_input(bcdir):
@@ -4159,6 +4210,7 @@ def main():
                                                             funcs={122: HFLIPPER_FN_SIG})),
                      ('earthquake', lambda d: patch_stage_sub(d, 'Earthquake', 0, EARTHQUAKE_SIG, 'PS1Earthquake',
                                                               with_jumps=True, calls=(46, 50))),
+                     ('backpause', patch_back_pause),  # before playerinput: its signature has the patched If
                      ('playerinput', patch_player_input),
                      ('cledge', lambda d: patch_stage_sub(d, 'C Ledge', 0, CLEDGE_SIG, 'PS1CLedge', with_jumps=True)),
                      ('steampiston', lambda d: patch_stage_sub(d, 'Steam Piston', 0, STEAMPISTON_SIG, 'PS1SteamPiston',

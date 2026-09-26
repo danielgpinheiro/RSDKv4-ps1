@@ -385,6 +385,10 @@ void mainScreen(int move, bool ok, bool back) {
         setGlobal("options.vsMode", 0);
         go(PS1_MENU_SAVE);
     }
+    else if (ok && s_m.sel == 2) {
+        PlaySfxByName("Menu Select", false);
+        go(PS1_MENU_OPTIONS);
+    }
     else if (back)
         go(PS1_MENU_TITLE);
 }
@@ -458,6 +462,57 @@ void playerScreen(int moveX, bool ok, bool back) {
         go(PS1_MENU_SAVE, s_m.saveSlot + 1);
 }
 
+// Options (OptionsMenu / SettingsScreen): music and SFX volume in the native 5 steps (SetGameVolumes; heard from
+// phase 5), the staff credits (the scripted Credits stage, presentation list 2). Sonic 2's scripts never read the
+// spin dash setting (a Sonic 1 option) and the box art only changes the mobile title: not shown.
+void optionsScreen(int moveY, int moveX, bool ok, bool back) {
+    const PS1MenuPack &mp = g_ps1MenuScreens;
+    SaveGame *saveGame    = (SaveGame *)saveRAM;
+    s_m.sel               = (s_m.sel + moveY + 3) % 3;
+    drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SETTINGS), 160, 6, 1);
+    static const int items[3] = { PS1_STR_MUSIC, PS1_STR_SOUND_F_X, PS1_STR_STAFF_CREDITS };
+    for (int i = 0; i < 3; ++i) {
+        int y = 70 + i * 40;
+        drawBar(y - 4, 28, i == s_m.sel);
+        drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(items[i]), 40, y);
+        if (i < 2) { // volume: 5 notches
+            int vol = i == 0 ? saveGame->musVolume : saveGame->sfxVolume;
+            for (int k = 0; k < 5; ++k) {
+                bool on = vol > k * (MAX_VOLUME / 5);
+                drawRect(200 + k * 18, y + 2, 12, 12, on ? 255 : 40, on ? 210 : 40, on ? 0 : 80);
+            }
+        }
+    }
+    if (moveX && s_m.sel < 2) { // SettingsScreen.cpp SETTINGSSCREEN_SEL_MUSVOL / SFXVOL
+        PlaySfxByName("Menu Move", false);
+        int &vol = s_m.sel == 0 ? saveGame->musVolume : saveGame->sfxVolume;
+        if (moveX < 0) {
+            if (vol > 0)
+                vol -= (MAX_VOLUME / 5);
+            SetGameVolumes(saveGame->musVolume, saveGame->sfxVolume);
+            if (s_m.sel == 0 && !saveGame->musVolume)
+                musicEnabled = false;
+        }
+        else {
+            if (vol < MAX_VOLUME)
+                vol += (MAX_VOLUME / 5);
+            if (s_m.sel == 0 && !musicEnabled) {
+                musicEnabled = true;
+                PlayMusic(0, 0);
+            }
+            SetGameVolumes(saveGame->musVolume, saveGame->sfxVolume);
+        }
+    }
+    if (ok && s_m.sel == 2) {
+        PlaySfxByName("Menu Select", false);
+        InitStartingStage(STAGELIST_PRESENTATION, 2, 0); // the scripted Staff Credits; its end returns to the menus
+    }
+    else if (back) {
+        WriteSaveRAMData();
+        go(PS1_MENU_MAIN, 2);
+    }
+}
+
 }  // namespace
 
 void PS1MenuOpen(int screen) {
@@ -489,6 +544,7 @@ void PS1MenuFrame() {
         case PS1_MENU_MAIN: mainScreen(moveY, ok, back); break;
         case PS1_MENU_SAVE: saveScreen(moveY, ok, back); break;
         case PS1_MENU_PLAYER: playerScreen(moveX, ok, back); break;
+        case PS1_MENU_OPTIONS: optionsScreen(moveY, moveX, ok, back); break;
     }
     if (Engine.gameMode != ENGINE_PS1MENU) { // a game started: the stage load replaces the menu art in VRAM
         g_ps1MenuScreens = PS1MenuPack();
@@ -501,4 +557,116 @@ void PS1MenuFrame() {
     }
     g_ps1MenuScreen = s_m.screen;
     g_ps1MenuSel    = s_m.sel;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Pause menu (PauseMenu.cpp): Continue, Restart, Exit, the last two behind a yes / no dialog (DialogPanel), over the
+// frozen stage. Only the resident pack (fonts in VRAM rows 242-255) and flat rectangles: every stage's VRAM stays as
+// it is. The first frame dims the stage once (half brightness); later frames repeat it and redraw the opaque panel.
+
+volatile uint32_t g_ps1PauseSel = 0, g_ps1PauseDialog = 0;
+
+namespace {
+struct PauseState {
+    int sel, dialog, dialogSel, frames;
+    bool restartOff;
+} s_p;
+enum { PAUSE_DLG_NONE, PAUSE_DLG_RESTART, PAUSE_DLG_EXIT };
+// One panel for the menu and the dialogs: each frame repeats the last one (PS1ChainRepeatLastFrame), so the panel
+// always covers what the previous frame drew over the dimmed stage.
+enum { PANEL_X = 30, PANEL_Y = 60, PANEL_W = 260, PANEL_H = 120 };
+}  // namespace
+
+void PS1PauseOpen() {
+    PauseSound();
+    s_p = PauseState();
+    // PauseMenu.cpp: Restart greyed on the last life (no save / save), outside the regular lists, in attract / VS mode
+    s_p.restartOff = (GetGlobalVariableByName("player.lives") <= 1 && GetGlobalVariableByName("options.gameMode") <= 1)
+                     || !activeStageList || GetGlobalVariableByName("options.attractMode") == 1
+                     || GetGlobalVariableByName("options.vsMode") == 1;
+    Engine.gameMode = ENGINE_PS1PAUSE;
+}
+
+void PS1PauseFrame() {
+    CheckKeyPress(&keyPress);
+    const PS1MenuPack &rp = g_ps1MenuResident;
+    int moveY = keyPress.down - keyPress.up, moveX = keyPress.right - keyPress.left;
+    bool ok = keyPress.start || keyPress.A, back = keyPress.B || keyPress.X;
+    PS1RenderMenuFrame(false); // the frozen stage (the last frame repeated)
+    if (!s_p.frames++)
+        drawRect(0, 0, 320, 240, 0, 0, 0, 0); // dim it once: B/2
+    if (s_p.dialog == PAUSE_DLG_NONE) {
+        if (moveY)
+            PlaySfxByName("Menu Move", false);
+        s_p.sel = (s_p.sel + moveY + 3) % 3;
+        drawRect(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, 16, 40, 150);
+        drawText(rp, PS1_FONT_HEADING_S, PS1MenuString(PS1_STR_PAUSE), 160, 70, 1);
+        static const int items[3] = { PS1_STR_CONTINUE, PS1_STR_RESTART, PS1_STR_EXIT };
+        for (int i = 0; i < 3; ++i) {
+            int y = 102 + i * 22;
+            if (i == s_p.sel)
+                drawRect(90, y - 3, 140, 18, 170, 130, 0);
+            drawText(rp, PS1_FONT_LABEL_S, PS1MenuString(items[i]), 160, y, 1);
+            if (i == 1 && s_p.restartOff) // greyed (the native tints it 0x80): the text dimmed
+                drawRect(90, y - 3, 140, 18, 16, 40, 150, 0);
+        }
+        if (ok) {
+            if (s_p.sel == 0) { // PAUSEMENU_STATE_CONTINUE
+                PlaySfxByName("Resume", false);
+                ResumeSound();
+                Engine.gameMode = ENGINE_MAINGAME;
+            }
+            else if (s_p.sel == 1 && !s_p.restartOff) {
+                PlaySfxByName("Menu Select", false);
+                s_p.dialog    = PAUSE_DLG_RESTART;
+                s_p.dialogSel = 1;
+            }
+            else if (s_p.sel == 2) {
+                PlaySfxByName("Menu Select", false);
+                s_p.dialog    = PAUSE_DLG_EXIT;
+                s_p.dialogSel = 1;
+            }
+        }
+        else if (back) {
+            PlaySfxByName("Resume", false);
+            ResumeSound();
+            Engine.gameMode = ENGINE_MAINGAME;
+        }
+    }
+    else {
+        if (moveX)
+            PlaySfxByName("Menu Move", false);
+        s_p.dialogSel = (s_p.dialogSel + moveX + 2) & 1;
+        drawRect(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, 16, 40, 150);
+        drawText(rp, PS1_FONT_TEXT_S, PS1MenuString(s_p.dialog == PAUSE_DLG_RESTART ? PS1_STR_RESTART_MESSAGE : PS1_STR_EXIT_MESSAGE),
+                 160, 80, 1);
+        for (int i = 0; i < 2; ++i) {
+            int x = i ? 200 : 120;
+            if (i == s_p.dialogSel)
+                drawRect(x - 34, 145, 68, 18, 170, 130, 0);
+            drawText(rp, PS1_FONT_LABEL_S, PS1MenuString(i ? PS1_STR_NO : PS1_STR_YES), x, 148, 1);
+        }
+        if (ok && s_p.dialogSel == 0) {
+            PlaySfxByName("Menu Select", false);
+            if (s_p.dialog == PAUSE_DLG_RESTART) { // PAUSEMENU_STATE_RESTART, DLG_YES
+                Engine.gameMode = ENGINE_EXITPAUSE;
+                stageMode       = STAGEMODE_LOAD;
+                if (GetGlobalVariableByName("options.gameMode") <= 1)
+                    SetGlobalVariableByName("player.lives", GetGlobalVariableByName("player.lives") - 1);
+                if (activeStageList != STAGELIST_SPECIAL) {
+                    SetGlobalVariableByName("lampPostID", 0);
+                    SetGlobalVariableByName("starPostID", 0);
+                }
+                StopMusic(true);
+            }
+            else // PAUSEMENU_STATE_EXIT, DLG_YES (the menu path, not skipStartMenu)
+                Engine.gameMode = (GetGlobalVariableByName("options.gameMode") > 1) + ENGINE_ENDGAME;
+        }
+        else if ((ok && s_p.dialogSel == 1) || back) {
+            PlaySfxByName("Menu Select", false);
+            s_p.dialog = PAUSE_DLG_NONE;
+        }
+    }
+    g_ps1PauseSel    = s_p.sel;
+    g_ps1PauseDialog = s_p.dialog;
 }

@@ -536,7 +536,7 @@ void RetroEngine::Init()
 }
 
 #if RETRO_PLATFORM == RETRO_PS1
-// PS1 pause requests (engine.state = ENGINE_INITPAUSE) seen before the phase 4 pause menu exists; for GDB.
+// PS1 pause requests (engine.state = ENGINE_INITPAUSE -> the PS1 pause menu); for GDB.
 volatile uint32_t g_ps1PauseRequests = 0;
 
 // PS1: psyqo owns the frame loop (RSDKv4/main.cpp frame() -> RunFrame, flip by psyqo), so this is one pass of
@@ -568,10 +568,12 @@ void RetroEngine::RunFrame()
                     ResetCurrentStageFolder();
                     break;
 
-                case ENGINE_INITPAUSE: // the PS1 pause menu arrives in phase 4: resume at once until then
+                case ENGINE_INITPAUSE: // RetroGameLoop's InitPauseMenu: the PS1 pause menu (ps1/menu.cpp)
                     g_ps1PauseRequests = g_ps1PauseRequests + 1;
-                    gameMode           = ENGINE_MAINGAME;
+                    PS1PauseOpen();
                     break;
+
+                case ENGINE_PS1PAUSE: PS1PauseFrame(); break;
 
                 case ENGINE_EXITPAUSE:
                     gameMode = ENGINE_MAINGAME;

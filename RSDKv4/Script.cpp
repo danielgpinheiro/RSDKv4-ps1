@@ -5347,8 +5347,8 @@ static void PS1PlayerInput()
                 pause();
             if ((keyPress.start && ic()) == 1)
                 pause();
-            if ((keyDown.B && ic()) == 1)
-                pause();
+            // IfEqual KEYDOWNBUTTONB 2: the mobile back key's pause, its 1 patched to 2 (never true; Circle jumps on
+            // the PS1, tools/scripts/patch_bytecode.py patch_back_pause)
         }
         ProcessObjectControl(&E());
         if (G[13] == 1) { // CallNativeFunction2 GLOBAL[137] 0 0
