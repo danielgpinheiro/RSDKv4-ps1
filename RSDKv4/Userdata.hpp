@@ -67,8 +67,15 @@ enum OnlineMenuTypes {
 };
 
 struct Achievement {
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1: only the decomp's mod natives (AddAchievement / SetAchievementDescription) set the strings, which Sonic 2's
+    // data never calls; bounded copies (Userdata.cpp). 12 KB -> 2.3 KB.
+    char name[0x10];
+    char desc[0x10];
+#else
     char name[0x40];
     char desc[0x80];
+#endif
     int status;
 };
 

@@ -36,6 +36,8 @@ psyqo::GPU *g_ps1GPU           = nullptr;
 psyqo::AdvancedPad *g_ps1Pad   = nullptr;
 psyqo::CDRomDevice *g_ps1CDRom = nullptr;
 void PS1IrqGuardInstall(); // ps1/irq_guard.cpp
+void PS1McPrepare();       // ps1/memcard.cpp
+void PS1SaveTestService(); // RSDKv4/Userdata.cpp (GDB test hook)
 void PS1RenderBeginFrame(psyqo::GPU &gpu); // ps1/render.cpp
 #include "../ps1/menu.hh"
 void PS1RenderEndFrame();
@@ -75,6 +77,7 @@ class RSDKv4PS1App final : public psyqo::Application {
                              .set(psyqo::GPU::MiscSetting::CLEAR_VRAM));
         g_ps1GPU = &gpu();
         m_cdrom.prepare();
+        PS1McPrepare(); // memory card saves (RSDKv4/Userdata.cpp, docs/30 phase 8)
     }
 
     void start() override
@@ -90,6 +93,10 @@ class RSDKv4PS1App final : public psyqo::Application {
         StrCopy(Engine.startSceneFolder, g_ps1BootBuild);
         StrCopy(Engine.startSceneID, PS1_BOOT_ID);
 #endif
+        // The memory card is read once, here, before the boot load (RSDKv4/Userdata.cpp; the engine's ReadSaveRAMData
+        // calls get the cached result): a card read inside the load left the heap split under the chain arenas
+        // (47 KB less headroom at the load peak).
+        ReadSaveRAMData();
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
         Engine.Init();
 #ifdef PS1_BOOT_FOLDER
@@ -110,6 +117,7 @@ class RSDKv4PS1App final : public psyqo::Application {
     {
         uint32_t t0 = PS1Hblanks();
         PS1MenuTestService(); // GDB: g_ps1MenuTestLoad
+        PS1SaveTestService(); // GDB: g_ps1SaveTest
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
         PS1RenderEndFrame();

@@ -620,7 +620,9 @@ void InitNativeObjectSystem()
         saveGame->tailsUnlocked   = Engine.gameType != GAME_SONIC1;
         saveGame->knuxUnlocked    = Engine.gameType != GAME_SONIC1;
         saveGame->unlockedActs    = 0;
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: no card write at boot; the first real save (a file, options, a record) creates it
         WriteSaveRAMData();
+#endif
     }
 #if !RETRO_USE_ORIGINAL_CODE
     else if (Engine.gameType == GAME_SONIC2) {
@@ -628,7 +630,9 @@ void InitNativeObjectSystem()
         // they weren't automatically unlocked in older versions of the decomp
         saveGame->tailsUnlocked = true;
         saveGame->knuxUnlocked  = true;
+#if RETRO_PLATFORM != RETRO_PS1
         WriteSaveRAMData();
+#endif
     }
 #endif
     saveGame->musVolume = bgmVolume;

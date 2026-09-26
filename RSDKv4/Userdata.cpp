@@ -45,13 +45,77 @@ int disableFocusPause_Config = 0;
 
 bool useSGame = false;
 
+#if RETRO_PLATFORM == RETRO_PS1
+// Memory card saves (docs/30 phase 8; the Sonic CD port's scheme on ps1/memcard: Sony file name, CRC-checked header,
+// never formats a card). Sonic 2 keeps its saves in saveRAM[0..191] (SaveGame, Userdata.hpp: the 4 files 0-31,
+// settings 32-46, Time Attack records 64-191): the file holds saveRAM[0..255] (1 KB, one card block). The card is read
+// once, at the first ReadSaveRAMData (boot, InitNativeObjectSystem); from then on the RAM copy is the truth and each
+// WriteSaveRAMData writes the whole block (the loading icon shows meanwhile). No card or an unformatted card: nothing
+// persists.
+#include "../ps1/loading.hh"
+#include "../ps1/memcard.hh"
+#include "../ps1/memcard_icons.h"
+#define PS1_SAVE_INTS 256
+#define PS1_SAVE_FILE "BAHBRW-00004SONIC2" // (psyqo ports are 0-based: Port0 = memory card slot 1)
+volatile uint32_t g_ps1SaveReads = 0, g_ps1SaveWrites = 0;
+volatile int32_t g_ps1SaveLastError = -1; // last psyqo::MemoryCard::Error (0 = OK)
+static int s_ps1SaveState = 0;          // 0 = card not read yet, 1 = read (data), 2 = read (nothing)
+
+bool PS1ReadSaveCard()
+{
+    if (s_ps1SaveState)
+        return s_ps1SaveState == 1;
+    PS1LoadingBegin();
+    uint32_t len     = 0;
+    uint16_t version = 0;
+    // Straight into the save RAM: PS1McLoad copies only a CRC-checked payload, so a failed load (no card / file, bad
+    // data) leaves it as it was.
+    PS1McError e = PS1McLoad(psyqo::MemoryCard::Port::Port0, PS1_SAVE_FILE, saveRAM, PS1_SAVE_INTS * sizeof(int), &len, &version);
+    PS1LoadingEnd();
+    g_ps1SaveLastError = (int32_t)e;
+    g_ps1SaveReads     = g_ps1SaveReads + 1;
+    if (e != PS1McError::OK || version != 1) {
+        s_ps1SaveState = 2;
+        return false;
+    }
+    s_ps1SaveState = 1;
+    return true;
+}
+
+bool PS1WriteSaveCard()
+{
+    PS1LoadingBegin();
+    PS1McError e = PS1McSave(psyqo::MemoryCard::Port::Port0, PS1_SAVE_FILE, "SONIC 2", s_ps1McIconSonic2, saveRAM,
+                             PS1_SAVE_INTS * sizeof(int), 1);
+    PS1LoadingEnd();
+    g_ps1SaveLastError = (int32_t)e;
+    g_ps1SaveWrites    = g_ps1SaveWrites + 1;
+    if (e != PS1McError::OK)
+        return false;
+    s_ps1SaveState = 1;
+    return true;
+}
+
+// GDB test hook: 1 = WriteSaveRAMData() now; 2 = forget the loaded state and ReadSaveRAMData() now.
+volatile int32_t g_ps1SaveTest = 0;
+void PS1SaveTestService()
+{
+    int t         = g_ps1SaveTest;
+    g_ps1SaveTest = 0;
+    if (t == 1)
+        WriteSaveRAMData();
+    else if (t == 2) {
+        s_ps1SaveState = 0;
+        ReadSaveRAMData();
+    }
+}
+#endif
+
 bool ReadSaveRAMData()
 {
     useSGame = false;
 #if RETRO_PLATFORM == RETRO_PS1
-    // saveRAM lives for the session until phase 8 writes it to the memory card; no file access (a CD file open
-    // would stop the CD-XA music: one CD action at a time).
-    return true;
+    return PS1ReadSaveCard(); // the memory card; never the CD, which may be streaming the CD-XA music
 #endif
     char buffer[0x180];
 #if RETRO_USE_MOD_LOADER
@@ -125,9 +189,7 @@ bool ReadSaveRAMData()
 bool WriteSaveRAMData()
 {
 #if RETRO_PLATFORM == RETRO_PS1
-    // saveRAM lives for the session until phase 8 writes it to the memory card; no file access (a CD file open
-    // would stop the CD-XA music: one CD action at a time).
-    return true;
+    return PS1WriteSaveCard();
 #endif
     char buffer[0x180];
 
@@ -935,13 +997,31 @@ void SetAchievement(int *achievementID, int *status)
     }
 }
 #if RETRO_USE_MOD_LOADER
+#if RETRO_PLATFORM == RETRO_PS1
+static void PS1StrCopyBounded(char *dst, const char *src, int size)
+{
+    int i = 0;
+    for (; src[i] && i < size - 1; ++i) dst[i] = src[i];
+    dst[i] = 0;
+}
+void AddGameAchievement(int *unused, const char *name)
+{
+    if (achievementCount < ACHIEVEMENT_COUNT)
+        PS1StrCopyBounded(achievements[achievementCount++].name, name, sizeof(achievements[0].name));
+}
+#else
 void AddGameAchievement(int *unused, const char *name) { StrCopy(achievements[achievementCount++].name, name); }
+#endif
 void SetAchievementDescription(uint *id, const char *desc)
 {
     if (*id >= achievementCount)
         return;
 
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1StrCopyBounded(achievements[*id].desc, desc, sizeof(achievements[0].desc));
+#else
     StrCopy(achievements[*id].desc, desc);
+#endif
 }
 void ClearAchievements() { achievementCount = 0; }
 void GetAchievementCount() { scriptEng.checkResult = achievementCount; }
