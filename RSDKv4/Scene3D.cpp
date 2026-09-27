@@ -363,9 +363,48 @@ void TransformVertices(Matrix *matrix, int startIndex, int endIndex)
 DrawListEntry3D g_ps1Scene3DScratch[FACEBUFFER_SIZE];
 #endif
 #if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_SORT3D_CHECK)
-// Stable LSD radix sort, descending by depth (ties keep their order, like upstream's bubble sort): keys max - depth
-// ascending, in as many 9-bit passes as the depth range needs (the half-pipe: 2). Identical order to upstream's:
-// tools/scene3d/sort3d_check.sh.
+// Stable LSD radix sort, descending by depth (ties keep their order, like upstream's bubble sort): keys hi - depth
+// ascending, in as many 9-bit passes as the depth range needs (the half-pipe: 2). One counting loop fills every pass's
+// histogram (docs/30 phase 7.2b). Identical order to upstream's: tools/scene3d/sort3d_check.sh.
+void PS1SortDrawList3DRange(DrawListEntry3D *list, int count, int lo, int hi)
+{
+    if (count < 2)
+        return;
+    unsigned range = (unsigned)hi - (unsigned)lo;
+    int passes     = 0;
+    while (passes < 4 && (range >> (9 * passes)))
+        ++passes;
+    if (!passes)
+        return;
+    uint16_t counts[2][512]; // counts <= FACEBUFFER_SIZE; the first two digits counted in one loop, later ones in theirs
+    memset(counts, 0, sizeof(counts));
+    for (int i = 0; i < count; ++i) {
+        unsigned k = (unsigned)hi - (unsigned)list[i].depth;
+        ++counts[0][k & 511];
+        ++counts[1][(k >> 9) & 511];
+    }
+    DrawListEntry3D *src = list, *dst = g_ps1Scene3DScratch;
+    for (int p = 0; p < passes; ++p) {
+        uint16_t *c = counts[p & 1];
+        int shift   = 9 * p;
+        if (p >= 2) {
+            memset(c, 0, sizeof(counts[0]));
+            for (int i = 0; i < count; ++i) ++c[(((unsigned)hi - (unsigned)src[i].depth) >> shift) & 511];
+        }
+        int at = 0;
+        for (int b = 0; b < 512; ++b) {
+            int n = c[b];
+            c[b]  = at;
+            at += n;
+        }
+        for (int i = 0; i < count; ++i) dst[c[(((unsigned)hi - (unsigned)src[i].depth) >> shift) & 511]++] = src[i];
+        DrawListEntry3D *t = src;
+        src                = dst;
+        dst                = t;
+    }
+    if (src != list)
+        for (int i = 0; i < count; ++i) list[i] = src[i];
+}
 void PS1SortDrawList3D(DrawListEntry3D *list, int count)
 {
     if (count < 2)
@@ -375,25 +414,7 @@ void PS1SortDrawList3D(DrawListEntry3D *list, int count)
         lo = list[i].depth < lo ? list[i].depth : lo;
         hi = list[i].depth > hi ? list[i].depth : hi;
     }
-    unsigned range = (unsigned)hi - (unsigned)lo;
-    DrawListEntry3D *src = list, *dst = g_ps1Scene3DScratch;
-    for (int shift = 0; shift < 32 && (range >> shift); shift += 9) {
-        int counts[512];
-        memset(counts, 0, sizeof(counts));
-        for (int i = 0; i < count; ++i) ++counts[(((unsigned)hi - (unsigned)src[i].depth) >> shift) & 511];
-        int at = 0;
-        for (int b = 0; b < 512; ++b) {
-            int n     = counts[b];
-            counts[b] = at;
-            at += n;
-        }
-        for (int i = 0; i < count; ++i) dst[counts[(((unsigned)hi - (unsigned)src[i].depth) >> shift) & 511]++] = src[i];
-        DrawListEntry3D *t = src;
-        src                = dst;
-        dst                = t;
-    }
-    if (src != list)
-        for (int i = 0; i < count; ++i) list[i] = src[i];
+    PS1SortDrawList3DRange(list, count, lo, hi);
 }
 #endif
 
@@ -403,10 +424,16 @@ void Sort3DDrawList()
     uint32_t t0 = PS1Hblanks();
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
+    int lo = 0, hi = 0;
     for (int i = 0; i < faceCount; ++i) { // .v: the depth z (the GTE's, or the exact one for marked vertices)
-        const Face &f       = faceBuffer[i];
-        drawList3D[i].depth = (vertexBufferT[f.d].v + vertexBufferT[f.c].v + vertexBufferT[f.b].v + vertexBufferT[f.a].v) >> 2;
+        const Face &f = faceBuffer[i];
+        int depth     = (vertexBufferT[f.d].v + vertexBufferT[f.c].v + vertexBufferT[f.b].v + vertexBufferT[f.a].v) >> 2;
+        drawList3D[i].depth  = depth;
         drawList3D[i].faceID = i;
+        if (!i)
+            lo = hi = depth;
+        lo = depth < lo ? depth : lo;
+        hi = depth > hi ? depth : hi;
     }
 #else
     for (int i = 0; i < faceCount; ++i) {
@@ -421,7 +448,7 @@ void Sort3DDrawList()
     // PS1: the bubble sort below is stable and descending, so any stable descending sort gives the same order: a radix
     // sort (docs/30 phase 7; the half-pipe's 742 faces took 4,266 hblanks bubbled, 220 merge-sorted). Identical order
     // checked on the host: tools/scene3d/sort3d_check.sh.
-    PS1SortDrawList3D(drawList3D, faceCount);
+    PS1SortDrawList3DRange(drawList3D, faceCount, lo, hi);
     g_ps1Prof3DSort  = PS1HblanksSince(t0);
     g_ps1Prof3DFaces = faceCount;
     return;

@@ -784,6 +784,10 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1Monitor", 0),
     FunctionInfo("PS1InvisibleBlock", 0),
     FunctionInfo("PS1SpecialRing", 0),
+    FunctionInfo("PS1Halfpipe", 0),
+    FunctionInfo("PS1HalfpipeSegment", 0),
+    FunctionInfo("PS1PlayerFaces", 0),
+    FunctionInfo("PS1SpecialPlayerRun", 0),
 #endif
 };
 
@@ -1327,6 +1331,10 @@ enum ScrFunc {
     FUNC_PS1MONITOR,
     FUNC_PS1INVISIBLEBLOCK,
     FUNC_PS1SPECIALRING,
+    FUNC_PS1HALFPIPE,
+    FUNC_PS1HALFPIPESEGMENT,
+    FUNC_PS1PLAYERFACES,
+    FUNC_PS1SPECIALPLAYERRUN,
 #endif
     FUNC_MAX_CNT
 };
@@ -7256,6 +7264,10 @@ static void PS1InvisibleBlockUpdate()
             break;
     }
 }
+// Scene3D buffer entries as the VM indexes them (PS1_VTX / PS1_FACE: mapped, clamped, high-water marks), out of line:
+// the special-stage natives touch them in many places (code size, docs/30 phase 7.2b).
+__attribute__((noinline)) static Vertex &PS1Vertex(int i) { return vertexBuffer[PS1_VTX(i)]; }
+__attribute__((noinline)) static Face &PS1Face(int i) { return faceBuffer[PS1_FACE(i)]; }
 // Scene3D counts as the VM writes them (VAR_SCENE3DVERTEXCOUNT / FACECOUNT: high-water marks, then mapped/clamped).
 static inline void PS1SetVertexCount(int n)
 {
@@ -7268,6 +7280,594 @@ static inline void PS1SetFaceCount(int n)
     if (n > g_ps1Scene3DMaxCountF)
         g_ps1Scene3DMaxCountF = n;
     faceCount = PS1_FACE_COUNT(n);
+}
+// The special stage's pipe-segment build (Special function 0: the Halfpipe's update calls it each time the pipe
+// advances one segment, its startup 8 times), natively: one statement per script instruction, in order; every local
+// write goes through PS1ScriptWrite as the VM's does (same order, so the big-value table ends the same). Reads the pipe
+// layout (tile angles) for the turn, moves the Halfpipe, places the objects the pipe reaches (rings / bombs: their 3D
+// positions), copies the next segment's vertices from its table and transforms them. Patched in only when the function
+// and its jump-table entries match HPSEG_FN_SIG.
+__attribute__((noinline)) static void PS1TransformWorld(int from, int to) // TransformVertices 0 <from> <to>
+{
+    TransformVertices(&matWorld, PS1_VTX(from), PS1_VTX_COUNT(to));
+}
+volatile uint32_t g_ps1HalfpipeCover = 0; // special-stage native branches taken (GDB): PS1HalfpipeSegment bits 0-3 turn,
+// 4-11 segment kind, 12-13 objects; PS1PlayerFaces 14 visible, 15 value4 sprite, 16 value23 sprite; PS1SpecialPlayerRun
+// 17 right, 18 left, 19 neither, 20 jump, 21 off the top
+__attribute__((optimize("Os"))) static void PS1HalfpipeSegment()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    Entity &o0 = PS1_OBJ(0);
+    auto L     = [](int pos) { return (int)scriptCode[pos]; };
+    auto LW    = [](int pos, int value) { PS1ScriptWrite(pos, value); };
+    auto angle = [](int x, int y) { // Get16x16TileInfo <dst> x y TILEINFO_ANGLEA
+        int chunk = stageLayouts[0].tiles[(x >> 7) + ((y >> 7) << 8)] << 6;
+        chunk += ((x & 0x7F) >> 4) + 8 * ((y & 0x7F) >> 4);
+        return (int)collisionMasks[0].angles[tiles128x128.tileIndex[chunk]];
+    };
+    auto getL = [&](int pos, int table, int index) { // GetTableValue LOCAL<pos> <index> <table> (the VM writes it back)
+        int value = L(pos);
+        if (index >= 0 && index < scriptCode[table])
+            value = scriptCode[table + index + 1];
+        LW(pos, value);
+    };
+    auto get = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    auto set = [](int table, int index, int value) { // SetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            PS1ScriptWrite(table + index + 1, value);
+    };
+    auto TV = [](int from, int to) { PS1TransformWorld(from, to); };
+    auto V  = [](int i) -> Vertex & { return PS1Vertex(i); };
+    t[1] = o0.xpos;
+    t[1] >>= 16;
+    t[1] += 376;
+    t[2] = o0.ypos;
+    t[2] >>= 16;
+    t[0] = angle(t[1], t[2]);
+    if (t[0] == 1) {
+        t[2] += 128;
+        t[2] &= 65408;
+        o0.ypos = t[2] << 16;
+    }
+    t[1] += 16;
+    t[3] = L(942);
+    t[3] += 64;
+    t[3] &= 511;
+    t[3] >>= 7;
+    g_ps1HalfpipeCover = g_ps1HalfpipeCover | (1u << (t[3] & 3));
+    switch (t[3]) {
+        case 0:
+            t[0] = angle(t[1], t[2]);
+            getL(935, 1206, t[0]);
+            t[1] += 16;
+            t[0] = angle(t[1], t[2]);
+            getL(936, 1206, t[0]);
+            t[1] += 16;
+            t[0] = angle(t[1], t[2]);
+            getL(937, 1206, t[0]);
+            break;
+        case 1:
+            t[0] = angle(t[1], t[2]);
+            getL(937, 1206, t[0]);
+            t[1] += 16;
+            t[0] = angle(t[1], t[2]);
+            getL(936, 1206, t[0]);
+            t[1] += 16;
+            t[0] = angle(t[1], t[2]);
+            getL(935, 1206, t[0]);
+            break;
+        case 2:
+            t[0] = angle(t[1], t[2]);
+            getL(935, 1206, t[0]);
+            LW(935, -L(935));
+            t[1] += 16;
+            t[0] = angle(t[1], t[2]);
+            getL(936, 1206, t[0]);
+            t[1] += 16;
+            t[0] = angle(t[1], t[2]);
+            getL(937, 1206, t[0]);
+            LW(937, -L(937));
+            break;
+        case 3:
+            t[0] = angle(t[1], t[2]);
+            getL(937, 1206, t[0]);
+            LW(937, -L(937));
+            t[1] += 16;
+            t[0] = angle(t[1], t[2]);
+            getL(936, 1206, t[0]);
+            t[1] += 16;
+            t[0] = angle(t[1], t[2]);
+            getL(935, 1206, t[0]);
+            LW(935, -L(935));
+            break;
+    }
+    t[0] = curYBoundary2;
+    t[0] <<= 16;
+    o0.ypos += 524288;
+    if (o0.ypos >= t[0])
+        o0.ypos -= t[0];
+    o0.values[22] += 524288;
+    if (o0.values[22] >= t[0])
+        o0.values[22] -= t[0];
+    MatrixRotateXYZ(&matWorld, L(941), L(942), L(943));
+    MatrixTranslateXYZ(&matTemp, L(938), L(939), L(940));
+    MatrixMultiply(&matWorld, &matTemp);
+    t[0] = 1;
+    while (t[0] == 1) { // the objects the pipe has reached (sorted by y), from ARRAYPOS5 on
+        if (PS1_OBJ(ap[5]).ypos < o0.ypos) {
+            PS1_OBJ(ap[5]).priority = 1;
+            g_ps1HalfpipeCover      = g_ps1HalfpipeCover | (PS1_OBJ(ap[5]).values[7] == 1 ? 1u << 12 : 1u << 13);
+            if (PS1_OBJ(ap[5]).values[7] == 1) {
+                V(4094).x = PS1_OBJ(ap[5]).values[1];
+                V(4094).y = PS1_OBJ(ap[5]).values[2];
+                V(4094).z = 0;
+                V(4095).x = PS1_OBJ(ap[5]).values[8];
+                V(4095).y = PS1_OBJ(ap[5]).values[9];
+                V(4095).z = 0;
+                TV(4094, 4096);
+                PS1_OBJ(ap[5]).values[3]  = o0.values[22];
+                PS1_OBJ(ap[5]).values[4]  = V(4094).x;
+                PS1_OBJ(ap[5]).values[5]  = V(4094).y;
+                PS1_OBJ(ap[5]).values[6]  = V(4094).z;
+                PS1_OBJ(ap[5]).values[11] = V(4095).x;
+                PS1_OBJ(ap[5]).values[12] = V(4095).y;
+                PS1_OBJ(ap[5]).values[13] = V(4095).z;
+            }
+            else {
+                V(4095).x = PS1_OBJ(ap[5]).values[1];
+                V(4095).y = PS1_OBJ(ap[5]).values[2];
+                V(4095).z = 0;
+                TV(4095, 4096);
+                PS1_OBJ(ap[5]).values[3] = o0.values[22];
+                PS1_OBJ(ap[5]).values[4] = V(4095).x;
+                PS1_OBJ(ap[5]).values[5] = V(4095).y;
+                PS1_OBJ(ap[5]).values[6] = V(4095).z;
+            }
+            ap[5]++;
+        }
+        else
+            t[0] = 0;
+    }
+    t[2] = L(932);
+    t[2] &= 7;
+    getL(929, 1224, t[2]);
+    LW(932, L(932) + 1);
+    t[0]  = 0;
+    ap[0] = L(930);
+    get(L(929), t[0], t[1]);
+    t[0]++;
+    while (t[1] > 0) { // the segment's vertices from its table
+        int table = L(929);
+        Vertex &q = V(ap[0]);
+        get(table, t[0], q.x);
+        t[0]++;
+        get(table, t[0], q.y);
+        t[0]++;
+        get(table, t[0], q.z);
+        t[0]++;
+        ap[0]++;
+        t[1]--;
+    }
+    set(945, L(944), L(938));
+    set(986, L(944), L(939));
+    set(1027, L(944), L(940));
+    set(1068, L(944), L(941));
+    set(1109, L(944), L(942));
+    set(1150, L(944), L(943));
+    auto turn = [&](int nearZ, int mul) { // switch cases 5 (3072, 12) and 6 (5120, 20)
+        get(1197, t[2], t[0]);
+        t[0] += L(930);
+        TV(L(930), t[0]);
+        V(4094).x = 0;
+        V(4094).y = 0;
+        V(4094).z = nearZ;
+        V(4095).x = 0;
+        V(4095).y = 0;
+        V(4095).z = 8192;
+        TV(4094, 4096);
+        LW(938, V(4094).x);
+        LW(939, V(4094).y);
+        LW(940, V(4094).z);
+        t[3] = L(935);
+        t[3] = (int)((uint)t[3] * (uint)mul);
+        t[3] >>= 5;
+        LW(941, L(941) + t[3]);
+        t[3] = L(936);
+        t[3] = (int)((uint)t[3] * (uint)mul);
+        t[3] >>= 5;
+        LW(942, L(942) + t[3]);
+        t[3] = L(937);
+        t[3] = (int)((uint)t[3] * (uint)mul);
+        t[3] >>= 5;
+        LW(943, L(943) + t[3]);
+        MatrixRotateXYZ(&matWorld, L(941), L(942), L(943));
+        MatrixTranslateXYZ(&matTemp, L(938), L(939), L(940));
+        MatrixMultiply(&matWorld, &matTemp);
+        t[1] = t[0];
+        t[1] += 17;
+        TV(t[0], t[1]);
+        LW(938, V(4095).x);
+        LW(939, V(4095).y);
+        LW(940, V(4095).z);
+        getL(941, 1068, L(944));
+        getL(942, 1109, L(944));
+        getL(943, 1150, L(944));
+        LW(941, L(941) + L(935));
+        LW(942, L(942) + L(936));
+        LW(943, L(943) + L(937));
+        MatrixRotateXYZ(&matWorld, L(941), L(942), L(943));
+        MatrixTranslateXYZ(&matTemp, L(938), L(939), L(940));
+        MatrixMultiply(&matWorld, &matTemp);
+        TV(t[1], ap[0]);
+    };
+    g_ps1HalfpipeCover = g_ps1HalfpipeCover | (1u << (4 + (t[2] & 7)));
+    switch (t[2]) {
+        case 0:
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 7:
+            get(1197, t[2], t[0]);
+            t[0] += L(930);
+            TV(L(930), t[0]);
+            V(4095).x = 0;
+            V(4095).y = 0;
+            V(4095).z = 8192;
+            TV(4095, 4096);
+            LW(938, V(4095).x);
+            LW(939, V(4095).y);
+            LW(940, V(4095).z);
+            LW(941, L(941) + L(935));
+            LW(942, L(942) + L(936));
+            LW(943, L(943) + L(937));
+            MatrixRotateXYZ(&matWorld, L(941), L(942), L(943));
+            MatrixTranslateXYZ(&matTemp, L(938), L(939), L(940));
+            MatrixMultiply(&matWorld, &matTemp);
+            TV(t[0], ap[0]);
+            break;
+        case 5: turn(3072, 12); break;
+        case 6: turn(5120, 20); break;
+    }
+    LW(944, L(944) + 1);
+    LW(944, L(944) % 40);
+    LW(930, ap[0]);
+    if (L(930) >= L(933))
+        LW(930, 0);
+}
+// The special-stage player's faces (Special function 8, from the Player's update every frame), natively: one statement
+// per script instruction, in order. Places the player in the pipe's frame (the Halfpipe's camera values 14-19), then
+// emits its shadow (TEXTURED_C_BLEND) and, when visible, its sprite (3DSPRITE) plus the extra sprites of values 4 / 23.
+// Patched in only when the function and its jump-table entries match PLAYERFACES_FN_SIG.
+__attribute__((optimize("Os"))) static void PS1PlayerFaces()
+{
+    int *ap = scriptEng.arrayPosition;
+    Entity &me = PS1_OBJ(objectEntityPos);
+    int *v     = me.values;
+    auto copy  = [&](int to) { // VERTEXBUFFER X/Y/Z [ARRAYPOS0] = [ARRAYPOS2]
+        Vertex &src = PS1Vertex(ap[2]);
+        int x = src.x, y = src.y, z = src.z;
+        Vertex &dst = PS1Vertex(to);
+        dst.x = x, dst.y = y, dst.z = z;
+    };
+    auto sprite = [&](int u1, int v1) { // one more 3DSPRITE face at the player's vertex: corner uv (4, 1), (u1, v1), (512, v2)
+        ap[0]++;
+        ap[1]++;
+        PS1Face(ap[1]).flag = 7;
+        PS1Face(ap[1]).a    = ap[0];
+        copy(ap[0]);
+        PS1Vertex(ap[0]).u = 4;
+        PS1Vertex(ap[0]).v = 1;
+        ap[0]++;
+        PS1Face(ap[1]).b = ap[0];
+        copy(ap[0]);
+        PS1Vertex(ap[0]).u = u1;
+        if (u1 < 0) { // value17 >> 2 + 48, computed in the slot as the script does
+            PS1Vertex(ap[0]).u = v[17];
+            PS1Vertex(ap[0]).u >>= 2;
+            PS1Vertex(ap[0]).u += 48;
+        }
+        PS1Vertex(ap[0]).v = v1;
+    };
+    MatrixRotateXYZ(&matWorld, PS1_OBJ(0).values[17], PS1_OBJ(0).values[18], PS1_OBJ(0).values[19]);
+    MatrixTranslateXYZ(&matTemp, PS1_OBJ(0).values[14], PS1_OBJ(0).values[15], PS1_OBJ(0).values[16]);
+    MatrixMultiply(&matWorld, &matTemp);
+    ap[0]               = vertexCount;
+    ap[1]               = faceCount;
+    PS1Face(ap[1]).flag = 6;
+    PS1Face(ap[1]).a    = ap[0];
+    PS1Vertex(ap[0]).x  = v[11];
+    PS1Vertex(ap[0]).y  = v[12];
+    PS1Vertex(ap[0]).z  = v[2];
+    PS1Vertex(ap[0]).u  = v[13];
+    PS1Vertex(ap[0]).v  = 50;
+    ap[2]               = ap[0];
+    ap[0]++;
+    PS1TransformWorld(ap[2], ap[0]);
+    PS1Face(ap[1]).b = ap[0];
+    copy(ap[0]);
+    if (v[2] > 2048) {
+        PS1Vertex(ap[0]).u = 1536;
+        PS1Vertex(ap[0]).v = 1536;
+    }
+    else {
+        PS1Vertex(ap[0]).u = 1408;
+        PS1Vertex(ap[0]).v = 1408;
+    }
+    ap[0]++;
+    PS1Face(ap[1]).c = ap[0];
+    copy(ap[0]);
+    PS1Vertex(ap[0]).u = 17;
+    PS1Vertex(ap[0]).v = 16;
+    ap[0]++;
+    PS1Face(ap[1]).d = ap[0];
+    copy(ap[0]);
+    ap[0]++;
+    ap[1]++;
+    PS1SetVertexCount(vertexCount + 4);
+    PS1SetFaceCount(faceCount + 1);
+    if (me.visible == 1) {
+        g_ps1HalfpipeCover = g_ps1HalfpipeCover | 1u << 14;
+        ap[2]              = ap[0];
+        ap[0]++;
+        PS1Face(ap[1]).flag = 7;
+        PS1Face(ap[1]).a    = ap[2];
+        PS1Vertex(ap[2]).x  = me.xpos;
+        PS1Vertex(ap[2]).x >>= 1;
+        v[15]              = PS1Vertex(ap[2]).x;
+        PS1Vertex(ap[2]).y = me.ypos;
+        PS1Vertex(ap[2]).y >>= 1;
+        v[16]              = PS1Vertex(ap[2]).y;
+        PS1Vertex(ap[2]).z = v[2];
+        PS1TransformWorld(ap[2], ap[0]);
+        PS1Vertex(ap[2]).u = 4;
+        PS1Vertex(ap[2]).v = 1;
+        PS1Face(ap[1]).b   = ap[0];
+        copy(ap[0]);
+        PS1Vertex(ap[0]).u = me.frame;
+        PS1Vertex(ap[0]).v = 0;
+        ap[0]++;
+        PS1Face(ap[1]).c = ap[0];
+        copy(ap[0]);
+        PS1Vertex(ap[0]).u = 512;
+        PS1Vertex(ap[0]).v = me.rotation;
+        ap[0]++;
+        PS1Face(ap[1]).d = ap[0];
+        copy(ap[0]);
+        PS1SetVertexCount(vertexCount + 4);
+        PS1SetFaceCount(faceCount + 1);
+        if (v[4] == 16 && me.animation == 0) {
+            g_ps1HalfpipeCover = g_ps1HalfpipeCover | 1u << 15;
+            sprite(-1, 0);
+            ap[0]++;
+            PS1Face(ap[1]).c = ap[0];
+            copy(ap[0]);
+            PS1Vertex(ap[0]).u = 512;
+            PS1Vertex(ap[0]).v = me.rotation;
+            ap[0]++;
+            PS1Face(ap[1]).d = ap[0];
+            copy(ap[0]);
+            PS1SetVertexCount(vertexCount + 4);
+            PS1SetFaceCount(faceCount + 1);
+        }
+    }
+    if (v[23] > 0) {
+        g_ps1HalfpipeCover = g_ps1HalfpipeCover | 1u << 16;
+        sprite(v[23], 0);
+        ap[0]++;
+        PS1Face(ap[1]).c = ap[0];
+        copy(ap[0]);
+        PS1Vertex(ap[0]).u = 512;
+        PS1Vertex(ap[0]).v = 0;
+        ap[0]++;
+        PS1Face(ap[1]).d = ap[0];
+        copy(ap[0]);
+        PS1SetVertexCount(vertexCount + 4);
+        PS1SetFaceCount(faceCount + 1);
+    }
+}
+// The special-stage player's running state (Special function 4: the Player's state 4, every frame), natively: one
+// statement per script instruction, in order. Left / right speed, the angle around the pipe, the gravity pull, the
+// jump (state 5), falling off the top (state 5) and the shadow's offset / frame. Patched in only when the function and
+// its jump-table entries match SPPLAYERRUN_FN_SIG.
+__attribute__((optimize("Os"))) static void PS1SpecialPlayerRun()
+{
+    int *t = scriptEng.temp;
+    Entity &me = PS1_OBJ(objectEntityPos);
+    int *v     = me.values;
+    auto mul   = [](int a, int b) { return (int)((uint)a * (uint)b); };
+    g_ps1HalfpipeCover = g_ps1HalfpipeCover | (me.right == 1 ? 1u << 17 : me.left == 1 ? 1u << 18 : 1u << 19);
+    if (me.right == 1) {
+        me.speed -= 48;
+        if (me.speed < -1536)
+            me.speed = -1536;
+        v[26] = 0;
+        v[1]  = 0;
+    }
+    else if (me.left == 1) {
+        me.speed += 48;
+        if (me.speed > 1536)
+            me.speed = 1536;
+        v[26] = 0;
+        v[1]  = 0;
+    }
+    else {
+        if (v[26] == 0) {
+            v[1]  = 60;
+            v[26] = 1;
+        }
+        t[0] = me.speed;
+        t[0] >>= 4;
+        me.speed -= t[0];
+    }
+    t[0] = me.speed;
+    if (me.rotation != 0) {
+        t[0] /= 256;
+        t[0] = mul(t[0], 128);
+    }
+    else
+        t[0] >>= 1;
+    me.angle += t[0];
+    me.angle &= 65535;
+    me.rotation = me.angle;
+    me.rotation >>= 7;
+    if (v[1] > 0)
+        v[1]--;
+    else {
+        t[1] = me.rotation;
+        t[1] >>= 1;
+        t[0] = Sin256(t[1]);
+        t[0] = mul(t[0], -80);
+        t[0] >>= 9;
+        me.speed += t[0];
+    }
+    me.xpos = Sin512(me.rotation);
+    me.xpos = mul(me.xpos, v[9]);
+    me.xpos >>= 9;
+    me.ypos = Cos512(me.rotation);
+    me.ypos = mul(me.ypos, v[9]);
+    me.ypos >>= 9;
+    me.animation      = 0;
+    me.animationSpeed = 60;
+    t[0]              = me.rotation;
+    v[25]             = 0;
+    if (me.jumpPress == 1) {
+        g_ps1HalfpipeCover = g_ps1HalfpipeCover | 1u << 20;
+        me.speed           = 0;
+        me.xvel            = Sin512(me.rotation);
+        me.xvel  = mul(me.xvel, 1440);
+        me.xvel >>= 9;
+        me.yvel = Cos512(me.rotation);
+        me.yvel = mul(me.yvel, 2432);
+        me.yvel >>= 9;
+        me.state    = 5;
+        me.rotation = 0;
+        me.frame    = 8;
+        me.frame += v[4];
+        me.animation      = 8;
+        me.animationSpeed = 60;
+        me.animationTimer = 0;
+        me.gravity        = 1;
+        PlaySfx(0, 0);
+    }
+    else if (me.rotation > 152 && me.rotation < 360 && me.speed < 128 && me.speed > -128) {
+        g_ps1HalfpipeCover = g_ps1HalfpipeCover | 1u << 21;
+        me.xvel            = me.speed;
+        me.speed = 0;
+        me.state = 5;
+        me.yvel  = 0;
+    }
+    if (t[0] > 128 && t[0] < 384) {
+        t[0] += 256;
+        t[0] = -t[0];
+        t[0] &= 511;
+    }
+    v[11] = Sin512(t[0]);
+    v[11] = mul(v[11], -52);
+    v[11] >>= 1;
+    v[12] = Cos512(t[0]);
+    v[12] = mul(v[12], -52);
+    v[12] >>= 1;
+    v[13] = 116;
+    if (t[0] < 256) {
+        if (t[0] > 112)
+            v[13] = 224;
+        else if (t[0] > 39)
+            v[13] = 149;
+    }
+    else {
+        if (t[0] < 400)
+            v[13] = 215;
+        else if (t[0] < 473)
+            v[13] = 182;
+    }
+    if (me.rotation < 40)
+        me.rotation = 0;
+    if (me.rotation > 472)
+        me.rotation = 0;
+}
+// The Halfpipe's update sub (Special), natively: one statement per script instruction, in order; its segment build
+// (function 0) runs natively too (PS1HalfpipeSegment). Advances the pipe (value1 += speed; a new segment each 64) and
+// interpolates the camera / pipe tables between segments. Patched in only when the sub and its jump-table entries match
+// HALFPIPE_SIG and function 0 matches HPSEG_FN_SIG.
+__attribute__((optimize("Os"))) static void PS1HalfpipeUpdate()
+{
+    int *t = scriptEng.temp;
+    Entity &me = PS1_OBJ(objectEntityPos);
+    int *v     = me.values;
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    auto mul = [](int a, int b) { return (int)((uint)a * (uint)b); };
+    PS1SetVertexCount(scriptCode[933]);
+    PS1SetFaceCount(scriptCode[934]);
+    v[1] += v[23];
+    t[0] = v[23];
+    t[0] <<= 13;
+    v[13] += t[0];
+    if (v[1] > 63) {
+        v[1] -= 64;
+        PS1HalfpipeSegment(); // CallFunction 0
+        v[2]++;
+        v[2] %= 40;
+        v[3]++;
+        v[3] %= 40;
+        v[20]++;
+        v[20] %= 40;
+        v[21]++;
+        v[21] %= 40;
+    }
+    for (int k = 0; k < 3; ++k) { // values 4, 5, 6 from tables 945, 986, 1027, negated
+        get(945 + 41 * k, v[2], v[4 + k]);
+        get(945 + 41 * k, v[3], t[0]);
+        t[0] -= v[4 + k];
+        t[0] = mul(t[0], v[1]);
+        t[0] >>= 6;
+        v[4 + k] += t[0];
+        v[4 + k] = -v[4 + k];
+    }
+    static const int easeShift[3] = { 1, 2, 1 };
+    for (int k = 0; k < 3; ++k) { // values 10, 11, 12 ease toward tables 1068, 1109, 1150 (x2)
+        get(1068 + 41 * k, v[2], t[1]);
+        get(1068 + 41 * k, v[3], t[0]);
+        t[0] -= t[1];
+        t[0] = mul(t[0], v[1]);
+        t[0] >>= 6;
+        t[1] += t[0];
+        t[1] <<= 1;
+        int &e = v[10 + k];
+        if (e != t[1]) {
+            t[0] = t[1];
+            t[0] -= e;
+            t[0] >>= easeShift[k];
+            if (t[0] == 0) {
+                if (e < t[1])
+                    e++;
+                else
+                    e--;
+            }
+            else
+                e += t[0];
+        }
+    }
+    v[7] = v[10];
+    v[8] = v[11];
+    v[9] = v[12];
+    v[7] >>= 1;
+    v[8] >>= 1;
+    v[9] >>= 1;
+    for (int k = 0; k < 6; ++k) { // values 14..19 from tables 945..1150 at values 20 / 21
+        get(945 + 41 * k, v[20], v[14 + k]);
+        get(945 + 41 * k, v[21], t[0]);
+        t[0] -= v[14 + k];
+        t[0] = mul(t[0], v[1]);
+        t[0] >>= 6;
+        v[14 + k] += t[0];
+    }
 }
 // The special stage's Ring update sub (stage object "Ring" in Special, every ring in range each frame), natively: one
 // statement per script instruction, in order. Its shadow face (value7 == 1: TEXTURED_C_BLEND) and ring face
@@ -7295,10 +7895,10 @@ static void PS1SpecialRingUpdate()
     ap[0] = vertexCount;
     ap[1] = faceCount;
     if (v[7] == 1) {
-        Face &f = faceBuffer[PS1_FACE(ap[1])];
+        Face &f = PS1Face(ap[1]);
         f.flag  = 6;
         f.a     = ap[0];
-        Vertex *q = &vertexBuffer[PS1_VTX(ap[0])];
+        Vertex *q = &PS1Vertex(ap[0]);
         q->x    = v[11];
         q->y    = v[12];
         q->z    = v[13];
@@ -7306,7 +7906,7 @@ static void PS1SpecialRingUpdate()
         q->v    = 50;
         ap[0]++;
         f.b  = ap[0];
-        q    = &vertexBuffer[PS1_VTX(ap[0])];
+        q    = &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -7315,7 +7915,7 @@ static void PS1SpecialRingUpdate()
         q->v = me.scale;
         ap[0]++;
         f.c  = ap[0];
-        q    = &vertexBuffer[PS1_VTX(ap[0])];
+        q    = &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -7323,7 +7923,7 @@ static void PS1SpecialRingUpdate()
         q->v = 16;
         ap[0]++;
         f.d  = ap[0];
-        q    = &vertexBuffer[PS1_VTX(ap[0])];
+        q    = &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -7332,10 +7932,10 @@ static void PS1SpecialRingUpdate()
         PS1SetVertexCount(vertexCount + 4);
         PS1SetFaceCount(faceCount + 1);
     }
-    Face &f = faceBuffer[PS1_FACE(ap[1])];
+    Face &f = PS1Face(ap[1]);
     f.flag  = 5;
     f.a     = ap[0];
-    Vertex *q = &vertexBuffer[PS1_VTX(ap[0])];
+    Vertex *q = &PS1Vertex(ap[0]);
     q->x    = v[4];
     q->y    = v[5];
     q->z    = v[6];
@@ -7345,7 +7945,7 @@ static void PS1SpecialRingUpdate()
         q->v = scriptCode[13802 + G[19] + 1];
     ap[0]++;
     f.b  = ap[0];
-    q    = &vertexBuffer[PS1_VTX(ap[0])];
+    q    = &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -7354,7 +7954,7 @@ static void PS1SpecialRingUpdate()
     q->v = me.scale;
     ap[0]++;
     f.c  = ap[0];
-    q    = &vertexBuffer[PS1_VTX(ap[0])];
+    q    = &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -7362,7 +7962,7 @@ static void PS1SpecialRingUpdate()
     q->v = 16;
     ap[0]++;
     f.d  = ap[0];
-    q    = &vertexBuffer[PS1_VTX(ap[0])];
+    q    = &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -9709,6 +10309,22 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALRING:
                 opcodeSize = 0;
                 PS1SpecialRingUpdate();
+                break;
+            case FUNC_PS1HALFPIPE:
+                opcodeSize = 0;
+                PS1HalfpipeUpdate();
+                break;
+            case FUNC_PS1HALFPIPESEGMENT: // a function body: the `return` after it ends the call
+                opcodeSize = 0;
+                PS1HalfpipeSegment();
+                break;
+            case FUNC_PS1PLAYERFACES: // a function body
+                opcodeSize = 0;
+                PS1PlayerFaces();
+                break;
+            case FUNC_PS1SPECIALPLAYERRUN: // a function body
+                opcodeSize = 0;
+                PS1SpecialPlayerRun();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:

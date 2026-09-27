@@ -6,8 +6,9 @@ T=$(mktemp -d)
 python3 - "$T/extract.inc" <<'PY'
 import sys
 s = open('RSDKv4/Scene3D.cpp').read()
-i = s.index('void PS1SortDrawList3D')
-open(sys.argv[1], 'w').write(s[i:s.index('\n}\n', i) + 3])
+i = s.index('void PS1SortDrawList3DRange')
+j = s.index('void PS1SortDrawList3D(', i)
+open(sys.argv[1], 'w').write(s[i:s.index('\n}\n', j) + 3])
 PY
 c++ -std=c++17 -O2 -DSORT3D_EXTRACT="\"$T/extract.inc\"" tools/scene3d/sort3d_check.cpp -o "$T/sort3d"
 "$T/sort3d"

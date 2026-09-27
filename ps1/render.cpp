@@ -1995,6 +1995,7 @@ volatile uint32_t g_ps1GteVertices    = 0; // vertices transformed on the GTE (G
 volatile uint32_t g_ps1GteFallbacks   = 0; // ... left to the CPU (a flag, near, a range)
 volatile uint32_t g_ps1GteLastFlag    = 0;
 volatile uint32_t g_ps1GteMatrixCPU   = 0; // frames whose matrix doesn't fit the GTE (all on the CPU)
+volatile uint32_t g_ps1GteNear = 0, g_ps1GteFlagged = 0, g_ps1GteRange = 0; // CPU triples by reason (GDB)
 static void PS1CpuVertexT(int v)
 {
     PS1ExactVertexT(v);
@@ -2041,6 +2042,7 @@ PS1_HOT3D void PS1TransformProject3D(int count)
         if (o >= 2 * lim) {
             PS1CpuVertexT(v), PS1CpuVertexT(v + 1), PS1CpuVertexT(v + 2);
             cpu += 3;
+            g_ps1GteRange = g_ps1GteRange + 1;
             continue;
         }
         write<Register::VXY0, Unsafe>(pack(p[0].x >> 5, p[0].y >> 5));
@@ -2054,6 +2056,10 @@ PS1_HOT3D void PS1TransformProject3D(int count)
         uint32_t z0 = readRaw<Register::SZ1, Safe>(), z1 = readRaw<Register::SZ2, Safe>(), z2 = readRaw<Register::SZ3, Safe>();
         if (flag < 0 || z0 < 256 || z1 < 256 || z2 < 256) {
             g_ps1GteLastFlag = flag;
+            if (flag < 0)
+                g_ps1GteFlagged = g_ps1GteFlagged + 1;
+            else
+                g_ps1GteNear = g_ps1GteNear + 1;
             PS1CpuVertexT(v), PS1CpuVertexT(v + 1), PS1CpuVertexT(v + 2);
             cpu += 3;
             continue;
@@ -2086,20 +2092,23 @@ PS1_HOT3D int PS1FadedFaces(int i, int count)
     uint32_t cacheColor = 0, cacheCmd = 0;
     int cacheAlpha = -1;
     uint32_t fast = 0, culled = 0, drawn = 0;
-    const uint32_t fog = fogColor;
+    // the fog colour's 5-bit channels, R and B packed in 16-bit lanes (one multiply blends both: 31 * 255 < 2^16)
+    const uint32_t fog = fogColor, fogRB = ((fog >> 19) & 0x1F) | ((fog >> 3) & 0x1F) << 16, fogG = (fog >> 11) & 0x1F;
+    const int fogMax = fogStrength, xMax = SCREEN_XSIZE, yMax = SCREEN_YSIZE; // locals: the chain stores can't alias them
     for (; i < count; ++i) {
         const Face &f = faceBuffer[drawList3D[i].faceID];
         if (f.flag != FACE_FLAG_FADED)
             break;
         uint32_t pa = vertexBufferT[f.a].u, pb = vertexBufferT[f.b].u, pc = vertexBufferT[f.c].u, pd = vertexBufferT[f.d].u;
-        if ((pa & 0xFFFF) == 0x8000u || (pb & 0xFFFF) == 0x8000u || (pc & 0xFFFF) == 0x8000u || (pd & 0xFFFF) == 0x8000u)
+        // a corner left to the CPU: x = 0x8000; GTE x is -1024..1023, so x + 1024 has bits 11-15 clear
+        if (((pa + 1024) | (pb + 1024) | (pc + 1024) | (pd + 1024)) & 0xF800)
             break;
         ++fast;
         int fogStr = (drawList3D[i].depth - 0x8000) >> 8;
         if (fogStr < 0)
             fogStr = 0;
-        if (fogStr > fogStrength)
-            fogStr = fogStrength;
+        if (fogStr > fogMax)
+            fogStr = fogMax;
         int alpha = 0xFF - fogStr;
         if (!draw || alpha < 1)
             continue;
@@ -2107,8 +2116,8 @@ PS1_HOT3D int PS1FadedFaces(int i, int count)
             alpha = 0xFF;
         int x0 = (int16_t)(pa & 0xFFFF), x1 = (int16_t)(pb & 0xFFFF), x2 = (int16_t)(pc & 0xFFFF), x3 = (int16_t)(pd & 0xFFFF);
         int y0 = (int16_t)(pa >> 16), y1 = (int16_t)(pb >> 16), y2 = (int16_t)(pc >> 16), y3 = (int16_t)(pd >> 16);
-        if ((x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) || (x0 > SCREEN_XSIZE && x1 > SCREEN_XSIZE && x2 > SCREEN_XSIZE && x3 > SCREEN_XSIZE)
-            || (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) || (y0 > SCREEN_YSIZE && y1 > SCREEN_YSIZE && y2 > SCREEN_YSIZE && y3 > SCREEN_YSIZE)
+        if ((x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) || (x0 > xMax && x1 > xMax && x2 > xMax && x3 > xMax)
+            || (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) || (y0 > yMax && y1 > yMax && y2 > yMax && y3 > yMax)
             || (x0 == x1 && x1 == x2 && x2 == x3) || (y0 == y1 && y1 == y2 && y2 == y3)) {
             ++culled;
             continue;
@@ -2126,13 +2135,13 @@ PS1_HOT3D int PS1FadedFaces(int i, int count)
                     w1 = pb, w2 = pa, w3 = pd, w4 = pc; // diagonal a-d
             }
         }
-        if (f.color != cacheColor || alpha != cacheAlpha) {
-            auto ch = [&](int shift) {
-                int c5 = ((f.color >> shift) & 0xFF) >> 3, f5 = ((fog >> shift) & 0xFF) >> 3;
-                return (uint32_t)((f5 * (0xFF - alpha) >> 8) + (c5 * alpha >> 8)) << 3;
-            };
+        if (f.color != cacheColor || alpha != cacheAlpha) { // upstream's per channel fog5 * (255 - a) >> 8 + c5 * a >> 8
+            uint32_t c = f.color, ia = 0xFF - alpha, a = alpha;
+            uint32_t cRB = ((c >> 19) & 0x1F) | ((c >> 3) & 0x1F) << 16, cG = (c >> 11) & 0x1F;
+            uint32_t rb = ((fogRB * ia) >> 8 & 0x001F001Fu) + ((cRB * a) >> 8 & 0x001F001Fu);
+            uint32_t g  = (fogG * ia >> 8) + (cG * a >> 8);
             cacheColor = f.color, cacheAlpha = alpha;
-            cacheCmd   = 0x28000000u | ch(0) << 16 | ch(8) << 8 | ch(16); // GP0 28h flat quad, BGR
+            cacheCmd   = 0x28000000u | rb << 3 | g << 11; // GP0 28h flat quad: R bits 3-7, G 11-15, B 19-23
         }
         if (used == cap) {
             if (run)

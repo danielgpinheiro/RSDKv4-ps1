@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #define FACEBUFFER_SIZE (0x400)
 struct DrawListEntry3D {
     int faceID;
@@ -31,9 +32,9 @@ int main() {
     static DrawListEntry3D a[FACEBUFFER_SIZE], b[FACEBUFFER_SIZE];
     int cases = 0;
     for (int n : {0, 1, 2, 3, 7, 64, 159, 160, 161, 256, 741, 742, 743, 1024})
-        for (int range : {1, 3, 50, 100000})
+        for (int range : {1, 3, 50, 100000, 300000, 100000000, 2000000000})
             for (int rep = 0; rep < 200; ++rep, ++cases) {
-                for (int i = 0; i < n; ++i) a[i] = b[i] = {i, rand() % range - range / 2};
+                for (int i = 0; i < n; ++i) a[i] = b[i] = {i, (int)(((unsigned)rand() << 16 ^ (unsigned)rand()) % (unsigned)range) - range / 2};
                 bubble(a, n);
                 PS1SortDrawList3D(b, n);
                 if (memcmp(a, b, n * sizeof(*a))) {
