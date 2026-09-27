@@ -141,23 +141,23 @@ static inline int PS1Scene3DIndex(int i, int size, volatile int32_t *max)
     if ((uint)i < (uint)size)
         return i;
     g_ps1Scene3DOverflow = g_ps1Scene3DOverflow + 1;
-    return i < 0 ? 0 : size - 1;
+    return (i < 0 || size <= 0) ? 0 : size - 1; // size 0: no Scene3D block, the 1-entry dummy
 }
 // Vertex indices 0x1000 - PS1_VTX_SCRATCH .. 0x1000 (upstream's last slots, used as scratch) -> the buffer's tail.
 static inline int PS1VtxMap(int i)
 {
-    return (i >= 0x1000 - PS1_VTX_SCRATCH && i <= 0x1000) ? i - 0x1000 + VERTEXBUFFER_SIZE : i;
+    return (i >= 0x1000 - PS1_VTX_SCRATCH && i <= 0x1000) ? i - 0x1000 + g_ps1VtxCap : i;
 }
-#define PS1_VTX(i)  PS1Scene3DIndex(PS1VtxMap(i), VERTEXBUFFER_SIZE, &g_ps1Scene3DMaxVertex)
-#define PS1_FACE(i) PS1Scene3DIndex(i, FACEBUFFER_SIZE, &g_ps1Scene3DMaxFace)
+#define PS1_VTX(i)  PS1Scene3DIndex(PS1VtxMap(i), g_ps1VtxCap, &g_ps1Scene3DMaxVertex)
+#define PS1_FACE(i) PS1Scene3DIndex(i, g_ps1FaceCap, &g_ps1Scene3DMaxFace)
 static inline int PS1Scene3DCount(int n, int size, volatile int32_t *max)
 {
     if (n <= 0)
         return n;
     return PS1Scene3DIndex(n - 1, size, max) + 1;
 }
-#define PS1_VTX_COUNT(n)  PS1Scene3DCount(PS1VtxMap(n), VERTEXBUFFER_SIZE, &g_ps1Scene3DMaxVertex)
-#define PS1_FACE_COUNT(n) PS1Scene3DCount(n, FACEBUFFER_SIZE, &g_ps1Scene3DMaxFace)
+#define PS1_VTX_COUNT(n)  PS1Scene3DCount(PS1VtxMap(n), g_ps1VtxCap, &g_ps1Scene3DMaxVertex)
+#define PS1_FACE_COUNT(n) PS1Scene3DCount(n, g_ps1FaceCap, &g_ps1Scene3DMaxFace)
 // Entity slots from the scripts (object[x], ResetObjectEntity...): past the PS1-sized objectEntityList (Object.hpp)
 // they get a zeroed scratch entity (what upstream's blank slots there hold), counted.
 volatile uint32_t g_ps1EntityOutOfRange = 0;

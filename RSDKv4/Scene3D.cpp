@@ -8,21 +8,108 @@ Matrix matWorld = Matrix();
 Matrix matView  = Matrix();
 Matrix matTemp  = Matrix();
 
-Face faceBuffer[FACEBUFFER_SIZE];
-Vertex vertexBuffer[VERTEXBUFFER_SIZE];
 #if RETRO_PLATFORM == RETRO_PS1
-PS1ProjEntry g_ps1Proj[VERTEXBUFFER_SIZE];
-PS1ExactEntry g_ps1ExactT[256];
+#include <psyqo/alloc.h>
+// Without the block (see Scene3D.hpp): 1-entry dummies, capacity 0.
+static Face s_ps1DummyFace[1];
+static Vertex s_ps1DummyVertex[1];
+static PS1ProjEntry s_ps1DummyProj[1];
+static PS1ExactEntry s_ps1DummyExact[1]; // PS1ExactT(v) masks v with 255, but without the block every v is 0 (capacity 0)
+static DrawListEntry3D s_ps1DummyDraw[1], s_ps1DummyScratch[1];
+Face *faceBuffer          = s_ps1DummyFace;
+Vertex *vertexBuffer      = s_ps1DummyVertex;
+PS1ProjEntry *g_ps1Proj   = s_ps1DummyProj;
+PS1ExactEntry *g_ps1ExactT = s_ps1DummyExact;
+int g_ps1VtxCap = 0, g_ps1FaceCap = 0;
 uint g_ps1ExactFrame = 1;
 #define vertexBufferT (PS1VertexTView{}) // upstream's reads below get the exact transform (PS1ExactT)
 #else
 Vertex vertexBufferT[VERTEXBUFFER_SIZE];
 #endif
 
-DrawListEntry3D drawList3D[FACEBUFFER_SIZE];
 #if RETRO_PLATFORM == RETRO_PS1
+DrawListEntry3D *drawList3D          = s_ps1DummyDraw;
+DrawListEntry3D *g_ps1Scene3DScratch = s_ps1DummyScratch; // the draw-list sort's scratch
 // The sorted draw list Draw3DScene walks: drawList3D, or the one-pass sort's scratch (no copy back; docs/30 7.2b).
-const DrawListEntry3D *g_ps1DrawOrder = drawList3D;
+const DrawListEntry3D *g_ps1DrawOrder = s_ps1DummyDraw;
+
+volatile uint32_t g_ps1Scene3DAllocs = 0, g_ps1Scene3DFrees = 0, g_ps1Scene3DAllocFail = 0; // GDB
+static void *s_ps1Scene3DBlock = nullptr;
+static char s_ps1Scene3DStages[8][24];
+static int s_ps1Scene3DStageCount = -1; // -1: Data/Game/PS1Scene3D.bin not read yet
+static void PS1Scene3DPoint(uint8_t *b)
+{
+    if (!b) {
+        faceBuffer = s_ps1DummyFace, vertexBuffer = s_ps1DummyVertex, g_ps1Proj = s_ps1DummyProj, g_ps1ExactT = s_ps1DummyExact;
+        drawList3D = s_ps1DummyDraw, g_ps1Scene3DScratch = s_ps1DummyScratch;
+        g_ps1VtxCap = g_ps1FaceCap = 0;
+    }
+    else {
+        faceBuffer = (Face *)b, b += FACEBUFFER_SIZE * sizeof(Face);
+        drawList3D = (DrawListEntry3D *)b, b += FACEBUFFER_SIZE * sizeof(DrawListEntry3D);
+        g_ps1Scene3DScratch = (DrawListEntry3D *)b, b += FACEBUFFER_SIZE * sizeof(DrawListEntry3D);
+        vertexBuffer = (Vertex *)b, b += VERTEXBUFFER_SIZE * sizeof(Vertex);
+        g_ps1Proj = (PS1ProjEntry *)b, b += VERTEXBUFFER_SIZE * sizeof(PS1ProjEntry);
+        g_ps1ExactT = (PS1ExactEntry *)b;
+        g_ps1VtxCap = VERTEXBUFFER_SIZE, g_ps1FaceCap = FACEBUFFER_SIZE;
+    }
+    g_ps1DrawOrder = drawList3D;
+    vertexCount = faceCount = 0;
+}
+// Once, first in the boot load (RSDKv4/main.cpp; the file leads the boot's disc order, tools/disc/boot_trace.txt): read
+// at a stage load it cost a seek (+20 vblanks on the special stage's load).
+void PS1Scene3DReadList()
+{
+    if (s_ps1Scene3DStageCount >= 0)
+        return;
+    s_ps1Scene3DStageCount = 0;
+    if (FILE *f = fopen("Data/Game/PS1Scene3D.bin", "rb")) {
+        uint8_t n = 0;
+        if (fread(&n, 1, 1, f) == 1)
+            for (int i = 0; i < n && s_ps1Scene3DStageCount < 8; ++i) {
+                uint8_t len = 0;
+                char name[256];
+                if (fread(&len, 1, 1, f) != 1 || fread(name, 1, len, f) != len)
+                    break;
+                if (len < sizeof(s_ps1Scene3DStages[0])) {
+                    memcpy(s_ps1Scene3DStages[s_ps1Scene3DStageCount], name, len);
+                    s_ps1Scene3DStages[s_ps1Scene3DStageCount++][len] = 0;
+                }
+            }
+        fclose(f);
+    }
+}
+// First thing in a stage load's bracket (RSDKv4/Scene.cpp), after PS1LoadingBegin freed the chain arenas: the block takes
+// the bottom of the free heap and the load's staging buffers, then the arenas, stack above it, as they did above the
+// static arrays. Allocated before the bracket, it sat above the arenas' hole and the load spilled past it (special
+// stage: 16.7 KB less headroom). The block is zeroed, as the static arrays were at the first load.
+void PS1Scene3DPrepare(const char *folder)
+{
+    PS1Scene3DReadList();
+    bool want = false;
+    for (int i = 0; i < s_ps1Scene3DStageCount && !want; ++i) want = strcmp(folder, s_ps1Scene3DStages[i]) == 0;
+    if (want == (s_ps1Scene3DBlock != nullptr))
+        return;
+    if (s_ps1Scene3DBlock) {
+        psyqo_free(s_ps1Scene3DBlock);
+        s_ps1Scene3DBlock = nullptr;
+        PS1Scene3DPoint(nullptr);
+        g_ps1Scene3DFrees = g_ps1Scene3DFrees + 1;
+        return;
+    }
+    const size_t size = FACEBUFFER_SIZE * (sizeof(Face) + 2 * sizeof(DrawListEntry3D))
+                        + VERTEXBUFFER_SIZE * (sizeof(Vertex) + sizeof(PS1ProjEntry)) + 256 * sizeof(PS1ExactEntry);
+    s_ps1Scene3DBlock = psyqo_malloc(size);
+    if (!s_ps1Scene3DBlock) {
+        g_ps1Scene3DAllocFail = g_ps1Scene3DAllocFail + 1;
+        return;
+    }
+    memset(s_ps1Scene3DBlock, 0, size);
+    PS1Scene3DPoint((uint8_t *)s_ps1Scene3DBlock);
+    g_ps1Scene3DAllocs = g_ps1Scene3DAllocs + 1;
+}
+#else
+DrawListEntry3D drawList3D[FACEBUFFER_SIZE];
 #endif
 
 int projectionX = 136;
@@ -632,10 +719,6 @@ void TransformVertices(Matrix *matrix, int startIndex, int endIndex)
         vert->z      = (vx * matrix->values[0][2] >> 8) + (vy * matrix->values[1][2] >> 8) + (vz * matrix->values[2][2] >> 8) + matrix->values[3][2];
     }
 }
-#if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_SORT3D_CHECK)
-// The draw-list sort's scratch (docs/30 phase 7; the screen positions live in vertexBufferT .u since phase 7.2b).
-DrawListEntry3D g_ps1Scene3DScratch[FACEBUFFER_SIZE];
-#endif
 #if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_SORT3D_CHECK)
 // Stable LSD radix sort, descending by depth (ties keep their order, like upstream's bubble sort): keys hi - depth
 // ascending, in as many 9-bit passes as the depth range needs (the half-pipe: 2). One counting loop fills every pass's

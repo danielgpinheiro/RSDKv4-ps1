@@ -66,8 +66,20 @@ extern Matrix matWorld;
 extern Matrix matView;
 extern Matrix matTemp;
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (docs/30, before phase 9): the Scene3D arrays (faces, vertices, draw list, sort scratch, projections, exact cache:
+// ~85 KB) are one heap block, allocated only while a stage whose scripts use them is loaded (Data/Game/PS1Scene3D.bin,
+// tools/scripts/scene3d_stages.py; Sonic 2: the special stage): PS1Scene3DPrepare, called first in each stage load's
+// bracket. Otherwise they point at 1-entry dummies with capacity 0 (any access clamped + counted, g_ps1Scene3DOverflow).
+extern Face *faceBuffer;
+extern Vertex *vertexBuffer;
+extern int g_ps1VtxCap, g_ps1FaceCap; // VERTEXBUFFER_SIZE / FACEBUFFER_SIZE with the block, 0 without
+void PS1Scene3DReadList();
+void PS1Scene3DPrepare(const char *folder);
+#else
 extern Face faceBuffer[FACEBUFFER_SIZE];
 extern Vertex vertexBuffer[VERTEXBUFFER_SIZE];
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
 // PS1 (docs/30 phase 7.2b): the GTE transforms + projects every vertex (Scene3D.cpp PS1TransformProject3D) into
 // g_ps1Proj: .u = the packed screen position (or PS1_PROJ_MARK: left to the CPU), .v = the depth z. Upstream's exact
@@ -77,7 +89,7 @@ struct PS1ProjEntry {
     uint u;
     int v;
 };
-extern PS1ProjEntry g_ps1Proj[VERTEXBUFFER_SIZE];
+extern PS1ProjEntry *g_ps1Proj;
 struct PS1VertexXYZ {
     int x, y, z;
 };
@@ -85,7 +97,7 @@ struct PS1ExactEntry {
     int x, y, z, idx;
     uint frame;
 };
-extern PS1ExactEntry g_ps1ExactT[256];
+extern PS1ExactEntry *g_ps1ExactT; // 256 entries
 extern uint g_ps1ExactFrame;
 const PS1VertexXYZ &PS1ExactTSlow(int v);
 inline PS1VertexXYZ PS1ExactT(int v)
@@ -103,7 +115,11 @@ struct PS1VertexTView {
 extern Vertex vertexBufferT[VERTEXBUFFER_SIZE];
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+extern DrawListEntry3D *drawList3D;
+#else
 extern DrawListEntry3D drawList3D[FACEBUFFER_SIZE];
+#endif
 
 extern int projectionX;
 extern int projectionY;

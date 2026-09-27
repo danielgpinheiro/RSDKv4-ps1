@@ -98,6 +98,7 @@ class RSDKv4PS1App final : public psyqo::Application {
         // (47 KB less headroom at the load peak).
         ReadSaveRAMData();
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
+        PS1Scene3DReadList(); // the stages that get the Scene3D block (RSDKv4/Scene3D.cpp)
         Engine.Init();
 #ifdef PS1_BOOT_FOLDER
         // As a save file with this character starts a game (RetroEngine::Init, the startSave path).

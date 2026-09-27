@@ -224,6 +224,8 @@ void ProcessStage(void)
             ResetBackgroundSettings();
 #if RETRO_PLATFORM == RETRO_PS1
             PS1LoadingBegin(); // loading icon if the load takes > 250 ms (ps1/loading)
+            // the Scene3D block for the stages that use it, once the bracket has freed the chain arenas
+            PS1Scene3DPrepare(stageList[activeStageList][stageListPosition].folder);
             LoadStageFiles();
             PS1LoadingEnd();
 #else

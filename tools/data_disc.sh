@@ -20,6 +20,7 @@ rsync -a --exclude '*.gif' --exclude '*.wav' --exclude '*.ogg' --exclude '.DS_St
       --exclude 'Game/Menu/' --exclude 'Game/Models/' --exclude 'Stages/ZoneM/' "$SRC/Data/" build/iso/Data/
 rsync -a --exclude 'ZoneM.bin' --exclude '.DS_Store' "$SRC/Bytecode/" build/iso/Bytecode/
 /usr/bin/python3 tools/scripts/patch_bytecode.py build/iso/Bytecode  # hot script loops -> PS1 native opcodes
+/usr/bin/python3 tools/scripts/scene3d_stages.py build/iso/Bytecode build/iso/Data  # stages that get the Scene3D arrays
 make -s -C tools/rsdkmanifest
 rm -rf build/manifest && mkdir -p build/manifest
 for v in ":0" "_t:1" "_k:2" "_st:3"; do

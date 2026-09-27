@@ -2,6 +2,7 @@
 # tools/disc/gen_load_order.py (docs/30 phase 7.3 / 9). OPEN lines only are read.
 OPEN settings.ini
 OPEN UData.bin
+OPEN Data/Game/PS1Scene3D.bin
 OPEN Data/Game/GameConfig.bin
 OPEN Data/Game/PS1SfxResident.bin
 OPEN Data/Music/Music.bin

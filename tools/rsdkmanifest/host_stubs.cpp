@@ -100,7 +100,10 @@ decltype(bgmVolume) bgmVolume{};
 decltype(debugHitboxCount) debugHitboxCount{};
 decltype(drawListEntries) drawListEntries{};
 decltype(endLine) endLine{};
-decltype(faceBuffer) faceBuffer{};
+static Face s_hostFaces[FACEBUFFER_SIZE]; // the host build keeps the Scene3D arrays (startups write vertices)
+Face *faceBuffer = s_hostFaces;
+int g_ps1VtxCap = VERTEXBUFFER_SIZE, g_ps1FaceCap = FACEBUFFER_SIZE;
+void PS1Scene3DPrepare(const char *) {}
 decltype(faceCount) faceCount{};
 decltype(fadeA) fadeA{};
 decltype(fadeB) fadeB{};
@@ -145,7 +148,8 @@ decltype(touchX) touchX{};
 decltype(touchY) touchY{};
 decltype(touches) touches{};
 decltype(trackID) trackID{};
-decltype(vertexBuffer) vertexBuffer{};
+static Vertex s_hostVertices[VERTEXBUFFER_SIZE];
+Vertex *vertexBuffer = s_hostVertices;
 decltype(vertexCount) vertexCount{};
 
 // PS1 platform hooks (ps1/video.hh, ps1/loading.hh) the engine calls: timing and the loading icon.

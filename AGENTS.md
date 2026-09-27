@@ -73,6 +73,11 @@ than watchpoints. GDB convenience variables must not be register names (`$v0`, `
   `PS1_OBJ(i)` (blank scratch past `ENTITY_COUNT` 0x380, counted). `tiles128x128` fields are packed views
   (`Scene.hpp`: assign/read only, no pointers). Type groups share one pool (`Object.cpp PS1BuildTypeGroups`).
   Scene3D vertex indices 0xFF0-0xFFF map to the buffer's tail. Every clamp has a `g_ps1*` counter that tests read.
+- **Scene3D arrays are a heap block** (~85 KB: faces, vertices, draw list, sort scratch, projections, exact cache), allocated
+  only while a stage listed in `Data/Game/PS1Scene3D.bin` is loaded (`tools/scripts/scene3d_stages.py`: stages whose
+  bytecode touches Scene3D; Sonic 2: Special). `PS1Scene3DPrepare` runs first in each stage load's bracket (the chain
+  arenas are freed there: the block goes under the load's buffers and the arenas). Index through `g_ps1VtxCap` /
+  `g_ps1FaceCap` (0 without the block), never `VERTEXBUFFER_SIZE` / `FACEBUFFER_SIZE`.
 - No native objects on PS1: `RetroEngine::RunFrame` does `RetroGameLoop`'s work (scripted Title path).
 
 ## Definition of done for a step
