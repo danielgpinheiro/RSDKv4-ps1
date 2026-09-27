@@ -11,6 +11,10 @@ Rates: one per sample per bank (the Sonic CD solver, tools/audio in RSDKv3-ps1):
 (<= 44.1 kHz) and, while resident + the stage's bank is over the SPU sample area, the largest sample steps down one
 rate (RATES), none below FLOOR while another is above it; short, bright sounds keep theirs. Each stage is solved on
 its own (its bank holds its own copies).
+Stage banks are capped at STAGE_CAP = 400 KB (docs/30, user decision 2026-09-27: shorter loads; the zones' ~481 KB banks
+were ~1.6 s of each zone load at 2x; 300 KB was measured and rejected: most zones ~11 kHz, some 8-9 kHz): the solver's budget is min(SPU area left, STAGE_CAP), the same largest-first steps. The log gives each
+bank's size without / with the cap and every sound whose rate the cap lowered (the listening check); the full list
+per stage goes to OUT_DATA_DIR/../../sfx_rates.txt (build/, not on the disc).
 
 Sources are the extracted data's Data/SoundFX (Global/*.ogg, Stage/*.wav): ffmpeg decodes them to mono 16-bit PCM,
 psxavenc encodes `-t vag` (48-byte header, rate at 0x10, data padded to 64 bytes with a trailing loop-trap block).
@@ -20,7 +24,7 @@ Bank (little endian): 'PSFX', u16 count, u16 pad; count x (u16 sfx id, u16 pad, 
 bank is read back and its samples compared with their .vag data; sizes re-measured against the budget.
 
 Usage: build_sfx.py SRC_DATA_DIR OUT_DATA_DIR BYTECODE_DIR   (e.g. ../Sonic2_Extracted/Data build/iso/Data
-       ../Sonic2_Extracted/Bytecode; needs ffmpeg and psxavenc)
+       ../Sonic2_Extracted/Bytecode; needs ffmpeg and psxavenc; PS1_SFX_STAGE_CAP=bytes overrides the cap)
 """
 import os, struct, subprocess, sys, tempfile
 
@@ -34,6 +38,7 @@ SPU_SAMPLE_START = 0x1000
 SPU_SAMPLE_END = 0x80000 - 32
 RATES = (44100, 37800, 32000, 27000, 22050, 18900, 16000, 13000, 11025, 9450, 8000)
 FLOOR = 11025  # below it only once every sample is there (reported)
+STAGE_CAP = int(os.environ.get("PS1_SFX_STAGE_CAP") or 400 * 1024)  # stage bank bytes (see the module doc)
 
 
 def vag_size(frames, src_rate, rate):
@@ -122,7 +127,7 @@ def main():
     sets, (gnames, gpaths), resident, _ = sfx_sets.stage_sets(src_data, bcdir)
     src_sfx = os.path.join(src_data, 'SoundFX')
     budget = SPU_SAMPLE_END - SPU_SAMPLE_START
-    report, low = [], []
+    report, low, drops, detail = [], [], {}, []
     with tempfile.TemporaryDirectory() as tmp:
         enc = Encoder(src_sfx, tmp)
         # resident: source rates
@@ -151,24 +156,40 @@ def main():
             names = sorted(set(paths.values()))
             for p in names:
                 info[p] = enc.info(p)
-            rate = choose_rates(names, info, stage_budget)
-            if rate is None:
-                sys.exit('ERROR build_sfx: %s does not fit SPU RAM even at %d Hz' % (folder, RATES[-1]))
+            free = choose_rates(names, info, stage_budget)  # without the cap: for the log
+            rate = choose_rates(names, info, min(stage_budget, STAGE_CAP))
+            if rate is None or free is None:
+                sys.exit('ERROR build_sfx: %s does not fit %d B even at %d Hz' % (folder, min(stage_budget, STAGE_CAP),
+                                                                                 RATES[-1]))
+            free_size = sum(vag_size(info[p][0], info[p][1], RATES[free[p]]) for p in names)
+            for p in names:
+                if rate[p] != free[p]:
+                    d = drops.setdefault(p, [RATES[free[p]], RATES[rate[p]], 0])
+                    d[0], d[1], d[2] = max(d[0], RATES[free[p]]), min(d[1], RATES[rate[p]]), d[2] + 1
+                detail.append('%-9s %-40s %5d -> %5d Hz' % (folder, p, RATES[free[p]], RATES[rate[p]]))
             entries = [(i, RATES[rate[p]], enc.encode(p, RATES[rate[p]])) for i, p in sorted(paths.items())]
             size = write_bank(os.path.join(out_data, 'Stages', folder, 'PS1Sfx.bin'), entries)
-            assert size <= stage_budget, folder
+            assert size <= min(stage_budget, STAGE_CAP), folder
             lowest = min((RATES[rate[p]] for p in names), default=44100)
             if lowest < FLOOR:
                 low.append(folder)
             hist = {}
             for p in names:
                 hist[RATES[rate[p]]] = hist.get(RATES[rate[p]], 0) + 1
-            report.append('%-9s %2d sfx %7d B | %s' % (folder, len(entries), size,
+            report.append('%-9s %2d sfx %7d -> %7d B | %s' % (folder, len(entries), free_size, size,
                                                      ' '.join('%d:%d' % (r // 1000, hist[r]) for r in sorted(hist, reverse=True))))
-    print('sfx resident %d B (%s) | menu bank %d B (%s) | stage budget %d B of %d' % (
-        rsize, ', '.join(gnames[i] for i in resident), msize, ', '.join(sfx_sets.MENU_NAMES), stage_budget, budget))
+    print('sfx resident %d B (%s) | menu bank %d B (%s) | stage budget %d B of %d, capped at %d' % (
+        rsize, ', '.join(gnames[i] for i in resident), msize, ', '.join(sfx_sets.MENU_NAMES), stage_budget, budget,
+        STAGE_CAP))
     for r in report:
         print('  ' + r)
+    print('  rates the cap lowered (highest without -> lowest with, stages): ' + (', '.join(
+        '%s %d->%d (%d)' % (os.path.splitext(p)[0], a // 1000, b // 1000, n) for p, (a, b, n) in sorted(drops.items()))
+        or '-'))
+    rep = os.path.normpath(os.path.join(out_data, '..', '..', 'sfx_rates.txt'))
+    with open(rep, 'w') as f:
+        f.write('# Stage SFX rates without -> with the %d-byte cap (tools/audio/build_sfx.py)\n' % STAGE_CAP)
+        f.write('\n'.join(detail) + '\n')
     if low:
         print('  below %d Hz: %s' % (FLOOR, ' '.join(low)))
 
