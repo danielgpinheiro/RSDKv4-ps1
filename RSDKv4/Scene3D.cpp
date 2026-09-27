@@ -307,7 +307,8 @@ extern volatile uint32_t g_ps1Faces;
 // TR = translation / 32, H = projectionX, OF = the screen centre -> SXY = the screen position (within about a pixel
 // of upstream's), SZ = T.z / 32 -> the depth z (.v) for the sort and the fog. Left to the CPU (exact transform + the
 // division, marked PS1_PROJ_MARK): a coordinate past +-2^20, a GTE flag (bit 31: IR1 / IR2 / SZ / SX / SY saturated,
-// divide overflow; z <= 0 included) or T.z < 8192 (near the camera, where the units of 32 would show).
+// divide overflow; z <= 0 included) or T.z < 8192 (near the camera, where the units of 32 would show); a flagged
+// triple is redone one vertex at a time (RTPS) so its good vertices stay on the GTE.
 volatile uint32_t g_ps1GteVertices    = 0; // vertices transformed on the GTE (GDB)
 volatile uint32_t g_ps1GteFallbacks   = 0; // ... left to the CPU (a flag, near, a range)
 volatile uint32_t g_ps1GteLastFlag    = 0;
@@ -371,14 +372,27 @@ void PS1TransformProject3D(int count)
         Kernels::rtpt();
         int32_t flag = (int32_t)readRaw<Register::FLAG, Safe>();
         uint32_t z0 = readRaw<Register::SZ1, Safe>(), z1 = readRaw<Register::SZ2, Safe>(), z2 = readRaw<Register::SZ3, Safe>();
-        if (flag < 0 || z0 < 256 || z1 < 256 || z2 < 256) {
+        if (flag < 0 || z0 < 256 || z1 < 256 || z2 < 256) { // one vertex at a time (RTPS): only the bad ones go to the CPU
             g_ps1GteLastFlag = flag;
             if (flag < 0)
                 g_ps1GteFlagged = g_ps1GteFlagged + 1;
             else
                 g_ps1GteNear = g_ps1GteNear + 1;
-            PS1CpuVertexT(v), PS1CpuVertexT(v + 1), PS1CpuVertexT(v + 2);
-            cpu += 3;
+            for (int k = v; k < v + 3; ++k) {
+                const Vertex &q = vertexBuffer[k];
+                write<Register::VXY0, Unsafe>(pack(q.x >> 5, q.y >> 5));
+                write<Register::VZ0, Safe>((uint32_t)(q.z >> 5));
+                Kernels::rtps();
+                int32_t fl = (int32_t)readRaw<Register::FLAG, Safe>();
+                uint32_t z = readRaw<Register::SZ3, Safe>();
+                if (fl < 0 || z < 256) {
+                    PS1CpuVertexT(k);
+                    ++cpu;
+                    continue;
+                }
+                vertexBufferT[k].u = readRaw<Register::SXY2, Safe>();
+                vertexBufferT[k].v = (int)(z << 5);
+            }
             continue;
         }
         Vertex *t = &vertexBufferT[v];
@@ -613,6 +627,34 @@ void PS1SortDrawList3DRange(DrawListEntry3D *list, int count, int lo, int hi)
     if (src != list)
         for (int i = 0; i < count; ++i) list[i] = src[i];
 }
+#if RETRO_PLATFORM == RETRO_PS1
+// The special stage's draw-list sort (docs/30 phase 7.2b, a night choice like the GTE transform: visual only): one
+// stable counting pass on the top 10 bits of the depth range (1,024 buckets; the half-pipe's ~2^18 range -> 256 depth
+// units a bucket). Faces in the same bucket keep their list order (the pipe's in segment order, then the rings and the
+// player, which the scripts add after it), so only faces within one bucket's depth of each other can differ from
+// upstream's exact order. g_ps1Sort3DExact = 1 (GDB) restores the exact two-pass sort.
+volatile uint32_t g_ps1Sort3DExact = 0;
+void PS1SortDrawList3DCoarse(DrawListEntry3D *list, int count, int lo, int hi)
+{
+    if (count < 2)
+        return;
+    unsigned range = (unsigned)hi - (unsigned)lo;
+    int shift      = 0;
+    while ((range >> shift) >= 1024) ++shift;
+    uint16_t counts[1024];
+    memset(counts, 0, sizeof(counts));
+    for (int i = 0; i < count; ++i) ++counts[((unsigned)hi - (unsigned)list[i].depth) >> shift];
+    int at = 0;
+    for (int b = 0; b < 1024; ++b) {
+        int n     = counts[b];
+        counts[b] = at;
+        at += n;
+    }
+    DrawListEntry3D *dst = g_ps1Scene3DScratch;
+    for (int i = 0; i < count; ++i) dst[counts[((unsigned)hi - (unsigned)list[i].depth) >> shift]++] = list[i];
+    for (int i = 0; i < count; ++i) list[i] = dst[i];
+}
+#endif
 void PS1SortDrawList3D(DrawListEntry3D *list, int count)
 {
     if (count < 2)
@@ -656,7 +698,10 @@ void Sort3DDrawList()
     // PS1: the bubble sort below is stable and descending, so any stable descending sort gives the same order: a radix
     // sort (docs/30 phase 7; the half-pipe's 742 faces took 4,266 hblanks bubbled, 220 merge-sorted). Identical order
     // checked on the host: tools/scene3d/sort3d_check.sh.
-    PS1SortDrawList3DRange(drawList3D, faceCount, lo, hi);
+    if (g_ps1Sort3DExact)
+        PS1SortDrawList3DRange(drawList3D, faceCount, lo, hi);
+    else
+        PS1SortDrawList3DCoarse(drawList3D, faceCount, lo, hi);
     g_ps1Prof3DSort  = PS1HblanksSince(t0);
     g_ps1Prof3DFaces = faceCount;
     return;
