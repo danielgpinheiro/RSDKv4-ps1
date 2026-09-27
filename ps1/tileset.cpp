@@ -30,11 +30,18 @@ bool PS1TileSetLoad(const char *folder, uint8_t *pal768) {
         return false;
     }
     uint8_t hdr[4];
-    bool ok = fread(hdr, 1, 4, f) == 4 && hdr[0] == 1 && hdr[1] == 0 && hdr[2] == 4 && hdr[3] == 0; // BE 256 x 1024
+    // BE 256 x 1024, or 256 x 0: the palette only (a stage that never draws a tile layer, tools/tiles/convert_tiles.py)
+    bool ok = fread(hdr, 1, 4, f) == 4 && hdr[0] == 1 && hdr[1] == 0 && (hdr[2] == 4 || hdr[2] == 0) && hdr[3] == 0;
     ok = ok && fread(pal768, 1, 768, f) == 768;
+    for (int i = 0; i < 1024 / 8; ++i) g_ps1TileSolid[i] = 0;
+    if (ok && hdr[2] == 0) {
+        fclose(f);
+        g_ps1TileSetBytes = 0;
+        g_ps1TileSetLoads = g_ps1TileSetLoads + 1;
+        return true;
+    }
     uint16_t *staging = ok ? (uint16_t *)psyqo_malloc(STAGING_LINES * PAGE_HW * 2) : nullptr;
     uint32_t bytes    = 0;
-    for (int i = 0; i < 1024 / 8; ++i) g_ps1TileSolid[i] = 0;
     if (staging) {
         PS1GpuImmediate(); // the previous frame's chain may still be texturing from VRAM
         for (int p = 0; ok && p < PAGES; ++p) {

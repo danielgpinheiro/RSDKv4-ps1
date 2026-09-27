@@ -788,6 +788,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1HalfpipeSegment", 0),
     FunctionInfo("PS1PlayerFaces", 0),
     FunctionInfo("PS1SpecialPlayerRun", 0),
+    FunctionInfo("PS1SpecialSetupSort", 0),
 #endif
 };
 
@@ -1335,6 +1336,7 @@ enum ScrFunc {
     FUNC_PS1HALFPIPESEGMENT,
     FUNC_PS1PLAYERFACES,
     FUNC_PS1SPECIALPLAYERRUN,
+    FUNC_PS1SPECIALSETUPSORT,
 #endif
     FUNC_MAX_CNT
 };
@@ -7789,6 +7791,43 @@ __attribute__((optimize("Os"))) static void PS1SpecialPlayerRun()
     if (me.rotation > 472)
         me.rotation = 0;
 }
+// The special stage's object sort at load (the tail of Special Setup's startup sub, from its instruction 81: the
+// entities 32-767 bubble-sorted by y, moving type, property value, x and y only; ~270,000 compare steps, 13 s in the
+// VM), natively: the same loops and swaps in order, so the slots, temps and array positions end as the script leaves
+// them. Patched in (op + End at instruction 81) only when the whole sub and its jump-table entries match
+// SPSETUP_STARTUP_SIG.
+static void PS1SpecialSetupSort()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int a0 = 32, a1 = 767, a2 = 766;
+    while (a0 < 768) {
+        a1 = 767;
+        a2 = 766;
+        while (a1 > a0) {
+            Entity &e1 = PS1_OBJ(a1), &e2 = PS1_OBJ(a2);
+            if (e1.ypos < e2.ypos) {
+                t[0]             = e1.type;
+                t[1]             = e1.propertyValue;
+                t[2]             = e1.xpos;
+                t[3]             = e1.ypos;
+                e1.type          = e2.type;
+                e1.propertyValue = e2.propertyValue;
+                e1.xpos          = e2.xpos;
+                e1.ypos          = e2.ypos;
+                e2.type          = t[0];
+                e2.propertyValue = t[1];
+                e2.xpos          = t[2];
+                e2.ypos          = t[3];
+            }
+            a1--;
+            a2--;
+        }
+        a0++;
+    }
+    ap[0] = a0;
+    ap[1] = a1;
+    ap[2] = a2;
+}
 // The Halfpipe's update sub (Special), natively: one statement per script instruction, in order; its segment build
 // (function 0) runs natively too (PS1HalfpipeSegment). Advances the pipe (value1 += speed; a new segment each 64) and
 // interpolates the camera / pipe tables between segments. Patched in only when the sub and its jump-table entries match
@@ -10325,6 +10364,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALPLAYERRUN: // a function body
                 opcodeSize = 0;
                 PS1SpecialPlayerRun();
+                break;
+            case FUNC_PS1SPECIALSETUPSORT: // the tail of a sub: End follows
+                opcodeSize = 0;
+                PS1SpecialSetupSort();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:

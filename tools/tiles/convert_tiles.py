@@ -13,6 +13,9 @@ What upstream LoadStageGIFFile does at runtime, done here once:
 each, row-major); page p holds tiles 256p..256p+255 in a 16x16 grid, tile n at texel
 (16*(n%16), 16*(n/16)): one DMA per page (128 halfwords x 256 lines), no CPU re-pack at runtime.
 Self-check: every page is unpacked back to the tile strip and compared with the fixed-up GIF pixels.
+A stage that never draws a tile layer (every Act*.bin's active layers are 9 and no script of the stage writes
+stage.activeLayer with anything but the constant 9: the special stage) gets the header (height 0) + palette only:
+its 256 KB of pages would be read at every load for nothing (docs/30 phase 7.3).
 
 Usage: convert_tiles.py DATA_DIR [OUT_DATA_DIR]   (every DATA_DIR/Stages/*/16x16Tiles.gif; with OUT_DATA_DIR, the
        .vram goes to OUT_DATA_DIR/Stages/<stage>/ for the stages that directory has)
@@ -54,6 +57,35 @@ def unpack(pages):
     return out.reshape(-1)
 
 
+def uses_tile_layers(src_stage_dir, out_data, stage):
+    """False only when the stage provably never activates a tile layer (see the module doc)."""
+    for f in sorted(os.listdir(src_stage_dir)):
+        if f.startswith('Act') and f.endswith('.bin'):
+            a = open(os.path.join(src_stage_dir, f), 'rb').read()
+            if tuple(a[1 + a[0]:5 + a[0]]) != (9, 9, 9, 9):
+                return True
+    bc = os.path.join(os.path.dirname(os.path.normpath(out_data)), 'Bytecode', stage + '.bin')
+    if not os.path.exists(bc):
+        return True
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, os.path.join(here, '..'))
+    sys.path.insert(0, os.path.join(here, '..', 'scripts'))
+    import bytecode_scan as bs
+    import patch_bytecode as pb
+    names, vars_ = bs.tables(3)
+    code, _, subs, _, fns, _ = bs.full_code(bc)
+    for p in [p for sub in subs for p in sub if p not in (0x3FFFF, 0x3FFF) and p >= 0] + [c for c, _ in fns]:
+        try:
+            lines = pb.listing(pb.instructions(code, p, names, vars_))
+        except Exception:
+            return True  # unreadable: assume it draws tiles
+        for l in lines:
+            w = l.split()
+            if len(w) > 1 and w[1].startswith('STAGEACTIVELAYER') and not (w[0] == 'Equal' and w[2:] == ['9']):
+                return True
+    return False
+
+
 def main():
     if len(sys.argv) not in (2, 3):
         sys.exit(__doc__)
@@ -64,6 +96,10 @@ def main():
         if not os.path.isdir(dest):
             continue
         px, pal = load(gif)
+        if out is not None and not uses_tile_layers(os.path.dirname(gif), out, os.path.basename(dest)):
+            open(os.path.join(dest, '16x16Tiles.vram'), 'wb').write(struct.pack('>HH', 256, 0) + pal)
+            print('tiles: %s draws no tile layer: palette only' % os.path.basename(dest))
+            continue
         pages = pack(px)
         if not np.array_equal(unpack(pages), px):
             sys.exit('self-check failed: %s' % gif)

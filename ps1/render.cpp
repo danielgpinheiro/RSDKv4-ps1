@@ -396,7 +396,13 @@ struct PS1ClusterCacheEntry {
     int16_t sheet, x, y, index;
 };
 static PS1ClusterCacheEntry s_clusterCache[64];
-static void PS1ClearClusterCache() { memset(s_clusterCache, 0xFF, sizeof(s_clusterCache)); }
+static const PS1AtlasCluster *s_faceCluster = nullptr; // PS1TexturedFace's last cluster (cleared with the cache)
+static uint16_t s_faceTPage = 0, s_faceClut = 0;
+static void PS1ClearClusterCache()
+{
+    memset(s_clusterCache, 0xFF, sizeof(s_clusterCache));
+    s_faceCluster = nullptr;
+}
 
 // The cluster holding texel (x, y) of an atlas sheet; nullptr if none, or if it belongs to an on-demand
 // picture not in VRAM yet (queued by PS1AtlasPictureReady: drawn from the next frame on).
@@ -2060,20 +2066,25 @@ PS1_HOT3D static void PS1TexturedFace(const Vertex *q, byte sheetID, bool blende
         g_ps1FaceMissU0 = u0, g_ps1FaceMissV0 = v0, g_ps1FaceMissU1 = u1, g_ps1FaceMissV1 = v1;
         return;
     }
-    psyqo::PrimPieces::TPageAttr tp = PS1ClusterTPage(c);
-    uint16_t tpage, clut;
-    memcpy(&tpage, &tp, 2);
-    psyqo::PrimPieces::ClutIndex ci = PS1ClusterClut(c);
-    memcpy(&clut, &ci, 2);
+    // the cluster's texpage / CLUT words, cached for the last (non-picture) cluster: the special stage's rings and
+    // shadows share one; __builtin_memcpy is inlined even with -fno-builtin (the library call cost more than the face)
+    if (c != s_faceCluster) {
+        psyqo::PrimPieces::TPageAttr tp = PS1ClusterTPage(c);
+        __builtin_memcpy(&s_faceTPage, &tp, 2);
+        psyqo::PrimPieces::ClutIndex ci = PS1ClusterClut(c);
+        __builtin_memcpy(&s_faceClut, &ci, 2);
+        s_faceCluster = c->picture ? nullptr : c; // picture clusters move between VRAM slots: never cached
+    }
+    uint16_t tpage = s_faceTPage, clut = s_faceClut;
     auto uv = [&](int k) {
         int u = c->u + q[k].u - c->srcX, vv = c->v + q[k].v - c->srcY;
         return (uint32_t)(uint8_t)(u > 255 ? 255 : u) | ((uint32_t)(uint8_t)(vv > 255 ? 255 : vv) << 8);
     };
     if (blended) {
         psyqo::PrimPieces::TPageAttr attr;
-        memcpy(&attr, &tpage, 2);
+        __builtin_memcpy(&attr, &tpage, 2);
         attr.set(psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront);
-        memcpy(&tpage, &attr, 2);
+        __builtin_memcpy(&tpage, &attr, 2);
     }
     uint32_t w[9];
     w[0] = (blended ? 0x2E808080u : 0x2C808080u); // GP0 2Ch / 2Eh textured quad (semi-transparent), colour 0x80

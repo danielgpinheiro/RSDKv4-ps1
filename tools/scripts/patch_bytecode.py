@@ -29,6 +29,8 @@ natively, leaving the same temps and table / local writes behind.
   included).
 - The special-stage player's faces (Special function 8) -> PS1PlayerFaces / return when PLAYERFACES_FN_SIG matches; its
   running state (Special function 4) -> PS1SpecialPlayerRun / return when SPPLAYERRUN_FN_SIG matches.
+- The special stage's load-time object sort (the tail of Special Setup's startup sub, a bubble sort by y: 13 s in the
+  VM) -> PS1SpecialSetupSort / End at its instruction 81 when the whole sub matches SPSETUP_STARTUP_SIG.
 
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected stops the
 build. Already patched files are recognised and left alone.
@@ -5033,6 +5035,161 @@ SPPLAYERRUN_FN_SIG = [
 ]
 
 
+SPSETUP_STARTUP_SIG = [
+    'SetMusicTrack None 0 496644',
+    'SetMusicTrack None 1 0',
+    'Equal LOCAL[1,0,0] 0',
+    'Equal OBJECTTYPE[1,0,9] 1',
+    'Equal OBJECTPRIORITY[1,0,9] 1',
+    'Equal OBJECTDRAWORDER[1,0,9] 1',
+    'Equal OBJECTVALUE3[1,0,9] 8',
+    'Equal OBJECTTYPE[1,0,10] 5',
+    'Equal OBJECTPRIORITY[1,0,10] 1',
+    'Equal OBJECTDRAWORDER[1,0,10] 6',
+    'IfGreater 0 STAGEPLAYERLISTPOS 2',
+    'Equal STAGEPLAYERLISTPOS 0',
+    'Equal GLOBAL[1,0,50] 1',
+    'endif',
+    'IfEqual 2 GLOBAL[1,0,13] 0',
+    'Equal TEMP1 STAGEACTNUM',
+    'else',
+    'IfEqual 4 GLOBAL[1,0,112] 3',
+    'Equal TEMP1 STAGEACTNUM',
+    'Add TEMP1 3',
+    'else',
+    'Mul GLOBAL[1,0,132] 1103515245',
+    'Add GLOBAL[1,0,132] 12345',
+    'And GLOBAL[1,0,132] 2147483647',
+    'Equal TEMP1 GLOBAL[1,0,132]',
+    'ShR TEMP1 16',
+    'Mod TEMP1 12',
+    'Inc TEMP1',
+    'endif',
+    'endif',
+    'ShL TEMP1 3',
+    'Equal TEMP0 TEMP1',
+    'Sub TEMP0 8',
+    'LoadPalette None 0 192 TEMP0 TEMP1',
+    'GetPaletteEntry 0 197 LOCAL[1,0,1]',
+    'Or LOCAL[1,0,1] -16777216',
+    'GetPaletteEntry 0 192 LOCAL[1,0,2]',
+    'Or LOCAL[1,0,2] -16777216',
+    'IfEqual 6 GLOBAL[1,0,5] 0',
+    'endif',
+    'Equal TEMP0 1',
+    'ForEachAll 8 12 ARRAYPOS0',
+    'Equal OBJECTTYPE[1,0,11] 12',
+    'Equal OBJECTPRIORITY[1,0,11] 2',
+    'Equal OBJECTDRAWORDER[1,0,11] 5',
+    'SetTableValue OBJECTVALUE0[1,1,0] 0 5',
+    'SetTableValue OBJECTVALUE1[1,1,0] 0 9',
+    'SetTableValue OBJECTVALUE2[1,1,0] 0 13',
+    'ResetObjectEntity ARRAYPOS0 0 0 0 0',
+    'next',
+    'Equal TEMP0 1',
+    'ForEachAll 10 11 ARRAYPOS0',
+    'IfLower 12 TEMP0 3',
+    'SetTableValue OBJECTVALUE0[1,1,0] TEMP0 5',
+    'SetTableValue OBJECTVALUE1[1,1,0] TEMP0 9',
+    'SetTableValue OBJECTVALUE2[1,1,0] TEMP0 13',
+    'Inc TEMP0',
+    'endif',
+    'Equal OBJECTVALUE0[1,1,0] 0',
+    'Equal OBJECTVALUE1[1,1,0] 0',
+    'Equal OBJECTVALUE2[1,1,0] 0',
+    'next',
+    'Equal LOCAL[1,0,3] 0',
+    'IfEqual 14 GLOBAL[1,0,50] 1',
+    'Equal LOCAL[1,0,4] 5',
+    'else',
+    'IfEqual 16 STAGEPLAYERLISTPOS 2',
+    'Equal LOCAL[1,0,4] 13',
+    'else',
+    'Equal LOCAL[1,0,4] 9',
+    'endif',
+    'endif',
+    'Equal ARRAYPOS0 32',
+    'WLower 18 ARRAYPOS0 768',
+    'IfEqual 20 OBJECTTYPE[1,1,0] 0',
+    'Equal OBJECTYPOS[1,1,0] 2147418112',
+    'else',
+    'Equal OBJECTPRIORITY[1,1,0] 5',
+    'endif',
+    'Inc ARRAYPOS0',
+    'loop',
+    'Equal ARRAYPOS0 32',
+    'WLower 22 ARRAYPOS0 768',
+    'Equal ARRAYPOS1 767',
+    'Equal ARRAYPOS2 766',
+    'WGreater 24 ARRAYPOS1 ARRAYPOS0',
+    'IfLower 26 OBJECTYPOS[1,1,1] OBJECTYPOS[1,1,2]',
+    'Equal TEMP0 OBJECTTYPE[1,1,1]',
+    'Equal TEMP1 OBJECTPROPERTYVALUE[1,1,1]',
+    'Equal TEMP2 OBJECTXPOS[1,1,1]',
+    'Equal TEMP3 OBJECTYPOS[1,1,1]',
+    'Equal OBJECTTYPE[1,1,1] OBJECTTYPE[1,1,2]',
+    'Equal OBJECTPROPERTYVALUE[1,1,1] OBJECTPROPERTYVALUE[1,1,2]',
+    'Equal OBJECTXPOS[1,1,1] OBJECTXPOS[1,1,2]',
+    'Equal OBJECTYPOS[1,1,1] OBJECTYPOS[1,1,2]',
+    'Equal OBJECTTYPE[1,1,2] TEMP0',
+    'Equal OBJECTPROPERTYVALUE[1,1,2] TEMP1',
+    'Equal OBJECTXPOS[1,1,2] TEMP2',
+    'Equal OBJECTYPOS[1,1,2] TEMP3',
+    'endif',
+    'Dec ARRAYPOS1',
+    'Dec ARRAYPOS2',
+    'loop',
+    'Inc ARRAYPOS0',
+    'loop',
+    'End',
+    'JT 10 IfGreater @13 @14',
+    'JT 14 IfEqual @17 @30',
+    'JT 17 IfEqual @21 @29',
+    'JT 38 IfEqual @39 @40',
+    'JT 41 ForEachAll @41 @50',
+    'JT 51 ForEachAll @51 @62',
+    'JT 52 IfLower @57 @58',
+    'JT 63 IfEqual @66 @72',
+    'JT 66 IfEqual @69 @71',
+    'JT 73 WLower @73 @81',
+    'JT 74 IfEqual @77 @79',
+    'JT 82 WLower @82 @105',
+    'JT 85 WGreater @85 @103',
+    'JT 86 IfLower @99 @100',
+]
+
+
+def patch_stage_sub_tail(bcdir, folder, obj_name, sub, at, sig, op_name):
+    """Stage file `folder`'s object `obj_name` sub `sub`: op / End written at its instruction `at` (a native for the sub's
+    tail, which must end at the sub's End with no jump into it from before), only when the whole sub and its jump-table
+    entries are exactly `sig` (listed after the earlier patches, e.g. entitylayout)."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index(op_name), fn.index('End')
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    path = os.path.join(bcdir, folder + '.bin')
+    if not os.path.exists(path):
+        return 'no %s.bin' % folder
+    objs = object_sheets.stage_config(os.path.join(bcdir, '..', 'Data'), folder)[2]
+    raw = open(path, 'rb').read()
+    own, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    full = bs.full_code(path)[0]
+    base = len(full) - len(own)
+    ptr = bs.load(path)[2][objs.index(obj_name)][sub]
+    ins = instructions(full, ptr, names, vars_)
+    if len(ins) > at and full[ins[at][0]] == op:
+        return '%s already native (%s %s sub %d from instruction %d)' % (op_name, folder, obj_name, sub, at)
+    if sub_listing(path, objs.index(obj_name), sub, names, vars_)[3] != sig:
+        return '%s: %s %s sub %d is not the one it transcribes (not patched)' % (op_name, folder, obj_name, sub)
+    pos = ins[at][0] - base
+    own[pos:pos + 2] = [op, end]
+    open(path, 'wb').write(encode(own) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    return '%s native (%s %s sub %d from instruction %d)' % (op_name, folder, obj_name, sub, at)
+
+
 def fn_listing(path, f, names, vars_):
     """Stage function f's listing with its jump-table entries (jump_listing)."""
     code, jt, _, _, _, _ = bs.full_code(path)
@@ -5217,7 +5374,9 @@ def main():
                                                                with_jumps=True)),
                      ('halfpipe', patch_halfpipe),
                      ('playerfaces', lambda d: patch_stage_function(d, 'Special', 8, PLAYERFACES_FN_SIG, 'PS1PlayerFaces')),
-                     ('playerrun', lambda d: patch_stage_function(d, 'Special', 4, SPPLAYERRUN_FN_SIG, 'PS1SpecialPlayerRun'))):
+                     ('playerrun', lambda d: patch_stage_function(d, 'Special', 4, SPPLAYERRUN_FN_SIG, 'PS1SpecialPlayerRun')),
+                     ('setupsort', lambda d: patch_stage_sub_tail(d, 'Special', 'Special Setup', 2, 81, SPSETUP_STARTUP_SIG,
+                                                                  'PS1SpecialSetupSort'))):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 

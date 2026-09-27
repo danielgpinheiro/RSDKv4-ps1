@@ -127,6 +127,10 @@ const int OBJECT_BORDER_Y4 = SCREEN_YSIZE + 0x80;
 
 int playerListPos = 0;
 
+#if RETRO_PLATFORM == RETRO_PS1
+// GDB hook before each object type's startup sub (load-time profiles: break here, print the vblank counter; docs/30 7.3)
+__attribute__((noinline)) void PS1StartupTypeHook(int type) { asm volatile("" : : "r"(type)); }
+#endif
 void ProcessStartupObjects()
 {
     scriptFrameCount = 0;
@@ -151,6 +155,9 @@ void ProcessStartupObjects()
         scriptInfo->spriteSheetID   = 0;
         entity->type                = i;
 
+#if RETRO_PLATFORM == RETRO_PS1
+        PS1StartupTypeHook(i);
+#endif
         if (scriptCode[scriptInfo->eventStartup.scriptCodePtr] > 0)
             ProcessScript(scriptInfo->eventStartup.scriptCodePtr, scriptInfo->eventStartup.jumpTablePtr, EVENT_SETUP);
         scriptInfo->frameCount = scriptFrameCount - scriptInfo->frameListOffset;

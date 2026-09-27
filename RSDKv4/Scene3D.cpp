@@ -271,6 +271,7 @@ void MatrixInverse(Matrix *matrix)
 volatile uint32_t g_ps1Prof3DTransform = 0, g_ps1Prof3DSort = 0, g_ps1Prof3DDraw = 0, g_ps1Prof3DVertices = 0, g_ps1Prof3DFaces = 0;
 volatile uint32_t g_ps1Prof3DProject = 0; // the GTE projection pass (part of Draw)
 volatile uint32_t g_ps1Prof3DFaded = 0, g_ps1Prof3DGeneral = 0, g_ps1Prof3DGeneralN = 0; // Draw: faded runs vs the rest
+volatile uint32_t g_ps1Prof3DGenTicks[8], g_ps1Prof3DGenCount[8]; // general path per face flag (root counter 2 ticks, 0.24 us)
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
 // PS1 vertexBufferT (docs/30 phase 7.2b, Sonic CD's special-stage floor technique): the GTE transforms and projects every
@@ -745,6 +746,7 @@ void Draw3DScene(int spriteSheetID)
     uint32_t t0        = PS1Hblanks();
     g_ps1Prof3DProject = 0; // the projection is part of the transform now (PS1TransformProject3D)
     uint32_t fadedHbl = 0, generalN = 0;
+    for (int k = 0; k < 8; ++k) g_ps1Prof3DGenTicks[k] = g_ps1Prof3DGenCount[k] = 0;
 #define PS1_PROJECT_QUAD()                                                                                                                  \
     PS1ProjectedVertex(face->a, &quad[0].x, &quad[0].y);                                                                                  \
     PS1ProjectedVertex(face->b, &quad[1].x, &quad[1].y);                                                                                  \
@@ -766,6 +768,8 @@ void Draw3DScene(int spriteSheetID)
         }
         // the general path: upstream's code on the exact transform of the corners it reads
         ++generalN;
+        uint32_t gt0 = PS1ProfTicks();
+        int gflag    = face->flag & 7;
         PS1VertexT(face->a);
         if (face->flag < FACE_FLAG_TEXTURED_C) {
             PS1VertexT(face->b);
@@ -958,6 +962,10 @@ void Draw3DScene(int spriteSheetID)
                 }
                 break;
         }
+#if RETRO_PLATFORM == RETRO_PS1
+        g_ps1Prof3DGenTicks[gflag] += (PS1ProfTicks() - gt0) & 0xFFFF;
+        g_ps1Prof3DGenCount[gflag]++;
+#endif
     }
 #if RETRO_PLATFORM == RETRO_PS1
 #undef PS1_PROJECT_QUAD

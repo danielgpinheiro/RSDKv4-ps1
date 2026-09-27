@@ -24,8 +24,10 @@ def main():
     sfx = atlas[len(stage):]
     t = open('%s/Stages/%s/16x16Tiles.vram' % (data, stage), 'rb').read()
     pal = t[4:4 + 768]
-    pages = np.frombuffer(t[4 + 768:], '<u2').reshape(4, 256, 128)
-    for p in range(4):
+    if len(t) == 4 + 768:
+        print('tile pages: none (palette-only file: the stage draws no tile layer)')
+    pages = np.frombuffer(t[4 + 768:], '<u2').reshape(-1, 256, 128)
+    for p in range(len(pages)):
         x, y = (9 + 2 * (p & 1)) * 64, (p >> 1) * 256
         same = np.array_equal(vram[y:y + 256, x:x + 128], pages[p])
         ok &= same

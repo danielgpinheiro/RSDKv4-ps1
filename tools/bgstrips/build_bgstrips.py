@@ -53,7 +53,8 @@ class StripError(Exception):
 def load_tiles(sdir):
     """Tile pixels (1024 x 256 bytes, the fixed-up GIF: 0 = transparent) and chunk tiles."""
     v = open(os.path.join(sdir, '16x16Tiles.vram'), 'rb').read()
-    pages = np.frombuffer(v[4 + 768:], np.uint8).reshape(4, 256, 256)
+    # a palette-only file (a stage with no tile layer: tools/tiles/convert_tiles.py) has no pixels to strip
+    pages = np.frombuffer(v[4 + 768:], np.uint8).reshape(4, 256, 256) if len(v) > 4 + 768 else np.zeros((4, 256, 256), np.uint8)
     gfx = np.zeros((1024, 16, 16), np.uint8)
     for t in range(1024):
         p, n = divmod(t, 256)
