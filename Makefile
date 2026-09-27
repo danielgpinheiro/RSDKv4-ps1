@@ -128,4 +128,19 @@ disc:
 	/usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe none build/game
 	/usr/bin/python3 tools/disc/verify_disc.py build/game.bin build/iso rsdkv4.ps-exe none
 
-.PHONY: disc
+# Distribution image (docs/30 phase 10): the natural game only (not a BOOT= / PROFILE / MEMCARD_TEST / PLATFORM_TEST
+# build), on a disc with the license sectors from the workspace's LICENSE.DAT (read by path, never copied;
+# LICENSE=none for an unlicensed image), verified byte by byte against build/iso, as build/dist/Sonic2-PS1.bin/.cue
+# + SHA256SUMS. Needs the disc tree from tools/data_disc.sh.
+LICENSE ?= ../LICENSE.DAT
+dist:
+	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1BootBuild; then echo "dist: rsdkv4.ps-exe is a BOOT= test build"; exit 1; fi
+	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1McTestSteps; then echo "dist: rsdkv4.ps-exe is a MEMCARD_TEST build"; exit 1; fi
+	@if ! mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1InitDone; then echo "dist: rsdkv4.ps-exe is not the game (PLATFORM_TEST?)"; exit 1; fi
+	@if ! grep -q "^PROFILE= " build/flags.txt; then echo "dist: rsdkv4.ps-exe is a PROFILE build"; exit 1; fi
+	mkdir -p build/dist
+	/usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe $(LICENSE) build/dist/Sonic2-PS1
+	/usr/bin/python3 tools/disc/verify_disc.py build/dist/Sonic2-PS1.bin build/iso rsdkv4.ps-exe $(LICENSE)
+	cd build/dist && shasum -a 256 Sonic2-PS1.bin Sonic2-PS1.cue > SHA256SUMS && cat SHA256SUMS
+
+.PHONY: disc dist

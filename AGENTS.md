@@ -30,6 +30,8 @@ make -j8 BOOT=Zone01 [BOOT_ID=2] [BOOT_PLAYER=0..3]   # start in a stage (0 Soni
                                 # touch RSDKv4/main.cpp RSDKv4/RetroEngine.cpp when switching
 make PLATFORM_TEST=1            # the phase 0 smoke-test app (ps1/platform_test.cpp)
 tools/data_disc.sh              # game disc from ../Sonic2_Extracted (Data/ + Bytecode/, no sources / menus / ZoneM)
+make dist                       # natural build only: licensed (../LICENSE.DAT by path, LICENSE=none for none), verified
+                                # build/dist/Sonic2-PS1.bin/.cue + SHA256SUMS (reproducible: same hashes on a rebuild)
                                 # + manifests (tools/rsdkmanifest), atlases per variant, tile pages (phase 3.1)
 tools/vram_test.sh Zone01_st [OUT] [F]        # BOOT= build: tile pages + atlas + palette in VRAM == the files
 [MASK=8 FROM=240] tools/frame_capture.sh N OUT                  # both framebuffers as PNGs at frame N + renderer counters
