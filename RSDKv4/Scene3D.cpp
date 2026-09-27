@@ -216,8 +216,48 @@ void MatrixRotateXYZ(Matrix *matrix, short rotationX, short rotationY, short rot
     matrix->values[3][3] = 0x100;
 }
 #if !RETRO_REV00
+#if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_INVERSE_UNDER_TEST)
+// PS1 (docs/30 phase 7.2b): upstream's MatrixInverse below works in doubles (soft-float here: hundreds of library calls,
+// every frame for the special stage's view matrix). For a matrix with last column 0 0 0 and translation 0 (256 in the
+// corner: a rotation, as MatrixRotateXYZ makes) all of its products and sums are exact (integers over powers of two)
+// until 1.0 / det: integer cofactors, then the same double operations -> the same bits (tools/scene3d/inverse_check.sh,
+// 3,000,000 cases). Anything else takes upstream's code.
+static bool PS1MatrixInverseRotation(Matrix *matrix)
+{
+    int(*v)[4] = matrix->values;
+    if (v[0][3] || v[1][3] || v[2][3] || v[3][0] || v[3][1] || v[3][2] || v[3][3] != 256)
+        return false;
+    for (int y = 0; y < 3; ++y)
+        for (int x = 0; x < 3; ++x)
+            if (v[y][x] > 32767 || v[y][x] < -32767)
+                return false;
+    typedef long long i64;
+    const i64 a = v[0][0], b = v[0][1], c = v[0][2], d = v[1][0], e = v[1][1], f = v[1][2], g = v[2][0], h = v[2][1], k = v[2][2];
+    // 2x2 cofactors (upstream inv[] with this structure's zero terms: exact doubles, over 2^16)
+    i64 N[16] = {};
+    N[0] = e * k - h * f, N[4] = -d * k + g * f, N[8] = d * h - g * e;
+    N[1] = -b * k + h * c, N[5] = a * k - g * c, N[9] = -a * h + g * b;
+    N[2] = b * f - e * c, N[6] = -a * f + d * c, N[10] = a * e - d * b;
+    const i64 D = a * N[0] + b * N[4] + c * N[8]; // det * 2^24 (upstream's det: exact)
+    if (D == 0)
+        return true; // upstream returns: matrix unchanged
+    const i64 D15 = a * e * k - a * f * h - d * b * k + d * c * h + g * b * f - g * c * e; // inv[15] * 2^24
+    double det = 1.0 / ((double)D / 16777216.0);
+    int out[16];
+    for (int i = 0; i < 16; ++i) {
+        double inv = i == 15 ? (double)D15 / 16777216.0 : (double)N[i] / 65536.0;
+        out[i]     = (int)((inv * det) * 256);
+    }
+    for (int i = 0; i < 16; ++i) v[i / 4][i % 4] = out[i];
+    return true;
+}
+#endif
 void MatrixInverse(Matrix *matrix)
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    if (PS1MatrixInverseRotation(matrix))
+        return;
+#endif
     double inv[16], det;
     double m[16];
     for (int y = 0; y < 4; ++y) {
