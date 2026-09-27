@@ -1690,9 +1690,17 @@ void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivot
 // ---------------------------------------------------------------------------------------------------
 // Sprites
 
+// A sprite wholly outside the 320 x 240 drawing area draws nothing: skipped before its atlas pieces are looked up
+// (the special stage's background draws twelve 256 x 256 frames around the screen; docs/30 7.2b). Sonic 2's atlases
+// have no on-demand pictures, so no lookup side effect is lost.
+volatile uint32_t g_ps1SpriteCull = 1; // GDB: 0 = draw off-screen sprites too (the A/B of this cull)
+static inline bool PS1SpriteOffScreen(int x, int y, int w, int h)
+{
+    return g_ps1SpriteCull && (x >= SCREEN_XSIZE || y >= SCREEN_YSIZE || x + w <= 0 || y + h <= 0);
+}
 static void PS1DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
 {
-    if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden())
+    if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden() || PS1SpriteOffScreen(XPos, YPos, width, height))
         return;
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) { PS1ChainPieceSprite(p, XPos + p.ox, YPos + p.oy); });
 }
@@ -1710,7 +1718,7 @@ void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, i
 
 void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
 {
-    if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden())
+    if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden() || PS1SpriteOffScreen(XPos, YPos, width, height))
         return;
     bool fx = direction & FLIP_X, fy = direction & FLIP_Y;
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
