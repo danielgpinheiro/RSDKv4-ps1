@@ -30,7 +30,7 @@ def main():
     iso = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, '..', '..', 'build', 'iso')
     trace = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, 'boot_trace.txt')
     out_path = sys.argv[3] if len(sys.argv) > 3 else os.path.join(HERE, 'load_order.txt')
-    manifests = os.path.join(HERE, '..', '..', 'build', 'manifest')
+    manifests = os.path.join(os.path.dirname(os.path.abspath(iso)), 'manifest')  # <build>/iso -> <build>/manifest (port or builder)
     data = os.path.join(iso, 'Data')
     have = {}
     for d, _, names in os.walk(iso):

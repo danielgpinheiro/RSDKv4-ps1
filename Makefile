@@ -59,7 +59,9 @@ endif
 
 # ps1/libc comes FIRST: its C/C++ shim headers (<string>, <cmath>, <stdio.h>, ...) shadow any
 # system headers the freestanding toolchain might otherwise surface.
-CPPFLAGS = -I ps1/libc -I RSDKv4 -I RSDKv4/NativeObjects -DRETRO_USE_MOD_LOADER=0 -DRETRO_USE_NETWORKING=0
+# RSDK_AUTOBUILD=1: the decompilation's license (LICENSE.md) wants every pre-built executable built with the DLC
+# flags off (docs/30 phase 11); for the 2013 mobile data it changes nothing (no Amy, no game.hasPlusDLC before REV03).
+CPPFLAGS = -I ps1/libc -I RSDKv4 -I RSDKv4/NativeObjects -DRETRO_USE_MOD_LOADER=0 -DRETRO_USE_NETWORKING=0 -DRSDK_AUTOBUILD=1
 
 # `make BOOT=<stage folder>` (e.g. Zone01): start in that stage (test harness): its first GameConfig entry
 # unless BOOT_ID is given, with player BOOT_PLAYER (stage.playerListPos: 0 Sonic, 1 Tails, 2 Knuckles,

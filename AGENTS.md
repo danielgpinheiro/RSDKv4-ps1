@@ -29,7 +29,9 @@ make -j8                        # rsdkv4.ps-exe (+ .elf, .map): the engine; must
 make -j8 BOOT=Zone01 [BOOT_ID=2] [BOOT_PLAYER=0..3]   # start in a stage (0 Sonic, 1 Tails, 2 Knuckles, 3 Sonic & Tails);
                                 # touch RSDKv4/main.cpp RSDKv4/RetroEngine.cpp when switching
 make PLATFORM_TEST=1            # the phase 0 smoke-test app (ps1/platform_test.cpp)
-tools/data_disc.sh              # game disc from ../Sonic2_Extracted (Data/ + Bytecode/, no sources / menus / ZoneM)
+tools/data_disc.sh              # = tools/build_assets.py --src ../Sonic2_Extracted (the builder's pipeline) + make disc;
+                                # game disc from ../Sonic2_Extracted (Data/ + Bytecode/, no sources / menus / ZoneM)
+tools/export_builder.sh ../Sonic-2-PS1-ISO-Builder   # phase 11: the public builder's builder/ + bin/ (natural build)
 make dist                       # natural build only: licensed (../LICENSE.DAT by path, LICENSE=none for none), verified
                                 # build/dist/Sonic2-PS1.bin/.cue + SHA256SUMS (reproducible: same hashes on a rebuild)
                                 # + manifests (tools/rsdkmanifest), atlases per variant, tile pages (phase 3.1)

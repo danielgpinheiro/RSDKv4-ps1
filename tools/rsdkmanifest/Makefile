@@ -2,7 +2,7 @@
 # The engine's own stage loader + bytecode VM (PS1 configuration: RETRO_PS1_HOST_TOOL) run each stage's startups.
 ENGINE = ../../RSDKv4
 CXX ?= clang++
-CXXFLAGS = -std=c++17 -O1 -g -DRETRO_PS1_HOST_TOOL -DRETRO_USE_MOD_LOADER=0 -DRETRO_USE_NETWORKING=0 -I$(ENGINE) \
+CXXFLAGS = -std=c++17 -O1 -g -DRETRO_PS1_HOST_TOOL -DRSDK_AUTOBUILD=1 -DRETRO_USE_MOD_LOADER=0 -DRETRO_USE_NETWORKING=0 -I$(ENGINE) \
            -I$(ENGINE)/NativeObjects -Wno-everything
 SRCS = main.cpp host_stubs.cpp $(ENGINE)/Scene.cpp $(ENGINE)/Script.cpp $(ENGINE)/Object.cpp $(ENGINE)/Animation.cpp \
        $(ENGINE)/Reader.cpp $(ENGINE)/String.cpp $(ENGINE)/Math.cpp $(ENGINE)/Sprite.cpp
