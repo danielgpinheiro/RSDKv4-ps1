@@ -16,6 +16,7 @@ M1=0x18; M2=0
 # INJECT_S0="gdb commands": run at frame S0 (tests: e.g. move the player next to an object whose branch must run).
 INJECT_S0=${INJECT_S0:-}
 # INJECT_AT=frame + INJECT="gdb commands": a second injection at that frame (e.g. onto an object once it has moved).
+# PRE="gdb commands": before the game runs (e.g. 'set var g_ps1FsFastLoad = 0': a .data switch, crt0 keeps it).
 INJECT_AT=${INJECT_AT:-0}; INJECT=${INJECT:-}
 if [ "${HOLD_RIGHT:-0}" = 1 ]; then M1=0x08; M2=0x08; fi
 PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
@@ -24,6 +25,7 @@ set pagination off
 set confirm off
 target remote localhost:3333
 symbol-file rsdkv4.elf
+${PRE:-}
 break PS1LoadingDoneHook
 commands
 silent

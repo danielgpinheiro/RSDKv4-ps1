@@ -7,9 +7,11 @@ file when it follows on the disc. Order:
   1. the boot's files, in the order the natural build opens them (BOOT_TRACE: `OPEN <path>` lines from a GDB trace of
      fopen, tools/disc/boot_trace.txt), up to the first stage load;
   2. per stage (GameConfig's lists: presentation, regular, special, bonus; a folder once), what LoadStageFiles opens,
-     in its order (traced on Special, docs/30): StageConfig.bin, PS1Sfx.bin, Bytecode/<folder>.bin, 16x16Tiles.vram,
-     the Sonic atlas + pictures, BGStrips.bin, CollisionMasks.ps1, Backgrounds.bin, 128x128Tiles.ps1, the acts; then
-     the other characters' atlases / strips (a Tails load skips forward over Sonic's);
+     in its order (traced on Special and Zone01, docs/30): StageConfig.bin, the stage-local copies of GameConfig.bin and
+     GlobalCode.bin (tools/disc/stage_local.py, phase 9.2), PS1Sfx.bin, Bytecode/<folder>.bin, 16x16Tiles.vram, the Sonic
+     atlas + pictures, BGStrips.bin, CollisionMasks.ps1, Backgrounds.bin, 128x128Tiles.ps1, the acts, the local copies
+     of the players' animations and the palettes (the startups open them); then the other characters' atlases / strips (a Tails load
+     skips forward over Sonic's);
   3. the rest of the small data by path (build_disc.py adds every remaining file after these).
 Usage: gen_load_order.py ISO_ROOT [BOOT_TRACE] [OUT]
 """
@@ -18,6 +20,7 @@ import os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
 import object_sheets  # noqa: E402
+import stage_local  # noqa: E402
 
 VARIANTS = ('', '_t', '_k', '_st')
 
@@ -26,6 +29,7 @@ def main():
     iso = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, '..', '..', 'build', 'iso')
     trace = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, 'boot_trace.txt')
     out_path = sys.argv[3] if len(sys.argv) > 3 else os.path.join(HERE, 'load_order.txt')
+    manifests = os.path.join(HERE, '..', '..', 'build', 'manifest')
     data = os.path.join(iso, 'Data')
     have = {}
     for d, _, names in os.walk(iso):
@@ -57,8 +61,13 @@ def main():
         s = 'Data/Stages/%s/' % folder
         if s.lower() + 'stageconfig.bin' not in have:
             continue
-        for f in ('StageConfig.bin', 'PS1Sfx.bin'):
-            add(s + f)
+        local = [s + 'PS1Local/' + os.path.basename(p) for p in stage_local.shared_files(iso, manifests, folder)]
+        add(s + 'StageConfig.bin')
+        early = ('GameConfig.bin', 'GlobalCode.bin') # read before the SFX bank; the animations / palettes by the startups
+        for p in local:
+            if os.path.basename(p) in early:
+                add(p)
+        add(s + 'PS1Sfx.bin')
         add('Bytecode/%s.bin' % folder)
         add(s + '16x16Tiles.vram')
         add('Data/Sprites/Atlas/%s.atl' % folder)
@@ -68,6 +77,9 @@ def main():
         for n in sorted(os.listdir(os.path.join(data, 'Stages', folder))):
             if n.startswith('Act') and n.endswith('.bin'):
                 add(s + n)
+        for p in local:
+            if os.path.basename(p) not in early:
+                add(p)
         for v in VARIANTS[1:]:
             add('Data/Sprites/Atlas/%s%s.atl' % (folder, v))
             add('Data/Sprites/Atlas/%s%s.pic' % (folder, v))

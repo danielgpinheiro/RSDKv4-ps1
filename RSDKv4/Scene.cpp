@@ -226,7 +226,9 @@ void ProcessStage(void)
             PS1LoadingBegin(); // loading icon if the load takes > 250 ms (ps1/loading)
             // the Scene3D block for the stages that use it, once the bracket has freed the chain arenas
             PS1Scene3DPrepare(stageList[activeStageList][stageListPosition].folder);
+            PS1FsSetLoadFolder(stageList[activeStageList][stageListPosition].folder); // its local copies (ps1/cdrom_fs)
             LoadStageFiles();
+            PS1FsSetLoadFolder(nullptr);
             PS1LoadingEnd();
 #else
             LoadStageFiles();

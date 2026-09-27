@@ -43,6 +43,7 @@ for d in build/iso/Data/Stages/*/; do
     [ -f "$d/128x128Tiles.ps1" ] && rm -f "$d/128x128Tiles.bin"
     [ -f "$d/CollisionMasks.ps1" ] && rm -f "$d/CollisionMasks.bin"
 done
+/usr/bin/python3 tools/disc/stage_local.py build/iso build/manifest # shared files copied into each stage (phase 9.2)
 /usr/bin/python3 tools/disc/gen_load_order.py build/iso # files in the order the game opens them (docs/30 phase 7.3 / 9)
 echo "iso root: $(find build/iso -type f | wc -l | tr -d ' ') files, $(du -sh build/iso | cut -f1)"
 make -s disc

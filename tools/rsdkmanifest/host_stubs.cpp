@@ -104,6 +104,7 @@ static Face s_hostFaces[FACEBUFFER_SIZE]; // the host build keeps the Scene3D ar
 Face *faceBuffer = s_hostFaces;
 int g_ps1VtxCap = VERTEXBUFFER_SIZE, g_ps1FaceCap = FACEBUFFER_SIZE;
 void PS1Scene3DPrepare(const char *) {}
+void PS1FsSetLoadFolder(const char *) {}
 decltype(faceCount) faceCount{};
 decltype(fadeA) fadeA{};
 decltype(fadeB) fadeB{};

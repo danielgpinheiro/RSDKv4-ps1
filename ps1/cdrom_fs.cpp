@@ -551,6 +551,97 @@ int PS1FsPreloadDir(const char *dir, uint32_t maxSize) {
     return loaded;
 }
 
+/* Load pins (docs/30 phase 9.2): inside a bracketed load, a file of up to PIN_MAX bytes that gets re-opened is read whole
+ * into the heap, and every later open of it is served from RAM. The engine re-opens files around nested reads (GetFileInfo /
+ * SetFileInfo: StageConfig.bin 5-7 times a stage load, GameConfig.bin, each .ani 5 times); once a bigger read (the SFX
+ * bank, the scripts) had pushed them out of the read-ahead windows, each re-open cost a seek. A file is pinned at its
+ * second open (right after the first: still in a window), and its name is learned so later loads pin it at the first
+ * (GameConfig's second open comes after the scripts' read). Files opened once (the acts, the palette-only tile file) are
+ * never pinned: pinning every small file cost the special stage's load peak 4.3 KB. Keyed by LBA; freed with the windows
+ * when the load ends (before the chain arenas come back). */
+#define PIN_MAX   (8 * 1024)
+#define PIN_SLOTS 16
+struct Pin {
+    uint32_t lba, size;
+    uint8_t *data;
+};
+static Pin s_pins[PIN_SLOTS];
+static int s_pinCount = 0;
+#define PIN_SEEN 16
+static uint32_t s_seenLba[PIN_SEEN];   // small files opened once in this load (not pinned)
+static int s_seenCount = 0;
+static uint32_t s_learned[PIN_SEEN];   // basename hashes of files seen re-opened (kept across loads)
+static int s_learnedCount = 0;
+static uint32_t pathHash(const char *p);
+volatile uint32_t g_ps1FsPins = 0, g_ps1FsPinHits = 0, g_ps1FsPinBytes = 0; // pinned files, opens served, peak bytes (GDB)
+// GDB A/B switch for pins + stage-local copies (initialised data: set before the game starts, crt0 doesn't clear it)
+volatile uint32_t g_ps1FsFastLoad = 1;
+
+static uint8_t *pinFor(const char *path, uint32_t lba, uint32_t size) {
+    for (int i = 0; i < s_pinCount; ++i)
+        if (s_pins[i].lba == lba) {
+            g_ps1FsPinHits = g_ps1FsPinHits + 1;
+            return s_pins[i].data;
+        }
+    if (s_pinCount >= PIN_SLOTS)
+        return nullptr;
+    const char *base = strrchr(path, '/');
+    uint32_t name = pathHash(base ? base + 1 : path);
+    bool learned = false, seen = false;
+    for (int i = 0; i < s_learnedCount && !learned; ++i) learned = s_learned[i] == name;
+    for (int i = 0; i < s_seenCount && !seen; ++i) seen = s_seenLba[i] == lba;
+    if (!learned) {
+        if (!seen) { // first open: remember it, read it as usual
+            if (s_seenCount < PIN_SEEN)
+                s_seenLba[s_seenCount++] = lba;
+            return nullptr;
+        }
+        if (s_learnedCount < PIN_SEEN)
+            s_learned[s_learnedCount++] = name;
+    }
+    uint8_t *d = (uint8_t *)malloc(size ? size : 1);
+    if (!d)
+        return nullptr;
+    if (size && !readViaWindows(lba, size, d)) {
+        free(d);
+        return nullptr;
+    }
+    s_pins[s_pinCount++] = Pin{lba, size, d};
+    g_ps1FsPins = g_ps1FsPins + 1;
+    uint32_t bytes = 0;
+    for (int i = 0; i < s_pinCount; ++i) bytes += s_pins[i].size;
+    if (bytes > g_ps1FsPinBytes)
+        g_ps1FsPinBytes = bytes;
+    return d;
+}
+
+/* Stage-local copies (docs/30 phase 9.2, tools/disc/stage_local.py): while a stage loads, a file that has a copy in
+ * Data/Stages/<stage>/PS1Local/ (GameConfig, GlobalCode, the players' .ani) is read from there, laid out between the
+ * stage's own files, instead of from its own place on the disc (a seek each). A miss costs nothing (the index answers). */
+static char s_localDir[40]; // "Data/Stages/<folder>/PS1Local/", empty outside stage loads
+volatile uint32_t g_ps1FsLocalHits = 0; // opens served by a stage-local copy (GDB)
+void PS1FsSetLoadFolder(const char *folder) {
+    if (!folder || snprintf(s_localDir, sizeof(s_localDir), "Data/Stages/%s/PS1Local/", folder) >= (int)sizeof(s_localDir))
+        s_localDir[0] = 0;
+}
+static bool findLocal(const char *path, uint32_t *lba, uint32_t *size) {
+    if (!s_localDir[0] || !PS1LoadingActive() || !g_ps1FsFastLoad)
+        return false;
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    char local[72];
+    if (snprintf(local, sizeof(local), "%s%s", s_localDir, base) >= (int)sizeof(local) || !findFile(local, lba, size))
+        return false;
+    g_ps1FsLocalHits = g_ps1FsLocalHits + 1;
+    return true;
+}
+
+static void releasePins() {
+    for (int i = s_pinCount - 1; i >= 0; --i) free(s_pins[i].data); // newest first: the heap shrinks back in order
+    s_pinCount = 0;
+    s_seenCount = 0;
+}
+
 FILE *fopen(const char *path, const char *mode) {
     (void)mode;
     uint32_t lba, size;
@@ -580,21 +671,23 @@ FILE *fopen(const char *path, const char *mode) {
     // One CD action at a time: CD-XA music reads continuously; scripts stop it before loads,
     // this is the safety net (counted in g_ps1XaForcedStops).
     PS1XaStopForFileRead();
-    if (!findFile(path, &lba, &size))
+    if (!findLocal(path, &lba, &size) && !findFile(path, &lba, &size))
         return nullptr;
+    uint8_t *pinned = g_ps1FsFastLoad && PS1LoadingActive() && size <= PIN_MAX ? pinFor(path, lba, size) : nullptr;
     FILE *f = (FILE *)malloc(sizeof(FILE));
     if (!f)
         return nullptr;
-    f->lba   = lba;
+    f->lba   = pinned ? 0 : lba;
     f->size  = size;
     f->pos   = 0;
     f->valid  = 1;
-    f->mem    = nullptr;
+    f->mem    = pinned;
     return f;
 }
 
 void PS1FsReleaseWindows() {
     lsClose();
+    releasePins();
     s_curWin = -1;
     for (auto &w : s_win) {
         free(w.buf);

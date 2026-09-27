@@ -19,6 +19,8 @@
 #define PS1_LOADING_DELAY_US 250000
 
 void PS1LoadingBegin();
+// ps1/cdrom_fs.cpp: during a stage load, the stage whose local copies (Data/Stages/<folder>/PS1Local/) are read first
+void PS1FsSetLoadFolder(const char *folder);
 void PS1LoadingEnd();
 
 extern volatile uint32_t g_ps1LoadingLoads;  // loads bracketed
