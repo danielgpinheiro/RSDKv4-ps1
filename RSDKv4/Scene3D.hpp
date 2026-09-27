@@ -3,11 +3,12 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 // PS1: Sonic 2's half-pipe builds its mesh from script tables each frame: 1,408 vertices and 742 faces (measured,
-// docs/30 phase 2.3), plus vertices 4094/4095 as single-point scratch. Script vertex indices 0xFF0-0xFFF map to the
+// docs/30 phase 2.3), plus vertices 4094/4095 as single-point scratch; rings, shadows and the player add 4 vertices a
+// face: 1,556 vertices / 784 faces at the first stage's emerald (phase 7 full run) -> 0x680 vertices. Script vertex indices 0xFF0-0xFFF map to the
 // last 16 slots (PS1_VTX_SCRATCH); other accesses and counts past these are clamped and counted
 // (g_ps1Scene3DOverflow, Script.cpp).
 #define PS1_VTX_SCRATCH   (0x10)
-#define VERTEXBUFFER_SIZE (0x600 + PS1_VTX_SCRATCH)
+#define VERTEXBUFFER_SIZE (0x680 + PS1_VTX_SCRATCH)
 #define FACEBUFFER_SIZE   (0x340)
 #else
 #define VERTEXBUFFER_SIZE (0x1000)

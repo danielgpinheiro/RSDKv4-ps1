@@ -344,9 +344,16 @@ void PS1TransformProject3D(int count)
     write<Register::R22R23, Unsafe>(pack(r[1][1], r[1][2]));
     write<Register::R31R32, Unsafe>(pack(r[2][0], r[2][1]));
     write<Register::R33, Unsafe>((uint32_t)(uint16_t)r[2][2]);
-    write<Register::TRX, Unsafe>((uint32_t)(m.values[3][0] >> 5));
-    write<Register::TRY, Unsafe>((uint32_t)(-(m.values[3][1] >> 5) * projectionY / projectionX));
-    write<Register::TRZ, Unsafe>((uint32_t)(m.values[3][2] >> 5));
+    // Relative to an origin O (the frame's first vertex): the pipe's world coordinates grow as the stage goes on (past
+    // +-2^20 after the third checkpoint, every vertex then left to the CPU: 1,500 hblanks a frame); relative to one of
+    // its own vertices they stay small. T = M (v - O) + T(O), T(O) by upstream's formula.
+    const int ox = count ? vertexBuffer[0].x : 0, oy = count ? vertexBuffer[0].y : 0, oz = count ? vertexBuffer[0].z : 0;
+    const int tx = (ox * m.values[0][0] >> 8) + (oy * m.values[1][0] >> 8) + (oz * m.values[2][0] >> 8) + m.values[3][0];
+    const int ty = (ox * m.values[0][1] >> 8) + (oy * m.values[1][1] >> 8) + (oz * m.values[2][1] >> 8) + m.values[3][1];
+    const int tz = (ox * m.values[0][2] >> 8) + (oy * m.values[1][2] >> 8) + (oz * m.values[2][2] >> 8) + m.values[3][2];
+    write<Register::TRX, Unsafe>((uint32_t)(tx >> 5));
+    write<Register::TRY, Unsafe>((uint32_t)(-(ty >> 5) * projectionY / projectionX));
+    write<Register::TRZ, Unsafe>((uint32_t)(tz >> 5));
     write<Register::OFX, Unsafe>((uint32_t)(SCREEN_CENTERX << 16));
     write<Register::OFY, Unsafe>((uint32_t)(SCREEN_CENTERY << 16));
     write<Register::H, Safe>((uint32_t)projectionX);
@@ -355,21 +362,22 @@ void PS1TransformProject3D(int count)
     int v              = 0;
     for (; v + 3 <= count; v += 3) {
         const Vertex *p = &vertexBuffer[v];
-        uint32_t o      = (uint32_t)(p[0].x + lim) | (uint32_t)(p[0].y + lim) | (uint32_t)(p[0].z + lim) | (uint32_t)(p[1].x + lim)
-                     | (uint32_t)(p[1].y + lim) | (uint32_t)(p[1].z + lim) | (uint32_t)(p[2].x + lim) | (uint32_t)(p[2].y + lim)
-                     | (uint32_t)(p[2].z + lim);
+        int dx0 = p[0].x - ox, dy0 = p[0].y - oy, dz0 = p[0].z - oz, dx1 = p[1].x - ox, dy1 = p[1].y - oy, dz1 = p[1].z - oz;
+        int dx2 = p[2].x - ox, dy2 = p[2].y - oy, dz2 = p[2].z - oz;
+        uint32_t o = (uint32_t)(dx0 + lim) | (uint32_t)(dy0 + lim) | (uint32_t)(dz0 + lim) | (uint32_t)(dx1 + lim)
+                     | (uint32_t)(dy1 + lim) | (uint32_t)(dz1 + lim) | (uint32_t)(dx2 + lim) | (uint32_t)(dy2 + lim) | (uint32_t)(dz2 + lim);
         if (o >= 2 * lim) {
             PS1CpuVertexT(v), PS1CpuVertexT(v + 1), PS1CpuVertexT(v + 2);
             cpu += 3;
             g_ps1GteRange = g_ps1GteRange + 1;
             continue;
         }
-        write<Register::VXY0, Unsafe>(pack(p[0].x >> 5, p[0].y >> 5));
-        write<Register::VZ0, Unsafe>((uint32_t)(p[0].z >> 5));
-        write<Register::VXY1, Unsafe>(pack(p[1].x >> 5, p[1].y >> 5));
-        write<Register::VZ1, Unsafe>((uint32_t)(p[1].z >> 5));
-        write<Register::VXY2, Unsafe>(pack(p[2].x >> 5, p[2].y >> 5));
-        write<Register::VZ2, Safe>((uint32_t)(p[2].z >> 5));
+        write<Register::VXY0, Unsafe>(pack(dx0 >> 5, dy0 >> 5));
+        write<Register::VZ0, Unsafe>((uint32_t)(dz0 >> 5));
+        write<Register::VXY1, Unsafe>(pack(dx1 >> 5, dy1 >> 5));
+        write<Register::VZ1, Unsafe>((uint32_t)(dz1 >> 5));
+        write<Register::VXY2, Unsafe>(pack(dx2 >> 5, dy2 >> 5));
+        write<Register::VZ2, Safe>((uint32_t)(dz2 >> 5));
         Kernels::rtpt();
         int32_t flag = (int32_t)readRaw<Register::FLAG, Safe>();
         uint32_t z0 = readRaw<Register::SZ1, Safe>(), z1 = readRaw<Register::SZ2, Safe>(), z2 = readRaw<Register::SZ3, Safe>();
@@ -381,8 +389,8 @@ void PS1TransformProject3D(int count)
                 g_ps1GteNear = g_ps1GteNear + 1;
             for (int k = v; k < v + 3; ++k) {
                 const Vertex &q = vertexBuffer[k];
-                write<Register::VXY0, Unsafe>(pack(q.x >> 5, q.y >> 5));
-                write<Register::VZ0, Safe>((uint32_t)(q.z >> 5));
+                write<Register::VXY0, Unsafe>(pack((q.x - ox) >> 5, (q.y - oy) >> 5));
+                write<Register::VZ0, Safe>((uint32_t)((q.z - oz) >> 5));
                 Kernels::rtps();
                 int32_t fl = (int32_t)readRaw<Register::FLAG, Safe>();
                 uint32_t z = readRaw<Register::SZ3, Safe>();
