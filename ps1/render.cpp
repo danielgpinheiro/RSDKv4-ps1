@@ -2096,6 +2096,59 @@ PS1_HOT3D static void PS1TexturedFace(const Vertex *q, byte sheetID, bool blende
     PS1ChainPrimsRawN(w, 9, 1);
     g_ps1Faces = g_ps1Faces + 1;
 }
+// Draw3DScene's TEXTURED_C / _BLEND faces (the special stage's rings and shadows: ~45 a frame) are axis-aligned
+// rectangles: corners (x0, y0) (x1, y0) (x0, y1) (x1, y1) with texels (u0, v0) (u1, v0) (u0, v1) (u1, v1). The same
+// words as PS1TexturedFace for that quad, without its per-corner loops (docs/30 phase 7.2b).
+PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended)
+{
+    if (!s_frameOpen || PS1ObjectsHidden())
+        return;
+    int sheet = PS1SurfaceSheet(sheetID);
+    if (sheet < 0) {
+        g_ps1SheetUnbound = g_ps1SheetUnbound + 1;
+        return;
+    }
+    int umin = u0 < u1 ? u0 : u1, umax = u0 < u1 ? u1 : u0, vmin = v0 < v1 ? v0 : v1, vmax = v0 < v1 ? v1 : v0;
+    if (PS1BeyondGpuLimits(x0 < x1 ? x0 : x1, y0 < y1 ? y0 : y1, x0 < x1 ? x1 : x0, y0 < y1 ? y1 : y0))
+        g_ps1GpuLimit = g_ps1GpuLimit + 1;
+    const PS1AtlasCluster *c = PS1FindCluster(sheet, umin, vmin);
+    if (!c || umax > c->srcX + c->w || vmax > c->srcY + c->h) {
+        g_ps1FaceTexMiss   = g_ps1FaceTexMiss + 1;
+        g_ps1FaceMissSheet = sheet;
+        g_ps1FaceMissU0 = umin, g_ps1FaceMissV0 = vmin, g_ps1FaceMissU1 = umax, g_ps1FaceMissV1 = vmax;
+        return;
+    }
+    if (c != s_faceCluster) {
+        psyqo::PrimPieces::TPageAttr tp = PS1ClusterTPage(c);
+        __builtin_memcpy(&s_faceTPage, &tp, 2);
+        psyqo::PrimPieces::ClutIndex ci = PS1ClusterClut(c);
+        __builtin_memcpy(&s_faceClut, &ci, 2);
+        s_faceCluster = c->picture ? nullptr : c;
+    }
+    uint16_t tpage = s_faceTPage;
+    if (blended) {
+        psyqo::PrimPieces::TPageAttr attr;
+        __builtin_memcpy(&attr, &tpage, 2);
+        attr.set(psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront);
+        __builtin_memcpy(&tpage, &attr, 2);
+    }
+    const int du = c->u - c->srcX, dv = c->v - c->srcY;
+    auto tu = [&](int u) { return (uint32_t)(uint8_t)(u + du > 255 ? 255 : u + du); };
+    auto tv = [&](int v) { return (uint32_t)(uint8_t)(v + dv > 255 ? 255 : v + dv) << 8; };
+    auto xy = [](int x, int y) { return (uint32_t)(uint16_t)x | ((uint32_t)(uint16_t)y << 16); };
+    uint32_t w[9];
+    w[0] = blended ? 0x2E808080u : 0x2C808080u;
+    w[1] = xy(x0, y0);
+    w[2] = tu(u0) | tv(v0) | ((uint32_t)s_faceClut << 16);
+    w[3] = xy(x1, y0);
+    w[4] = tu(u1) | tv(v0) | ((uint32_t)tpage << 16);
+    w[5] = xy(x0, y1);
+    w[6] = tu(u0) | tv(v1);
+    w[7] = xy(x1, y1);
+    w[8] = tu(u1) | tv(v1);
+    PS1ChainPrimsRawN(w, 9, 1);
+    g_ps1Faces = g_ps1Faces + 1;
+}
 void DrawTexturedFace(void *v, byte sheetID) { PS1TexturedFace((const Vertex *)v, sheetID, false); }
 void DrawTexturedFaceBlended(void *v, byte sheetID) { PS1TexturedFace((const Vertex *)v, sheetID, true); }
 

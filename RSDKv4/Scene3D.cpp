@@ -747,6 +747,7 @@ static inline void PS1ProjectedVertex(int i, int *x, int *y)
     }
 }
 int PS1FadedFaces(int i, int count); // above: a run of faded faces, returns where it stopped
+void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended); // ps1/render.cpp
 #endif
 void Draw3DScene(int spriteSheetID)
 {
@@ -776,10 +777,13 @@ void Draw3DScene(int spriteSheetID)
         }
         // the general path: upstream's code; its vertexBufferT reads get the exact transform (PS1ExactT)
         ++generalN;
+#if PS1_PROFILE
         uint32_t gt0 = PS1ProfTicks();
         int gflag    = face->flag & 7;
 #endif
-        memset(quad, 0, 4 * sizeof(Vertex));
+#else
+        memset(quad, 0, 4 * sizeof(Vertex)); // PS1: every case sets the fields its draw call reads
+#endif
         switch (face->flag) {
             default: break;
             case FACE_FLAG_TEXTURED_3D:
@@ -890,26 +894,9 @@ void Draw3DScene(int spriteSheetID)
                 PS1VertexXYZ ta = PS1ExactT(face->a);
                 if (ta.z > 0) {
                     const Vertex &vb = vertexBuffer[face->b], &va = vertexBuffer[face->a], &vc = vertexBuffer[face->c];
-                    quad[0].x = SCREEN_CENTERX + projectionX * (ta.x - vb.u) / ta.z;
-                    quad[0].y = SCREEN_CENTERY - projectionY * (ta.y + vb.v) / ta.z;
-                    quad[1].x = SCREEN_CENTERX + projectionX * (ta.x + vb.u) / ta.z;
-                    quad[1].y = SCREEN_CENTERY - projectionY * (ta.y + vb.v) / ta.z;
-                    quad[2].x = SCREEN_CENTERX + projectionX * (ta.x - vb.u) / ta.z;
-                    quad[2].y = SCREEN_CENTERY - projectionY * (ta.y - vb.v) / ta.z;
-                    quad[3].x = SCREEN_CENTERX + projectionX * (ta.x + vb.u) / ta.z;
-                    quad[3].y = SCREEN_CENTERY - projectionY * (ta.y - vb.v) / ta.z;
-                    quad[0].u = va.u - vc.u;
-                    quad[0].v = va.v - vc.v;
-                    quad[1].u = va.u + vc.u;
-                    quad[1].v = va.v - vc.v;
-                    quad[2].u = va.u - vc.u;
-                    quad[2].v = va.v + vc.v;
-                    quad[3].u = va.u + vc.u;
-                    quad[3].v = va.v + vc.v;
-                    if (face->flag == FACE_FLAG_TEXTURED_C)
-                        DrawTexturedFace(quad, spriteSheetID);
-                    else
-                        DrawTexturedFaceBlended(quad, spriteSheetID);
+                    PS1TexturedRect(SCREEN_CENTERX + projectionX * (ta.x - vb.u) / ta.z, SCREEN_CENTERY - projectionY * (ta.y + vb.v) / ta.z,
+                                    SCREEN_CENTERX + projectionX * (ta.x + vb.u) / ta.z, SCREEN_CENTERY - projectionY * (ta.y - vb.v) / ta.z,
+                                    va.u - vc.u, va.v - vc.v, va.u + vc.u, va.v + vc.v, spriteSheetID, face->flag == FACE_FLAG_TEXTURED_C_BLEND);
                 }
                 break;
             }
@@ -1001,7 +988,7 @@ void Draw3DScene(int spriteSheetID)
                 }
                 break;
         }
-#if RETRO_PLATFORM == RETRO_PS1
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_PROFILE
         g_ps1Prof3DGenTicks[gflag] += (PS1ProfTicks() - gt0) & 0xFFFF;
         g_ps1Prof3DGenCount[gflag]++;
 #endif
