@@ -33,5 +33,7 @@ cp ps1/*.hh "$B/ps1/"
 cp LICENSE.md "$B/RSDKv4/LICENSE.md" # the decompilation's license travels with its sources
 cp rsdkv4.ps-exe "$DEST/bin/Sonic2-PS1.exe"
 ( cd "$DEST/bin" && shasum -a 256 Sonic2-PS1.exe > SHA256SUMS )
+printf '# bin/\n\n`Sonic2-PS1.exe`: the PS1 executable, built from the RSDKv4-ps1 port at commit `%s` (`make`, with\n`RSDK_AUTOBUILD=1`). SHA-256 in `SHA256SUMS`.\n' \
+  "$(git rev-parse --short HEAD)" > "$DEST/bin/README.md"
 echo "exported $(git rev-parse --short HEAD) -> $DEST ($(find "$B" -type f | wc -l | tr -d ' ') builder files)"
 cat "$DEST/bin/SHA256SUMS"
