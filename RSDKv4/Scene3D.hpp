@@ -68,7 +68,40 @@ extern Matrix matTemp;
 
 extern Face faceBuffer[FACEBUFFER_SIZE];
 extern Vertex vertexBuffer[VERTEXBUFFER_SIZE];
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (docs/30 phase 7.2b): the GTE transforms + projects every vertex (Scene3D.cpp PS1TransformProject3D) into
+// g_ps1Proj: .u = the packed screen position (or PS1_PROJ_MARK: left to the CPU), .v = the depth z. Upstream's exact
+// transform (vertexBufferT[i].x/.y/.z in Draw3DScene's general path) is computed on demand into a small per-call cache
+// (PS1ExactT): 8 B a vertex instead of vertexBufferT's 20 (-16 KB).
+struct PS1ProjEntry {
+    uint u;
+    int v;
+};
+extern PS1ProjEntry g_ps1Proj[VERTEXBUFFER_SIZE];
+struct PS1VertexXYZ {
+    int x, y, z;
+};
+struct PS1ExactEntry {
+    int x, y, z, idx;
+    uint frame;
+};
+extern PS1ExactEntry g_ps1ExactT[256];
+extern uint g_ps1ExactFrame;
+const PS1VertexXYZ &PS1ExactTSlow(int v);
+inline PS1VertexXYZ PS1ExactT(int v)
+{
+    const PS1ExactEntry &e = g_ps1ExactT[v & 255];
+    if (e.idx == v && e.frame == g_ps1ExactFrame)
+        return PS1VertexXYZ{ e.x, e.y, e.z };
+    return PS1ExactTSlow(v);
+}
+PS1VertexXYZ PS1ExactTOut(int v); // PS1ExactT out of line (the view's call sites stay small)
+struct PS1VertexTView {
+    PS1VertexXYZ operator[](int v) const { return PS1ExactTOut(v); }
+};
+#else
 extern Vertex vertexBufferT[VERTEXBUFFER_SIZE];
+#endif
 
 extern DrawListEntry3D drawList3D[FACEBUFFER_SIZE];
 

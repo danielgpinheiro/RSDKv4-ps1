@@ -10,7 +10,14 @@ Matrix matTemp  = Matrix();
 
 Face faceBuffer[FACEBUFFER_SIZE];
 Vertex vertexBuffer[VERTEXBUFFER_SIZE];
+#if RETRO_PLATFORM == RETRO_PS1
+PS1ProjEntry g_ps1Proj[VERTEXBUFFER_SIZE];
+PS1ExactEntry g_ps1ExactT[256];
+uint g_ps1ExactFrame = 1;
+#define vertexBufferT (PS1VertexTView{}) // upstream's reads below get the exact transform (PS1ExactT)
+#else
 Vertex vertexBufferT[VERTEXBUFFER_SIZE];
+#endif
 
 DrawListEntry3D drawList3D[FACEBUFFER_SIZE];
 
@@ -274,29 +281,21 @@ volatile uint32_t g_ps1Prof3DFaded = 0, g_ps1Prof3DGeneral = 0, g_ps1Prof3DGener
 volatile uint32_t g_ps1Prof3DGenTicks[8], g_ps1Prof3DGenCount[8]; // general path per face flag (root counter 2 ticks, 0.24 us)
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
-// PS1 vertexBufferT (docs/30 phase 7.2b, Sonic CD's special-stage floor technique): the GTE transforms and projects every
-// vertex in one pass (ps1/render.cpp PS1TransformProject3D, RTPT: three vertices a command): .u = the packed screen
-// position (or PS1_PROJ_MARK: left to the CPU), .v = the depth z the sort and the fog use. Upstream's exact transform
-// (.x .y .z) is computed only where it is read: the marked vertices and the corners of the faces the general path draws
-// (PS1VertexT). Visual only: the scripts never read vertexBufferT (their TransformVertices stays exact).
-uint32_t g_ps1VertexTDone[VERTEXBUFFER_SIZE / 32 + 1];
-void PS1ExactVertexT(int v)
+// Upstream's transform of vertex v (the per-term floors of TransformVertexBuffer) into its PS1ExactT cache slot
+// (Scene3D.hpp; the cache is per TransformVertexBuffer call). Visual only: the scripts never read the transformed buffer.
+__attribute__((noinline)) PS1VertexXYZ PS1ExactTOut(int v) { return PS1ExactT(v); }
+const PS1VertexXYZ &PS1ExactTSlow(int v)
 {
-    int vx = vertexBuffer[v].x;
-    int vy = vertexBuffer[v].y;
-    int vz = vertexBuffer[v].z;
-    vertexBufferT[v].x =
-        (vx * matFinal.values[0][0] >> 8) + (vy * matFinal.values[1][0] >> 8) + (vz * matFinal.values[2][0] >> 8) + matFinal.values[3][0];
-    vertexBufferT[v].y =
-        (vx * matFinal.values[0][1] >> 8) + (vy * matFinal.values[1][1] >> 8) + (vz * matFinal.values[2][1] >> 8) + matFinal.values[3][1];
-    vertexBufferT[v].z =
-        (vx * matFinal.values[0][2] >> 8) + (vy * matFinal.values[1][2] >> 8) + (vz * matFinal.values[2][2] >> 8) + matFinal.values[3][2];
-    g_ps1VertexTDone[v >> 5] |= 1u << (v & 31);
-}
-static inline void PS1VertexT(int v)
-{
-    if (!(g_ps1VertexTDone[v >> 5] & (1u << (v & 31))))
-        PS1ExactVertexT(v);
+    int vx           = vertexBuffer[v].x;
+    int vy           = vertexBuffer[v].y;
+    int vz           = vertexBuffer[v].z;
+    PS1ExactEntry &e = g_ps1ExactT[v & 255];
+    e.x = (vx * matFinal.values[0][0] >> 8) + (vy * matFinal.values[1][0] >> 8) + (vz * matFinal.values[2][0] >> 8) + matFinal.values[3][0];
+    e.y = (vx * matFinal.values[0][1] >> 8) + (vy * matFinal.values[1][1] >> 8) + (vz * matFinal.values[2][1] >> 8) + matFinal.values[3][1];
+    e.z = (vx * matFinal.values[0][2] >> 8) + (vy * matFinal.values[1][2] >> 8) + (vz * matFinal.values[2][2] >> 8) + matFinal.values[3][2];
+    e.idx   = v;
+    e.frame = g_ps1ExactFrame;
+    return *(const PS1VertexXYZ *)&e;
 }
 bool PS1Draw3DOpen(); // ps1/render.cpp: a frame is open and objects are shown
 extern volatile uint32_t g_ps1Faces;
@@ -317,9 +316,8 @@ volatile uint32_t g_ps1GteMatrixCPU   = 0; // frames whose matrix doesn't fit th
 volatile uint32_t g_ps1GteNear = 0, g_ps1GteFlagged = 0, g_ps1GteRange = 0; // CPU triples by reason (GDB)
 static void PS1CpuVertexT(int v)
 {
-    PS1ExactVertexT(v);
-    vertexBufferT[v].u = 0x8000u;
-    vertexBufferT[v].v = vertexBufferT[v].z;
+    g_ps1Proj[v].u = 0x8000u;
+    g_ps1Proj[v].v = PS1ExactT(v).z;
 }
 void PS1TransformProject3D(int count)
 {
@@ -399,12 +397,12 @@ void PS1TransformProject3D(int count)
                     ++cpu;
                     continue;
                 }
-                vertexBufferT[k].u = readRaw<Register::SXY2, Safe>();
-                vertexBufferT[k].v = (int)(z << 5);
+                g_ps1Proj[k].u = readRaw<Register::SXY2, Safe>();
+                g_ps1Proj[k].v = (int)(z << 5);
             }
             continue;
         }
-        Vertex *t = &vertexBufferT[v];
+        PS1ProjEntry *t = &g_ps1Proj[v];
         t[0].u    = readRaw<Register::SXY0, Safe>();
         t[1].u    = readRaw<Register::SXY1, Safe>();
         t[2].u    = readRaw<Register::SXY2, Safe>();
@@ -456,7 +454,7 @@ int PS1FadedFaces(int i, int count)
         const Face &f = faceBuffer[drawList3D[i].faceID];
         if (f.flag != FACE_FLAG_FADED)
             break;
-        uint32_t pa = vertexBufferT[f.a].u, pb = vertexBufferT[f.b].u, pc = vertexBufferT[f.c].u, pd = vertexBufferT[f.d].u;
+        uint32_t pa = g_ps1Proj[f.a].u, pb = g_ps1Proj[f.b].u, pc = g_ps1Proj[f.c].u, pd = g_ps1Proj[f.d].u;
         // a corner left to the CPU: x = 0x8000; GTE x is -1024..1023, so x + 1024 has bits 11-15 clear
         if (((pa + 1024) | (pb + 1024) | (pc + 1024) | (pd + 1024)) & 0xF800)
             break;
@@ -554,12 +552,12 @@ void TransformVertexBuffer()
     MatrixMultiply(&matFinal, &matView);
 
 #if RETRO_PLATFORM == RETRO_PS1
-    memset(g_ps1VertexTDone, 0, sizeof(g_ps1VertexTDone));
+    ++g_ps1ExactFrame; // a new matFinal: the exact-transform cache starts empty
     PS1TransformProject3D(vertexCount);
     g_ps1Prof3DTransform = PS1HblanksSince(t0);
     g_ps1Prof3DVertices  = vertexCount;
     return;
-#endif
+#else
     for (int v = 0; v < vertexCount; ++v) {
         int vx = vertexBuffer[v].x;
         int vy = vertexBuffer[v].y;
@@ -572,6 +570,7 @@ void TransformVertexBuffer()
         vertexBufferT[v].z =
             (vx * matFinal.values[0][2] >> 8) + (vy * matFinal.values[1][2] >> 8) + (vz * matFinal.values[2][2] >> 8) + matFinal.values[3][2];
     }
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
     g_ps1Prof3DTransform = PS1HblanksSince(t0);
     g_ps1Prof3DVertices  = vertexCount;
@@ -686,7 +685,7 @@ void Sort3DDrawList()
     int lo = 0, hi = 0;
     for (int i = 0; i < faceCount; ++i) { // .v: the depth z (the GTE's, or the exact one for marked vertices)
         const Face &f = faceBuffer[i];
-        int depth     = (vertexBufferT[f.d].v + vertexBufferT[f.c].v + vertexBufferT[f.b].v + vertexBufferT[f.a].v) >> 2;
+        int depth     = (g_ps1Proj[f.d].v + g_ps1Proj[f.c].v + g_ps1Proj[f.b].v + g_ps1Proj[f.a].v) >> 2;
         drawList3D[i].depth  = depth;
         drawList3D[i].faceID = i;
         if (!i)
@@ -736,14 +735,15 @@ void Sort3DDrawList()
 #define PS1_PROJ_MARK (0x8000u)
 static inline void PS1ProjectedVertex(int i, int *x, int *y)
 {
-    uint32_t p = vertexBufferT[i].u;
+    uint32_t p = g_ps1Proj[i].u;
     if ((p & 0xFFFF) != PS1_PROJ_MARK) {
         *x = (int16_t)(p & 0xFFFF);
         *y = (int16_t)(p >> 16);
     }
     else {
-        *x = SCREEN_CENTERX + projectionX * vertexBufferT[i].x / vertexBufferT[i].z;
-        *y = SCREEN_CENTERY - projectionY * vertexBufferT[i].y / vertexBufferT[i].z;
+        PS1VertexXYZ t = PS1ExactT(i);
+        *x = SCREEN_CENTERX + projectionX * t.x / t.z;
+        *y = SCREEN_CENTERY - projectionY * t.y / t.z;
     }
 }
 int PS1FadedFaces(int i, int count); // above: a run of faded faces, returns where it stopped
@@ -774,16 +774,10 @@ void Draw3DScene(int spriteSheetID)
                 continue;
             }
         }
-        // the general path: upstream's code on the exact transform of the corners it reads
+        // the general path: upstream's code; its vertexBufferT reads get the exact transform (PS1ExactT)
         ++generalN;
         uint32_t gt0 = PS1ProfTicks();
         int gflag    = face->flag & 7;
-        PS1VertexT(face->a);
-        if (face->flag < FACE_FLAG_TEXTURED_C) {
-            PS1VertexT(face->b);
-            PS1VertexT(face->c);
-            PS1VertexT(face->d);
-        }
 #endif
         memset(quad, 0, 4 * sizeof(Vertex));
         switch (face->flag) {
@@ -890,6 +884,36 @@ void Draw3DScene(int spriteSheetID)
                     DrawFadedFace(quad, face->color, fogColor, 0xFF - fogStr);
                 }
                 break;
+#if RETRO_PLATFORM == RETRO_PS1
+            case FACE_FLAG_TEXTURED_C:
+            case FACE_FLAG_TEXTURED_C_BLEND: { // upstream's two cases (#else), the corner's exact transform read once
+                PS1VertexXYZ ta = PS1ExactT(face->a);
+                if (ta.z > 0) {
+                    const Vertex &vb = vertexBuffer[face->b], &va = vertexBuffer[face->a], &vc = vertexBuffer[face->c];
+                    quad[0].x = SCREEN_CENTERX + projectionX * (ta.x - vb.u) / ta.z;
+                    quad[0].y = SCREEN_CENTERY - projectionY * (ta.y + vb.v) / ta.z;
+                    quad[1].x = SCREEN_CENTERX + projectionX * (ta.x + vb.u) / ta.z;
+                    quad[1].y = SCREEN_CENTERY - projectionY * (ta.y + vb.v) / ta.z;
+                    quad[2].x = SCREEN_CENTERX + projectionX * (ta.x - vb.u) / ta.z;
+                    quad[2].y = SCREEN_CENTERY - projectionY * (ta.y - vb.v) / ta.z;
+                    quad[3].x = SCREEN_CENTERX + projectionX * (ta.x + vb.u) / ta.z;
+                    quad[3].y = SCREEN_CENTERY - projectionY * (ta.y - vb.v) / ta.z;
+                    quad[0].u = va.u - vc.u;
+                    quad[0].v = va.v - vc.v;
+                    quad[1].u = va.u + vc.u;
+                    quad[1].v = va.v - vc.v;
+                    quad[2].u = va.u - vc.u;
+                    quad[2].v = va.v + vc.v;
+                    quad[3].u = va.u + vc.u;
+                    quad[3].v = va.v + vc.v;
+                    if (face->flag == FACE_FLAG_TEXTURED_C)
+                        DrawTexturedFace(quad, spriteSheetID);
+                    else
+                        DrawTexturedFaceBlended(quad, spriteSheetID);
+                }
+                break;
+            }
+#else
             case FACE_FLAG_TEXTURED_C:
                 if (vertexBufferT[face->a].z > 0) {
                     // [face->a].uv == sprite center
@@ -943,10 +967,17 @@ void Draw3DScene(int spriteSheetID)
                     DrawTexturedFaceBlended(quad, spriteSheetID);
                 }
                 break;
+#endif
             case FACE_FLAG_3DSPRITE:
+#if RETRO_PLATFORM == RETRO_PS1
+                if (PS1VertexXYZ ta = PS1ExactT(face->a); ta.z > 0) {
+                    int xpos = SCREEN_CENTERX + projectionX * ta.x / ta.z;
+                    int ypos = SCREEN_CENTERY - projectionY * ta.y / ta.z;
+#else
                 if (vertexBufferT[face->a].z > 0) {
                     int xpos = SCREEN_CENTERX + projectionX * vertexBufferT[face->a].x / vertexBufferT[face->a].z;
                     int ypos = SCREEN_CENTERY - projectionY * vertexBufferT[face->a].y / vertexBufferT[face->a].z;
+#endif
 
                     ObjectScript *scriptInfo = &objectScriptList[vertexBuffer[face->a].u];
                     SpriteFrame *frame       = &scriptFrames[scriptInfo->frameListOffset + vertexBuffer[face->b].u];
