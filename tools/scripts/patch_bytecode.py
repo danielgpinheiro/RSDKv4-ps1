@@ -31,7 +31,8 @@ natively, leaving the same temps and table / local writes behind.
 - The special-stage player's faces (Special function 8) -> PS1PlayerFaces / return when PLAYERFACES_FN_SIG matches; its
   running state (Special function 4) -> PS1SpecialPlayerRun / return when SPPLAYERRUN_FN_SIG matches.
 - The special stage's load-time object sort (the tail of Special Setup's startup sub, a bubble sort by y: 13 s in the
-  VM) -> PS1SpecialSetupSort / End at its instruction 81 when the whole sub matches SPSETUP_STARTUP_SIG.
+  VM) -> PS1SpecialSetupSort / End at its instruction 81 when the whole sub matches SPSETUP_STARTUP_SIG; its update sub
+  (palette cycling) -> PS1SpecialSetupUpdate / End when SPSETUP_UPDATE_SIG matches.
 
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected stops the
 build. Already patched files are recognised and left alone.
@@ -5238,6 +5239,42 @@ def patch_stage_sub_tail(bcdir, folder, obj_name, sub, at, sig, op_name):
     return '%s native (%s %s sub %d from instruction %d)' % (op_name, folder, obj_name, sub, at)
 
 
+SPSETUP_UPDATE_SIG = [
+    'Inc GLOBAL[1,0,18]',
+    'IfEqual 0 GLOBAL[1,0,18] 4',
+    'Equal GLOBAL[1,0,18] 0',
+    'Inc GLOBAL[1,0,19]',
+    'And GLOBAL[1,0,19] 7',
+    'endif',
+    'Inc OBJECTVALUE1',
+    'IfEqual 2 OBJECTVALUE1 4',
+    'Equal OBJECTVALUE1 0',
+    'Inc OBJECTVALUE2',
+    'And OBJECTVALUE2 15',
+    'GetTableValue TEMP0 OBJECTVALUE2 17',
+    'SetPaletteEntry 0 142 TEMP0',
+    'Inc OBJECTVALUE3',
+    'And OBJECTVALUE3 15',
+    'GetTableValue TEMP0 OBJECTVALUE3 17',
+    'SetPaletteEntry 0 143 TEMP0',
+    'endif',
+    'IfEqual 4 GLOBAL[1,0,5] 0',
+    'IfGreater 6 OBJECTCONTROLMODE[1,0,2] -1',
+    'Equal GLOBAL[1,0,7] 1',
+    'else',
+    'Equal GLOBAL[1,0,7] 0',
+    'endif',
+    'else',
+    'Equal GLOBAL[1,0,7] 0',
+    'endif',
+    'End',
+    'JT 1 IfEqual @5 @6',
+    'JT 7 IfEqual @17 @18',
+    'JT 18 IfEqual @25 @27',
+    'JT 19 IfGreater @22 @24',
+]
+
+
 def fn_listing(path, f, names, vars_):
     """Stage function f's listing with its jump-table entries (jump_listing)."""
     code, jt, _, _, _, _ = bs.full_code(path)
@@ -5425,7 +5462,9 @@ def main():
                      ('playerfaces', lambda d: patch_stage_function(d, 'Special', 8, PLAYERFACES_FN_SIG, 'PS1PlayerFaces')),
                      ('playerrun', lambda d: patch_stage_function(d, 'Special', 4, SPPLAYERRUN_FN_SIG, 'PS1SpecialPlayerRun')),
                      ('setupsort', lambda d: patch_stage_sub_tail(d, 'Special', 'Special Setup', 2, 81, SPSETUP_STARTUP_SIG,
-                                                                  'PS1SpecialSetupSort'))):
+                                                                  'PS1SpecialSetupSort')),
+                     ('setupupdate', lambda d: patch_stage_sub(d, 'Special Setup', 0, SPSETUP_UPDATE_SIG, 'PS1SpecialSetupUpdate',
+                                                               with_jumps=True))):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 

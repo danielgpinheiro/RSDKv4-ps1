@@ -34,39 +34,59 @@ TypeGroupList objectTypeGroupList[TYPEGROUP_COUNT];
 // so the pool holds 3 x ENTITY_COUNT refs. Two passes (count, then place) give each list the same entities in
 // the same (ascending slot) order as upstream's single pass.
 static short s_ps1TypeGroupPool[3 * ENTITY_COUNT];
+// Only the groups that have members are cleared and placed (a list of them, docs/30 7.2b): the other lists of the 259
+// keep listSize 0 (a script walking one reads no refs); each list gets the same entities in the same order.
+static short s_ps1UsedGroups[TYPEGROUP_COUNT];
+static int s_ps1UsedGroupCount = 0;
+static inline void PS1TypeGroupsClear()
+{
+    for (int i = 0; i < s_ps1UsedGroupCount; ++i) objectTypeGroupList[s_ps1UsedGroups[i]].listSize = 0;
+    s_ps1UsedGroupCount = 0;
+}
+static inline void PS1TypeGroupCount(int group)
+{
+    if (objectTypeGroupList[group].listSize++ == 0)
+        s_ps1UsedGroups[s_ps1UsedGroupCount++] = (short)group;
+}
+static inline void PS1TypeGroupsPlace()
+{
+    int offset = 0;
+    for (int i = 0; i < s_ps1UsedGroupCount; ++i) {
+        TypeGroupList &list = objectTypeGroupList[s_ps1UsedGroups[i]];
+        list.entityRefs     = &s_ps1TypeGroupPool[offset];
+        offset += list.listSize;
+        list.listSize = 0;
+    }
+}
+static inline void PS1TypeGroupsAdd(int slot)
+{
+    Entity *entity = &objectEntityList[slot];
+    if (entity->groupID >= OBJECT_COUNT) {
+        TypeGroupList *listCustom                      = &objectTypeGroupList[entity->groupID];
+        listCustom->entityRefs[listCustom->listSize++] = slot;
+    }
+    TypeGroupList *listType                    = &objectTypeGroupList[entity->type];
+    listType->entityRefs[listType->listSize++] = slot;
+    TypeGroupList *listAll                   = &objectTypeGroupList[GROUP_ALL];
+    listAll->entityRefs[listAll->listSize++] = slot;
+}
 static void PS1BuildTypeGroups()
 {
     static short s_active[ENTITY_COUNT]; // pass 1's qualifying slots, ascending: pass 2 walks only these
     int active = 0;
-    for (int i = 0; i < TYPEGROUP_COUNT; ++i) objectTypeGroupList[i].listSize = 0;
+    PS1TypeGroupsClear();
     for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
         Entity *entity = &objectEntityList[objectEntityPos];
         if (processObjectFlag[objectEntityPos] && entity->objectInteractions) {
             if (entity->groupID >= OBJECT_COUNT)
-                objectTypeGroupList[entity->groupID].listSize++;
-            objectTypeGroupList[entity->type].listSize++;
-            objectTypeGroupList[GROUP_ALL].listSize++;
+                PS1TypeGroupCount(entity->groupID);
+            PS1TypeGroupCount(entity->type);
+            PS1TypeGroupCount(GROUP_ALL);
             s_active[active++] = objectEntityPos;
         }
     }
-    int offset = 0;
-    for (int i = 0; i < TYPEGROUP_COUNT; ++i) {
-        objectTypeGroupList[i].entityRefs = &s_ps1TypeGroupPool[offset];
-        offset += objectTypeGroupList[i].listSize;
-        objectTypeGroupList[i].listSize = 0;
-    }
-    for (int a = 0; a < active; ++a) {
-        int slot       = s_active[a];
-        Entity *entity = &objectEntityList[slot];
-        if (entity->groupID >= OBJECT_COUNT) {
-            TypeGroupList *listCustom                      = &objectTypeGroupList[entity->groupID];
-            listCustom->entityRefs[listCustom->listSize++] = slot;
-        }
-        TypeGroupList *listType                    = &objectTypeGroupList[entity->type];
-        listType->entityRefs[listType->listSize++] = slot;
-        TypeGroupList *listAll                   = &objectTypeGroupList[GROUP_ALL];
-        listAll->entityRefs[listAll->listSize++] = slot;
-    }
+    PS1TypeGroupsPlace();
+    for (int a = 0; a < active; ++a) PS1TypeGroupsAdd(s_active[a]);
     objectEntityPos = ENTITY_COUNT; // as upstream's loops leave it
 }
 // The same lists from a candidate slot list (ascending; ProcessObjects' flagged slots): each list gets the same
@@ -75,36 +95,20 @@ static void PS1BuildTypeGroupsFrom(const short *cand, int n)
 {
     static short s_active[ENTITY_COUNT];
     int active = 0;
-    for (int i = 0; i < TYPEGROUP_COUNT; ++i) objectTypeGroupList[i].listSize = 0;
+    PS1TypeGroupsClear();
     for (int c = 0; c < n; ++c) {
         int slot       = cand[c];
         Entity *entity = &objectEntityList[slot];
         if (processObjectFlag[slot] && entity->objectInteractions) {
             if (entity->groupID >= OBJECT_COUNT)
-                objectTypeGroupList[entity->groupID].listSize++;
-            objectTypeGroupList[entity->type].listSize++;
-            objectTypeGroupList[GROUP_ALL].listSize++;
+                PS1TypeGroupCount(entity->groupID);
+            PS1TypeGroupCount(entity->type);
+            PS1TypeGroupCount(GROUP_ALL);
             s_active[active++] = slot;
         }
     }
-    int offset = 0;
-    for (int i = 0; i < TYPEGROUP_COUNT; ++i) {
-        objectTypeGroupList[i].entityRefs = &s_ps1TypeGroupPool[offset];
-        offset += objectTypeGroupList[i].listSize;
-        objectTypeGroupList[i].listSize = 0;
-    }
-    for (int a = 0; a < active; ++a) {
-        int slot       = s_active[a];
-        Entity *entity = &objectEntityList[slot];
-        if (entity->groupID >= OBJECT_COUNT) {
-            TypeGroupList *listCustom                      = &objectTypeGroupList[entity->groupID];
-            listCustom->entityRefs[listCustom->listSize++] = slot;
-        }
-        TypeGroupList *listType                    = &objectTypeGroupList[entity->type];
-        listType->entityRefs[listType->listSize++] = slot;
-        TypeGroupList *listAll                   = &objectTypeGroupList[GROUP_ALL];
-        listAll->entityRefs[listAll->listSize++] = slot;
-    }
+    PS1TypeGroupsPlace();
+    for (int a = 0; a < active; ++a) PS1TypeGroupsAdd(s_active[a]);
     objectEntityPos = ENTITY_COUNT; // as upstream's loops leave it
 }
 #endif

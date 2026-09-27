@@ -789,6 +789,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1PlayerFaces", 0),
     FunctionInfo("PS1SpecialPlayerRun", 0),
     FunctionInfo("PS1SpecialSetupSort", 0),
+    FunctionInfo("PS1SpecialSetupUpdate", 0),
 #endif
 };
 
@@ -1337,6 +1338,7 @@ enum ScrFunc {
     FUNC_PS1PLAYERFACES,
     FUNC_PS1SPECIALPLAYERRUN,
     FUNC_PS1SPECIALSETUPSORT,
+    FUNC_PS1SPECIALSETUPUPDATE,
 #endif
     FUNC_MAX_CNT
 };
@@ -7828,6 +7830,44 @@ static void PS1SpecialSetupSort()
     ap[1] = a1;
     ap[2] = a2;
 }
+// The special stage's Special Setup update sub (every frame: the ring frame counter, two palette-cycled colours, the
+// player-control flag), natively: one statement per script instruction, in order. Patched in only when the sub and its
+// jump-table entries match SPSETUP_UPDATE_SIG.
+static void PS1SpecialSetupUpdate()
+{
+    int *t = scriptEng.temp, *G = globalVariables;
+    int *v = PS1_OBJ(objectEntityPos).values;
+    auto get = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    G[18]++;
+    if (G[18] == 4) {
+        G[18] = 0;
+        G[19]++;
+        G[19] &= 7;
+    }
+    v[1]++;
+    if (v[1] == 4) {
+        v[1] = 0;
+        v[2]++;
+        v[2] &= 15;
+        get(17, v[2], t[0]);
+        SetPaletteEntryPacked(0, 142, t[0]);
+        v[3]++;
+        v[3] &= 15;
+        get(17, v[3], t[0]);
+        SetPaletteEntryPacked(0, 143, t[0]);
+    }
+    if (G[5] == 0) {
+        if (PS1_OBJ(2).controlMode > -1)
+            G[7] = 1;
+        else
+            G[7] = 0;
+    }
+    else
+        G[7] = 0;
+}
 // The Halfpipe's update sub (Special), natively: one statement per script instruction, in order; its segment build
 // (function 0) runs natively too (PS1HalfpipeSegment). Advances the pipe (value1 += speed; a new segment each 64) and
 // interpolates the camera / pipe tables between segments. Patched in only when the sub and its jump-table entries match
@@ -10368,6 +10408,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALSETUPSORT: // the tail of a sub: End follows
                 opcodeSize = 0;
                 PS1SpecialSetupSort();
+                break;
+            case FUNC_PS1SPECIALSETUPUPDATE:
+                opcodeSize = 0;
+                PS1SpecialSetupUpdate();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
