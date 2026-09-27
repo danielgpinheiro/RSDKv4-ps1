@@ -17,7 +17,8 @@ natively, leaving the same temps and table / local writes behind.
 - Plane switches (GlobalCode objects "Plane Sw V" / "Plane Sw H": their update subs) -> PS1PlaneSwitchV / H / End
   when exactly PLANESWV_SIG / PLANESWH_SIG.
 - The mobile back key's pause (B held; Circle on the PS1 pad) is switched off: patch_back_pause.
-- Scans bounded by upstream's first temp slot (1056) get the PS1's (768): patch_entity_layout.
+- Scans bounded by upstream's first temp slot (1056) get the PS1's (768): patch_entity_layout; clear-all loops bounded
+  by upstream's entity count (1184) get the PS1's (896): patch_clear_all.
 - Ring (GlobalCode object "Ring": its update sub, ~21 VM instructions a frame per ring) -> PS1Ring / End, only
   when the sub is exactly RING_SIG (the instructions RSDKv4/Script.cpp PS1RingUpdate transcribes, constants
   included).
@@ -2359,6 +2360,53 @@ def patch_entity_layout(bcdir):
     if done != {k: v for k, v in ENTITY_BOUND_SITES.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
         sys.exit('ERROR patch_bytecode: entity bound sites %s, expected %s' % (done, ENTITY_BOUND_SITES))
     return 'stage-slot bounds 1056 -> %d: %s' % (PS1_TEMPENTITY_START, ' '.join('%s %d' % kv for kv in sorted(done.items())))
+
+
+UPSTREAM_ENTITY_COUNT, PS1_ENTITY_COUNT = 1184, 0x380
+CLEARALL_SITES = {'Special': 1}
+
+
+def patch_clear_all(bcdir):
+    """Clear-all loops `WLower v 1184 / ResetObjectEntity v 0 0 0 0 / Inc v / loop` (the special stage's Special Finish)
+    -> 896, the PS1's entity count: its slots 0-895 (temp slots included) are all the loop can reset; past them it only
+    reset the blank scratch entity, counted as out-of-range accesses (288 a stage end)."""
+    names, vars_ = bs.tables(3)
+    done = {}
+    for f in sorted(os.listdir(bcdir)):
+        if not f.endswith('.bin'):
+            continue
+        path = os.path.join(bcdir, f)
+        raw = open(path, 'rb').read()
+        own, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        full, _, subs, _, fns, _ = bs.full_code(path)
+        base = len(full) - len(own)
+        starts = sorted({x for t in subs for x in t if base <= x < len(full)} | {c for c, _ in fns if base <= c < len(full)})
+        sites = set()
+        for x in starts:
+            try:
+                ins = instructions(full, x, names, vars_)
+            except (IndexError, KeyError):
+                continue
+            lst = listing(ins)
+            for k, (at, n, ops) in enumerate(ins):
+                if n == 'WLower' and len(ops) == 3 and ops[1][0] == 'var' and ops[2][0] == 'int' and \
+                        ops[2][1] == UPSTREAM_ENTITY_COUNT:
+                    v = lst[k].split()[2]
+                    if lst[k + 1:k + 4] == ['ResetObjectEntity %s 0 0 0 0' % v, 'Inc %s' % v, 'loop']:
+                        sites.add(ops[2][2])
+        for pos in sorted(sites):
+            assert own[pos - base] == UPSTREAM_ENTITY_COUNT
+            own[pos - base] = PS1_ENTITY_COUNT
+            done[f[:-4]] = done.get(f[:-4], 0) + 1
+        if sites:
+            open(path, 'wb').write(encode(own) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    if not done:
+        return 'clear-all loops already %d' % PS1_ENTITY_COUNT
+    if done != {k: v for k, v in CLEARALL_SITES.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
+        sys.exit('ERROR patch_bytecode: clear-all sites %s, expected %s' % (done, CLEARALL_SITES))
+    return 'clear-all loops 1184 -> %d: %s' % (PS1_ENTITY_COUNT, ' '.join('%s %d' % kv for kv in sorted(done.items())))
 
 
 def patch_player_input(bcdir):
@@ -5357,6 +5405,7 @@ def main():
                      ('earthquake', lambda d: patch_stage_sub(d, 'Earthquake', 0, EARTHQUAKE_SIG, 'PS1Earthquake',
                                                               with_jumps=True, calls=(46, 50))),
                      ('entitylayout', patch_entity_layout),
+                     ('clearall', patch_clear_all),
                      ('backpause', patch_back_pause),  # before playerinput: its signature has the patched If
                      ('playerinput', patch_player_input),
                      ('cledge', lambda d: patch_stage_sub(d, 'C Ledge', 0, CLEDGE_SIG, 'PS1CLedge', with_jumps=True)),

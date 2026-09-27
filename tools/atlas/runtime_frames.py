@@ -44,6 +44,10 @@ RUNTIME = {
     # the sheet's top-left 232 x 67 (134 wide missed the late spin frames: face misses at frame 900, docs/30 phase 7).
     'Ring': {'add': [('Special/Objects.gif', 0, 0, 232, 67)]},
     'Bomb': {'add': [('Special/Objects.gif', 0, 0, 232, 67)]},
+    # Special: the checkpoint gates are TEXTURED_C faces too (Special function 11): U centres from table 16929 by frame
+    # (165..330), V 256, extent 16 -> x 149..346, y 240..272 (missed at the first checkpoint: docs/30 phase 7).
+    'Checkpoint': {'add': [('Special/Objects.gif', 149, 240, 198, 33)]},
+    'Checkpoint 2PVS': {'add': [('Special/Objects.gif', 149, 240, 198, 33)]},
     # Special: the emerald line reads x 403 when specialStage.emeralds > 127 (the startup only saw 0).
     'Special Finish': {'add': [('Special/Objects.gif', 403, 311, 80, 16)]},
     # LSelect: the text menus (DrawMenu -> DrawTextMenu: 8 x 8 characters at ((c & 15) * 8, (c >> 4) * 8 + 0 | 128) of
