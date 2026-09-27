@@ -20,6 +20,10 @@ Vertex vertexBufferT[VERTEXBUFFER_SIZE];
 #endif
 
 DrawListEntry3D drawList3D[FACEBUFFER_SIZE];
+#if RETRO_PLATFORM == RETRO_PS1
+// The sorted draw list Draw3DScene walks: drawList3D, or the one-pass sort's scratch (no copy back; docs/30 7.2b).
+const DrawListEntry3D *g_ps1DrawOrder = drawList3D;
+#endif
 
 int projectionX = 136;
 int projectionY = 160;
@@ -491,7 +495,7 @@ int PS1FadedFaces(int i, int count)
     const uint32_t fog = fogColor, fogRB = ((fog >> 19) & 0x1F) | ((fog >> 3) & 0x1F) << 16, fogG = (fog >> 11) & 0x1F;
     const int fogMax = fogStrength, xMax = SCREEN_XSIZE, yMax = SCREEN_YSIZE; // locals: the chain stores can't alias them
     for (; i < count; ++i) {
-        const Face &f = faceBuffer[drawList3D[i].faceID];
+        const Face &f = faceBuffer[g_ps1DrawOrder[i].faceID];
         if (f.flag != FACE_FLAG_FADED)
             break;
         uint32_t pa = g_ps1Proj[f.a].u, pb = g_ps1Proj[f.b].u, pc = g_ps1Proj[f.c].u, pd = g_ps1Proj[f.d].u;
@@ -499,7 +503,7 @@ int PS1FadedFaces(int i, int count)
         if (((pa + 1024) | (pb + 1024) | (pc + 1024) | (pd + 1024)) & 0xF800)
             break;
         ++fast;
-        int fogStr = (drawList3D[i].depth - 0x8000) >> 8;
+        int fogStr = (g_ps1DrawOrder[i].depth - 0x8000) >> 8;
         if (fogStr < 0)
             fogStr = 0;
         if (fogStr > fogMax)
@@ -700,7 +704,7 @@ void PS1SortDrawList3DCoarse(DrawListEntry3D *list, int count, int lo, int hi)
     }
     DrawListEntry3D *dst = g_ps1Scene3DScratch;
     for (int i = 0; i < count; ++i) dst[counts[((unsigned)hi - (unsigned)list[i].depth) >> shift]++] = list[i];
-    for (int i = 0; i < count; ++i) list[i] = dst[i];
+    g_ps1DrawOrder = dst; // Draw3DScene reads the scratch (no copy back)
 }
 #endif
 void PS1SortDrawList3D(DrawListEntry3D *list, int count)
@@ -746,6 +750,7 @@ void Sort3DDrawList()
     // PS1: the bubble sort below is stable and descending, so any stable descending sort gives the same order: a radix
     // sort (docs/30 phase 7; the half-pipe's 742 faces took 4,266 hblanks bubbled, 220 merge-sorted). Identical order
     // checked on the host: tools/scene3d/sort3d_check.sh.
+    g_ps1DrawOrder = drawList3D; // the exact sort (and a list under 2 faces) stays in place
     if (g_ps1Sort3DExact)
         PS1SortDrawList3DRange(drawList3D, faceCount, lo, hi);
     else
@@ -804,7 +809,11 @@ void Draw3DScene(int spriteSheetID)
 #endif
     Vertex quad[4];
     for (int i = 0; i < faceCount; ++i) {
+#if RETRO_PLATFORM == RETRO_PS1
+        Face *face = &faceBuffer[g_ps1DrawOrder[i].faceID];
+#else
         Face *face = &faceBuffer[drawList3D[i].faceID];
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
         if (face->flag == FACE_FLAG_FADED) { // the fast path: the run of faded faces whose corners the GTE projected
             uint32_t tf = PS1Hblanks();
@@ -920,8 +929,13 @@ void Draw3DScene(int spriteSheetID)
 #endif
 
                     int fogStr = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+                    if ((g_ps1DrawOrder[i].depth - 0x8000) >> 8 >= 0)
+                        fogStr = (g_ps1DrawOrder[i].depth - 0x8000) >> 8;
+#else
                     if ((drawList3D[i].depth - 0x8000) >> 8 >= 0)
                         fogStr = (drawList3D[i].depth - 0x8000) >> 8;
+#endif
                     if (fogStr > fogStrength)
                         fogStr = fogStrength;
 

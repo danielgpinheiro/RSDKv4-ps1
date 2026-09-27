@@ -205,13 +205,16 @@ void ProcessObjects()
         sy4 = yScrollOffset + OBJECT_BORDER_Y4;
     };
     bounds();
-    for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
-        processObjectFlag[objectEntityPos] = false;
-        Entity *entity = &objectEntityList[objectEntityPos];
+    // The slot index is a local (the global objectEntityPos, which scripts read, is set only around their runs and left
+    // at ENTITY_COUNT as upstream's loop leaves it): no global load / store for each of the 896 slots (docs/30 7.2b).
+    Entity *entity = objectEntityList;
+    for (int pos = 0; pos < ENTITY_COUNT; ++pos, ++entity) {
+        processObjectFlag[pos] = false;
         // A blank slot does nothing below (the priority switch only decides whether a typed object runs; its
         // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/28).
         if (entity->type == OBJ_TYPE_BLANKOBJECT)
             continue;
+        objectEntityPos = pos;
         int x = entity->xpos >> 16;
         int y = entity->ypos >> 16;
         bool flag = false;
@@ -230,9 +233,9 @@ void ProcessObjects()
             case PRIORITY_BOUNDS_SMALL: flag = x > sx3 && x < sx4 && y > sy3 && y < sy4; break;
             default: break;
         }
-        processObjectFlag[objectEntityPos] = flag;
+        processObjectFlag[pos] = flag;
         if (flag)
-            s_ps1Processed[processed++] = objectEntityPos;
+            s_ps1Processed[processed++] = pos;
 
         if (flag && entity->type > OBJ_TYPE_BLANKOBJECT) {
             ObjectScript *scriptInfo = &objectScriptList[entity->type];
@@ -252,9 +255,10 @@ void ProcessObjects()
 #endif
 
             if (entity->drawOrder < DRAWLAYER_COUNT)
-                drawListEntries[entity->drawOrder].entityRefs[drawListEntries[entity->drawOrder].listSize++] = objectEntityPos;
+                drawListEntries[entity->drawOrder].entityRefs[drawListEntries[entity->drawOrder].listSize++] = pos;
         }
     }
+    objectEntityPos = ENTITY_COUNT;
 
     PS1BuildTypeGroupsFrom(s_ps1Processed, processed);
 }
