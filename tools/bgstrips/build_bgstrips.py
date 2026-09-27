@@ -54,7 +54,9 @@ def load_tiles(sdir):
     """Tile pixels (1024 x 256 bytes, the fixed-up GIF: 0 = transparent) and chunk tiles."""
     v = open(os.path.join(sdir, '16x16Tiles.vram'), 'rb').read()
     # a palette-only file (a stage with no tile layer: tools/tiles/convert_tiles.py) has no pixels to strip
-    pages = np.frombuffer(v[4 + 768:], np.uint8).reshape(4, 256, 256) if len(v) > 4 + 768 else np.zeros((4, 256, 256), np.uint8)
+    # pages stored up to their last non-empty tile row (convert_tiles.py): the rest is zeros
+    raw = v[4 + 768:] + bytes(4 * 65536 - len(v[4 + 768:])) if len(v) > 4 + 768 else bytes(4 * 65536)
+    pages = np.frombuffer(raw, np.uint8).reshape(4, 256, 256)
     gfx = np.zeros((1024, 16, 16), np.uint8)
     for t in range(1024):
         p, n = divmod(t, 256)

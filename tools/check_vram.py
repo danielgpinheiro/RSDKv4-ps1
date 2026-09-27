@@ -26,7 +26,10 @@ def main():
     pal = t[4:4 + 768]
     if len(t) == 4 + 768:
         print('tile pages: none (palette-only file: the stage draws no tile layer)')
-    pages = np.frombuffer(t[4 + 768:], '<u2').reshape(-1, 256, 128)
+    raw = t[4 + 768:]
+    if raw: # stored up to the last non-empty tile row (tools/tiles/convert_tiles.py): the console uploads zeros after it
+        raw += bytes(4 * 65536 - len(raw))
+    pages = np.frombuffer(raw, '<u2').reshape(-1, 256, 128)
     for p in range(len(pages)):
         x, y = (9 + 2 * (p & 1)) * 64, (p >> 1) * 256
         same = np.array_equal(vram[y:y + 256, x:x + 128], pages[p])

@@ -3363,8 +3363,158 @@ void ParseScriptFile(char *scriptName, int scriptID)
 }
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+// Script images (docs/30 phase 9.3, golden rule): what LoadBytecode leaves in the PS1's script arrays after a stage's
+// bytecode (GlobalCode + the stage's own) is written at build time by the host build of this same code
+// (tools/rsdkmanifest: right after the stage's LoadBytecode, before any startup writes into the tables) as
+// Data/Stages/<stage>/Scripts.ps1, and the console reads it straight into the arrays: no bytecode decoding at a stage load
+// (~50 vblanks a zone), and GlobalCode.bin isn't read. The stage loads are transfer-bound, so the arrays are stored in
+// runs (95 % of the code slots fit a byte, 99 % of the jump entries 16 bits): an int16 image was 1.7x the bytecode and
+// saved nothing. File: "PSC2", then int32 code slots, jump table entries, big values, object scripts (from id 1),
+// functions; the code slots and the jump table as runs (u16 header: bit 15 = wide, bits 0-14 = count; then count u8 /
+// int16 slots, or count u16 / int32 entries, each run padded to 2 bytes); the big-value table (pos, value); each object
+// script's 3 ScriptPtrs; each function's ScriptPtr (all little endian, as the engine's own arrays). Expanding the runs is
+// a copy loop (~2 vblanks), not the bytecode's per-byte decode.
+static int s_ps1ScriptEnd   = 1; // one past the last object script id LoadBytecode filled (since ClearScriptData)
+static int s_ps1FunctionEnd = 0; // one past the last function it filled
+static bool s_ps1ImageLoaded = false;
+volatile uint32_t g_ps1ScriptImages = 0, g_ps1ScriptImageBad = 0; // images loaded / refused (GDB)
+volatile uint32_t g_ps1ScriptImageOn = 1; // GDB A/B: 0 = decode the bytecode (initialised data: set before the game starts)
+static void PS1ScriptImagePath(char *path)
+{
+    StrCopy(path, "Data/Stages/");
+    StrAdd(path, stageList[activeStageList][stageListPosition].folder);
+    StrAdd(path, "/Scripts.ps1");
+}
+#if defined(RETRO_PS1_HOST_TOOL)
+// Runs of narrow (fits `narrow` unsigned bytes) / wide values: see the format above.
+template <typename T> static bool PS1WriteRuns(FILE *f, const T *v, int count, uint32_t narrowMax)
+{
+    for (int i = 0; i < count;) {
+        bool wide = (uint32_t)v[i] > narrowMax || v[i] < 0;
+        int n     = 1;
+        while (i + n < count && n < 0x7FFF && (((uint32_t)v[i + n] > narrowMax || v[i + n] < 0) == wide)) ++n;
+        uint16_t h = (uint16_t)(n | (wide ? 0x8000 : 0));
+        if (fwrite(&h, 2, 1, f) != 1)
+            return false;
+        for (int k = 0; k < n; ++k) {
+            T x = v[i + k];
+            if (wide ? fwrite(&x, sizeof(T), 1, f) != 1 : (narrowMax == 0xFF ? fputc((int)x, f) == EOF : fwrite(&x, 2, 1, f) != 1))
+                return false;
+        }
+        if (!wide && narrowMax == 0xFF && (n & 1) && fputc(0, f) == EOF) // pad to 2 bytes
+            return false;
+        i += n;
+    }
+    return true;
+}
+static void PS1WriteScriptImage()
+{
+    char path[0x80];
+    PS1ScriptImagePath(path);
+    FILE *f = fopen(path, "wb");
+    int head[5] = { scriptCodePos, jumpTablePos, s_ps1ScriptBigCount, s_ps1ScriptEnd - 1, s_ps1FunctionEnd };
+    bool ok = f && fwrite("PSC2", 1, 4, f) == 4 && fwrite(head, 4, 5, f) == 5
+              && PS1WriteRuns<short>(f, scriptCode.slot, scriptCodePos, 0xFF)
+              && PS1WriteRuns<int>(f, jumpTable, jumpTablePos, 0xFFFF)
+              && fwrite(s_ps1ScriptBig, sizeof(PS1ScriptBig), s_ps1ScriptBigCount, f) == (size_t)s_ps1ScriptBigCount;
+    for (int s = 1; ok && s < s_ps1ScriptEnd; ++s) {
+        const ObjectScript &o = objectScriptList[s];
+        ok = fwrite(&o.eventUpdate, sizeof(ScriptPtr), 1, f) == 1 && fwrite(&o.eventDraw, sizeof(ScriptPtr), 1, f) == 1
+             && fwrite(&o.eventStartup, sizeof(ScriptPtr), 1, f) == 1;
+    }
+    for (int fn = 0; ok && fn < s_ps1FunctionEnd; ++fn) ok = fwrite(&scriptFunctionList[fn].ptr, sizeof(ScriptPtr), 1, f) == 1;
+    if (f)
+        fclose(f);
+    if (!ok) {
+        perror(path);
+        exit(1);
+    }
+}
+#else
+// The runs (see above) expanded into `dst` in place, no buffer: a narrow run's n values (u8 code slots / u16 jump entries)
+// are read into the upper half of their own span, then widened from the front (value k lands at bytes before the
+// unread value k + 1). An odd u8 run's pad byte lands in the next slot, which the next run (or the cleared tail) owns.
+template <typename T> static bool PS1ReadRuns(T *dst, int count, bool bytes)
+{
+    for (int i = 0; i < count;) {
+        uint16_t h;
+        FileRead(&h, 2);
+        int n = h & 0x7FFF;
+        if (!n || i + n > count)
+            return false;
+        if (h & 0x8000) {
+            FileRead(&dst[i], n * (int)sizeof(T));
+        }
+        else if (bytes) {
+            uint8_t *src = (uint8_t *)&dst[i] + n * sizeof(T) - n;
+            FileRead(src, n + (n & 1));
+            for (int k = 0; k < n; ++k) dst[i + k] = (T)src[k];
+        }
+        else {
+            uint8_t *src = (uint8_t *)&dst[i] + n * sizeof(T) - 2 * n;
+            FileRead(src, 2 * n);
+            for (int k = 0; k < n; ++k) dst[i + k] = (T)(src[2 * k] | src[2 * k + 1] << 8);
+        }
+        i += n;
+    }
+    return true;
+}
+
+// The stage's image, if the disc has one: loads the whole script state (GlobalCode's and the stage's), and the stage's own
+// LoadBytecode call that follows does nothing. Any size past the PS1 arrays refuses it (decoded as before).
+static bool PS1LoadScriptImage()
+{
+    if (s_ps1ImageLoaded)
+        return true;
+    if (!g_ps1ScriptImageOn)
+        return false;
+    char path[0x80];
+    PS1ScriptImagePath(path);
+    FileInfo info;
+    if (!LoadFile(path, &info))
+        return false;
+    char tag[4];
+    int head[5];
+    FileRead(tag, 4);
+    FileRead(head, sizeof(head));
+    const int codePos = head[0], jumpPos = head[1], bigCount = head[2], scripts = head[3], fns = head[4];
+    if (memcmp(tag, "PSC2", 4) || (uint)codePos > SCRIPTCODE_COUNT - 1 || (uint)jumpPos > JUMPTABLE_COUNT - 1
+        || (uint)bigCount > PS1_SCRIPTBIG_COUNT || (uint)scripts > OBJECT_COUNT - 1 || (uint)fns > FUNCTION_COUNT
+        || !PS1ReadRuns<short>(scriptCode.slot, codePos, true) || !PS1ReadRuns<int>(jumpTable, jumpPos, false)) {
+        g_ps1ScriptImageBad = g_ps1ScriptImageBad + 1;
+        CloseFile();
+        return false; // (the arrays are cleared again by the next stage load; this one decodes)
+    }
+    FileRead(s_ps1ScriptBig, bigCount * (int)sizeof(PS1ScriptBig));
+    for (int s = 1; s <= scripts; ++s) {
+        ScriptPtr p[3];
+        FileRead(p, sizeof(p));
+        objectScriptList[s].eventUpdate  = p[0];
+        objectScriptList[s].eventDraw    = p[1];
+        objectScriptList[s].eventStartup = p[2];
+    }
+    for (int fn = 0; fn < fns; ++fn) FileRead(&scriptFunctionList[fn].ptr, sizeof(ScriptPtr));
+    CloseFile();
+    scriptCodePos       = codePos;
+    jumpTablePos        = jumpPos;
+    s_ps1ScriptBigCount = bigCount;
+    PS1ScriptBigChanged();
+    s_ps1ScriptEnd   = scripts + 1;
+    s_ps1FunctionEnd = fns;
+    s_ps1ImageLoaded = true;
+    g_ps1ScriptImages = g_ps1ScriptImages + 1;
+    return true;
+}
+#endif
+#endif
+
 void LoadBytecode(int stageListID, int scriptID)
 {
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)
+    if (PS1LoadScriptImage())
+        return;
+#endif
     char scriptPath[0x40];
     switch (stageListID) {
         case STAGELIST_PRESENTATION:
@@ -3623,9 +3773,17 @@ void LoadBytecode(int stageListID, int scriptID)
             PS1FixScriptPtr(&script->eventStartup);
         }
         for (int f = 0; f < functionCount; ++f) PS1FixScriptPtr(&scriptFunctionList[f].ptr);
+        if (scriptID + scriptCount > s_ps1ScriptEnd)
+            s_ps1ScriptEnd = scriptID + scriptCount;
+        if (functionCount > s_ps1FunctionEnd)
+            s_ps1FunctionEnd = functionCount;
 #endif
 
         CloseFile();
+#if defined(RETRO_PS1_HOST_TOOL)
+        if (stageListID != 4) // the stage's own bytecode: the state the console's image must hold
+            PS1WriteScriptImage();
+#endif
     }
 }
 
@@ -3641,6 +3799,9 @@ void ClearScriptData()
     memset(&scriptCode, 0, sizeof(scriptCode));
     s_ps1ScriptBigCount = 0;
     PS1ScriptBigChanged();
+    s_ps1ScriptEnd   = 1;
+    s_ps1FunctionEnd = 0;
+    s_ps1ImageLoaded = false;
 #else
     memset(scriptCode, 0, sizeof(scriptCode));
 #endif

@@ -182,9 +182,64 @@ int main(int argc, char **argv)
                         }
                         fclose(pf);
                     };
-                    pack("128x128Tiles.bin", "128x128Tiles.ps1", "PCT1", tiles128x128.ps1Tile,
-                         sizeof(tiles128x128.ps1Tile) + sizeof(tiles128x128.ps1Collision));
-                    pack("CollisionMasks.bin", "CollisionMasks.ps1", "PCM1", collisionMasks, sizeof(collisionMasks));
+                    // up to the last non-zero byte (docs/30 9.3: the special stage's 96 KB are 92 KB of zeros); the
+                    // console zero-fills the rest (RSDKv4/Scene.cpp PS1LoadStagePacked)
+                    size_t ctSize = sizeof(tiles128x128.ps1Tile) + sizeof(tiles128x128.ps1Collision);
+                    const uint8_t *ct = (const uint8_t *)tiles128x128.ps1Tile;
+                    while (ctSize > 4 && !ct[ctSize - 1]) --ctSize;
+                    ctSize = (ctSize + 3) & ~(size_t)3;
+                    pack("128x128Tiles.bin", "128x128Tiles.ps1", "PCT1", tiles128x128.ps1Tile, ctSize);
+                    // Path B as the tiles where it differs from path A ("PCM2", RSDKv4/Scene.cpp PS1LoadCollisionMasks):
+                    // raw both paths ("PCM1") only if that were smaller.
+                    std::vector<uint8_t> diff;
+                    uint32_t n = 0;
+                    const CollisionMasks &A = collisionMasks[0], &B = collisionMasks[1];
+                    for (int t = 0; t < TILE_COUNT; ++t) {
+                        bool same = !memcmp(&A.floorMasks[t * TILE_SIZE], &B.floorMasks[t * TILE_SIZE], TILE_SIZE)
+                                    && !memcmp(&A.lWallMasks[t * TILE_SIZE], &B.lWallMasks[t * TILE_SIZE], TILE_SIZE)
+                                    && !memcmp(&A.rWallMasks[t * TILE_SIZE], &B.rWallMasks[t * TILE_SIZE], TILE_SIZE)
+                                    && !memcmp(&A.roofMasks[t * TILE_SIZE], &B.roofMasks[t * TILE_SIZE], TILE_SIZE)
+                                    && A.angles[t] == B.angles[t] && A.flags[t] == B.flags[t];
+                        if (same)
+                            continue;
+                        ++n;
+                        diff.push_back(t & 0xFF), diff.push_back(t >> 8);
+                        for (const sbyte *m : { B.floorMasks, B.lWallMasks, B.rWallMasks, B.roofMasks })
+                            diff.insert(diff.end(), (const uint8_t *)&m[t * TILE_SIZE], (const uint8_t *)&m[t * TILE_SIZE] + TILE_SIZE);
+                        diff.insert(diff.end(), (const uint8_t *)&B.angles[t], (const uint8_t *)&B.angles[t] + 4);
+                        diff.push_back(B.flags[t]);
+                    }
+                    if (4 + diff.size() < sizeof(CollisionMasks)) {
+                        std::vector<uint8_t> blob((const uint8_t *)&A, (const uint8_t *)&A + sizeof(CollisionMasks));
+                        blob.insert(blob.end(), (const uint8_t *)&n, (const uint8_t *)&n + 4);
+                        blob.insert(blob.end(), diff.begin(), diff.end());
+                        pack("CollisionMasks.bin", "CollisionMasks.ps1", "PCM2", blob.data(), blob.size());
+                        // self-check: path B rebuilt as the console does (copy of A, the records patched) == the engine's
+                        static CollisionMasks rb;
+                        memcpy(&rb, &A, sizeof(rb));
+                        for (size_t o = 0; o < diff.size(); o += 2 + 4 * TILE_SIZE + 5) {
+                            int t = diff[o] | diff[o + 1] << 8;
+                            memcpy(&rb.floorMasks[t * TILE_SIZE], &diff[o + 2], TILE_SIZE);
+                            memcpy(&rb.lWallMasks[t * TILE_SIZE], &diff[o + 2 + TILE_SIZE], TILE_SIZE);
+                            memcpy(&rb.rWallMasks[t * TILE_SIZE], &diff[o + 2 + 2 * TILE_SIZE], TILE_SIZE);
+                            memcpy(&rb.roofMasks[t * TILE_SIZE], &diff[o + 2 + 3 * TILE_SIZE], TILE_SIZE);
+                            memcpy(&rb.angles[t], &diff[o + 2 + 4 * TILE_SIZE], 4);
+                            rb.flags[t] = diff[o + 2 + 4 * TILE_SIZE + 4];
+                        }
+                        if (memcmp(&rb, &B, sizeof(rb))) {
+                            fprintf(stderr, "ERROR %s: CollisionMasks PCM2 does not rebuild path B\n", stageList[list][pos].folder);
+                            return 1;
+                        }
+                    }
+                    if (const char *dd = getenv("PS1_MASK_DUMP_DIR")) { // raw arrays for the console A/B (docs/30 9.3)
+                        std::string dp = std::string(dd) + "/" + stageList[list][pos].folder + ".masks";
+                        if (FILE *df = fopen(dp.c_str(), "wb")) {
+                            fwrite(collisionMasks, 1, sizeof(collisionMasks), df);
+                            fclose(df);
+                        }
+                    }
+                    else
+                        pack("CollisionMasks.bin", "CollisionMasks.ps1", "PCM1", collisionMasks, sizeof(collisionMasks));
                 }
                 std::string path = out + "/" + stageList[list][pos].folder + ".txt";
                 FILE *f          = fopen(path.c_str(), written.count(path) ? "a" : "w");

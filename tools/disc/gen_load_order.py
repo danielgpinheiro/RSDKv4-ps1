@@ -7,8 +7,9 @@ file when it follows on the disc. Order:
   1. the boot's files, in the order the natural build opens them (BOOT_TRACE: `OPEN <path>` lines from a GDB trace of
      fopen, tools/disc/boot_trace.txt), up to the first stage load;
   2. per stage (GameConfig's lists: presentation, regular, special, bonus; a folder once), what LoadStageFiles opens,
-     in its order (traced on Special and Zone01, docs/30): StageConfig.bin, the stage-local copies of GameConfig.bin and
-     GlobalCode.bin (tools/disc/stage_local.py, phase 9.2), PS1Sfx.bin, Bytecode/<folder>.bin, 16x16Tiles.vram, the Sonic
+     in its order (traced on Special and Zone01, docs/30): StageConfig.bin, the stage-local copy of GameConfig.bin
+     (tools/disc/stage_local.py, phase 9.2), the script image Scripts.ps1 (phase 9.3; after the SFX bank when the stage
+     doesn't load the global scripts), PS1Sfx.bin, 16x16Tiles.vram, the Sonic
      atlas + pictures, BGStrips.bin, CollisionMasks.ps1, Backgrounds.bin, 128x128Tiles.ps1, the acts, the local copies
      of the players' animations and the palettes (the startups open them); then the other characters' atlases / strips (a Tails load
      skips forward over Sonic's);
@@ -63,12 +64,19 @@ def main():
             continue
         local = [s + 'PS1Local/' + os.path.basename(p) for p in stage_local.shared_files(iso, manifests, folder)]
         add(s + 'StageConfig.bin')
-        early = ('GameConfig.bin', 'GlobalCode.bin') # read before the SFX bank; the animations / palettes by the startups
+        early = ('GameConfig.bin',) # read before the SFX bank; the animations / palettes by the startups
         for p in local:
             if os.path.basename(p) in early:
                 add(p)
+        # the script image (phase 9.3) is read at the first LoadBytecode: the global one, before the SFX bank, when the
+        # stage loads the global scripts; else the stage's own, after it
+        globals_ = open(os.path.join(data, 'Stages', folder, 'StageConfig.bin'), 'rb').read(1) == b'\x01'
+        if globals_:
+            add(s + 'Scripts.ps1')
         add(s + 'PS1Sfx.bin')
-        add('Bytecode/%s.bin' % folder)
+        if not globals_:
+            add(s + 'Scripts.ps1')
+        # Bytecode/<folder>.bin: not read with an image (phase 9.3); left to the rest of the disc
         add(s + '16x16Tiles.vram')
         add('Data/Sprites/Atlas/%s.atl' % folder)
         add('Data/Sprites/Atlas/%s.pic' % folder)

@@ -30,11 +30,14 @@ bool PS1TileSetLoad(const char *folder, uint8_t *pal768) {
         return false;
     }
     uint8_t hdr[4];
-    // BE 256 x 1024, or 256 x 0: the palette only (a stage that never draws a tile layer, tools/tiles/convert_tiles.py)
-    bool ok = fread(hdr, 1, 4, f) == 4 && hdr[0] == 1 && hdr[1] == 0 && (hdr[2] == 4 || hdr[2] == 0) && hdr[3] == 0;
+    // BE 256 x height: the lines stored (tools/tiles/convert_tiles.py): up to the last non-empty tile row, zeros after it
+    // (uploaded, not read: docs/30 9.3); 0 = the palette only (a stage that never draws a tile layer)
+    bool ok    = fread(hdr, 1, 4, f) == 4 && hdr[0] == 1 && hdr[1] == 0;
+    int height = hdr[2] << 8 | hdr[3];
+    ok      = ok && !(height & 15) && height <= 256 * PAGES;
     ok = ok && fread(pal768, 1, 768, f) == 768;
     for (int i = 0; i < 1024 / 8; ++i) g_ps1TileSolid[i] = 0;
-    if (ok && hdr[2] == 0) {
+    if (ok && height == 0) {
         fclose(f);
         g_ps1TileSetBytes = 0;
         g_ps1TileSetLoads = g_ps1TileSetLoads + 1;
@@ -49,7 +52,12 @@ bool PS1TileSetLoad(const char *folder, uint8_t *pal768) {
             int16_t y = (int16_t)((PS1_TILE_PAGE_Y + (p >> 1)) * 256);
             for (int line = 0; ok && line < 256; line += STAGING_LINES) {
                 size_t sz = STAGING_LINES * PAGE_HW * 2;
-                ok = fread(staging, 1, sz, f) == sz;
+                int stored = height - (p * 256 + line); // lines of this chunk in the file
+                stored     = stored < 0 ? 0 : stored > STAGING_LINES ? STAGING_LINES : stored;
+                size_t rd  = (size_t)stored * PAGE_HW * 2;
+                ok = !rd || fread(staging, 1, rd, f) == rd;
+                if (ok && rd < sz)
+                    __builtin_memset((uint8_t *)staging + rd, 0, sz - rd);
                 if (ok) { // mark the tiles of these 4 tile rows that have a non-zero texel
                     const uint8_t *px = (const uint8_t *)staging;
                     for (int tr = 0; tr < STAGING_LINES / 16; ++tr)
@@ -66,7 +74,7 @@ bool PS1TileSetLoad(const char *folder, uint8_t *pal768) {
                 }
                 if (ok)
                     g_ps1GPU->uploadToVRAM(staging, psyqo::Rect{{x, (int16_t)(y + line)}, {PAGE_HW, STAGING_LINES}});
-                bytes += sz;
+                bytes += rd;
             }
         }
         psyqo_free(staging);

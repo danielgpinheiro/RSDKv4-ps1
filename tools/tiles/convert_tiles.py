@@ -12,6 +12,9 @@ What upstream LoadStageGIFFile does at runtime, done here once:
 768-byte palette (the GIF's, 256 x RGB), then 4 texture pages of 256x256 8-bit texels (65,536 B
 each, row-major); page p holds tiles 256p..256p+255 in a 16x16 grid, tile n at texel
 (16*(n%16), 16*(n/16)): one DMA per page (128 halfwords x 256 lines), no CPU re-pack at runtime.
+The height field is the number of lines stored (docs/30 phase 9.3): the pages end at the last 16-line tile row with a
+non-zero texel (the unused tile slots are empty: Zone01's last 120 KB); the loader uploads zeros for the rest, so VRAM
+holds exactly the full pages (animated tiles copy from those slots).
 Self-check: every page is unpacked back to the tile strip and compared with the fixed-up GIF pixels.
 A stage that never draws a tile layer (every Act*.bin's active layers are 9 and no script of the stage writes
 stage.activeLayer with anything but the constant 9: the special stage) gets the header (height 0) + palette only:
@@ -103,13 +106,18 @@ def main():
         pages = pack(px)
         if not np.array_equal(unpack(pages), px):
             sys.exit('self-check failed: %s' % gif)
-        blob = struct.pack('>HH', 256, 256 * PAGES) + pal + pages.tobytes()
-        back = np.frombuffer(blob[4 + 768:], np.uint8).reshape(PAGES, 256, 256)
-        if blob[4:4 + 768] != pal or not np.array_equal(unpack(back), px):
+        data = pages.tobytes()
+        rows = [r for r in range(PAGES * 16) if any(data[r * 4096:(r + 1) * 4096])]
+        height = 16 * (rows[-1] + 1 if rows else 1)
+        blob = struct.pack('>HH', 256, height) + pal + data[:height * 256]
+        full = blob[4 + 768:] + bytes(PAGES * 65536 - height * 256)
+        back = np.frombuffer(full, np.uint8).reshape(PAGES, 256, 256)
+        if blob[4:4 + 768] != pal or not np.array_equal(unpack(back), px) or full != data:
             sys.exit('self-check (file) failed: %s' % gif)
         open(os.path.join(dest, '16x16Tiles.vram'), 'wb').write(blob)
         n += 1
-    print('tiles: %d stages -> 16x16Tiles.vram (%d bytes each), self-check exact' % (n, 4 + 768 + PAGES * 65536))
+    print('tiles: %d stages -> 16x16Tiles.vram (up to %d bytes: pages end at the last non-empty tile row), self-check exact'
+          % (n, 4 + 768 + PAGES * 65536))
 
 
 if __name__ == '__main__':

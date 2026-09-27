@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stage-local copies of the shared files a stage load opens (docs/30 phase 9.2).
 
-A stage load reads a few files that live elsewhere on the disc: Data/Game/GameConfig.bin and Bytecode/GlobalCode.bin (when
-its StageConfig loads the global scripts: first byte 1), the players' animation files (Data/Animations/*.ani, opened by
+A stage load reads a few files that live elsewhere on the disc: Data/Game/GameConfig.bin (when its StageConfig loads the
+global scripts: first byte 1; GlobalCode.bin was one too until the script images, phase 9.3), the players' animation files (Data/Animations/*.ani, opened by
 the player objects' startups; which ones per player variant from the sprite manifests, build/manifest/p0..p3) and the
 palette files (Data/Palettes: 5 files, 4.3 KB, loaded by startups such as the special stage's; all of them, as which stage
 loads which isn't in the bytecode as plain text). Each such
@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
 import object_sheets  # noqa: E402
 
-GLOBALS = ('Data/Game/GameConfig.bin', 'Bytecode/GlobalCode.bin')
+GLOBALS = ('Data/Game/GameConfig.bin',)  # GlobalCode.bin: in the stage's script image since phase 9.3
 VARIANTS = ('p0', 'p1', 'p2', 'p3')  # Sonic, Tails, Knuckles, Sonic & Tails (atlas variants '', _t, _k, _st)
 
 

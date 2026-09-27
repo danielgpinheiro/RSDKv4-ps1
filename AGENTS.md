@@ -36,6 +36,8 @@ tools/vram_test.sh Zone01_st [OUT] [F]        # BOOT= build: tile pages + atlas 
 tools/input_test.sh [OUT] [F]   # every pad-1 button through the real pad path (tools/pad.lua) -> its engine input
 tools/boot_test.sh [OUT] [F1] [F2]            # headless boot over GDB: loads, fps, heap, VM/array guards
 tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, land (g_ps1PadTestMask) + dumps
+tools/load_profile.sh [OUT] [STOP]            # BOOT= build: load-time profile, stages switched by GDB (SCHEDULE=,
+                                              # PRE='set var g_ps1FsFastLoad = 0' / g_ps1ScriptImageOn = 0 for A/B)
 python3 tools/tiles_check.py ../Sonic2_Extracted/Data/Stages/Zone01 OUT     # packed chunk tiles == file
 python3 tools/script16_check.py ../Sonic2_Extracted/Bytecode Zone01 OUT     # int16 script code == bytecode
 tools/scene3d/sort3d_check.sh   # host: the PS1 3D draw-list merge sort == upstream's bubble sort
@@ -79,6 +81,12 @@ than watchpoints. GDB convenience variables must not be register names (`$v0`, `
   arenas are freed there: the block goes under the load's buffers and the arenas). Index through `g_ps1VtxCap` /
   `g_ps1FaceCap` (0 without the block), never `VERTEXBUFFER_SIZE` / `FACEBUFFER_SIZE`.
 - No native objects on PS1: `RetroEngine::RunFrame` does `RetroGameLoop`'s work (scripted Title path).
+- **Stage loads (phase 9)**: every stage's scripts come from `Data/Stages/<X>/Scripts.ps1` (the host engine's
+  arrays right after the stage's `LoadBytecode`, written by `tools/rsdkmanifest`; `g_ps1ScriptImageOn` = 0 decodes the
+  bytecode for A/B): regenerate the disc (`tools/data_disc.sh`) after any bytecode patch. Shared files a load reads
+  (GameConfig, the players' .ani, the palettes) are copied into `Data/Stages/<X>/PS1Local/` (`tools/disc/stage_local.py`)
+  and read from there during that stage's load; re-opened small files are pinned in RAM for the load. Profile loads with
+  `tools/load_profile.sh` (seeks are the model-independent cost).
 
 ## Definition of done for a step
 Builds cleanly · fits 2 MB · verified in PCSX-Redux with evidence · `../docs/30` status updated · commit

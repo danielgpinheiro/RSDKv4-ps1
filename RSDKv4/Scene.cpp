@@ -1255,7 +1255,54 @@ static bool PS1LoadStagePacked(const char *file, const char *tag, void *dst, int
     if (!f)
         return false;
     char head[4];
-    bool ok = fread(head, 1, 4, f) == 4 && memcmp(head, tag, 4) == 0 && fread(dst, 1, size, f) == (size_t)size;
+    bool ok = fread(head, 1, 4, f) == 4 && memcmp(head, tag, 4) == 0;
+    if (ok) { // stored up to the last non-zero byte (tools/rsdkmanifest, docs/30 9.3): the rest is zeros
+        size_t got = fread(dst, 1, size, f);
+        memset((uint8_t *)dst + got, 0, size - got);
+    }
+    fclose(f);
+    return ok;
+}
+// CollisionMasks.ps1 (tools/rsdkmanifest): "PCM1" + both paths as the PS1 array, or "PCM2" (docs/30 phase 9.3: the loads
+// are transfer-bound, and path B equals path A on 94-99.9 % of its bytes): path A, then u32 n and n records of (u16 tile,
+// its 16 floor / 16 left / 16 right / 16 roof mask bytes, u32 angles, u8 flags) where path B differs. Path B = a copy of
+// path A with those tiles patched: ~70 KB less to read.
+static bool PS1LoadCollisionMasks()
+{
+    char path[0x60];
+    snprintf(path, sizeof(path), "Data/Stages/%s/CollisionMasks.ps1", stageList[activeStageList][stageListPosition].folder);
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return false;
+    char head[4];
+    bool ok = fread(head, 1, 4, f) == 4;
+    if (ok && !memcmp(head, "PCM1", 4))
+        ok = fread(collisionMasks, 1, sizeof(collisionMasks), f) == sizeof(collisionMasks);
+    else if (ok && !memcmp(head, "PCM2", 4)) {
+        uint32_t n = 0;
+        ok = fread(&collisionMasks[0], 1, sizeof(collisionMasks[0]), f) == sizeof(collisionMasks[0]) && fread(&n, 4, 1, f) == 1
+             && n <= TILE_COUNT;
+        if (ok)
+            memcpy(&collisionMasks[1], &collisionMasks[0], sizeof(collisionMasks[0]));
+        CollisionMasks &b = collisionMasks[1];
+        for (uint32_t i = 0; ok && i < n; ++i) {
+            uint8_t r[2 + 4 * TILE_SIZE + 4 + 1];
+            ok = fread(r, 1, sizeof(r), f) == sizeof(r);
+            int t = r[0] | r[1] << 8;
+            if (!ok || t >= TILE_COUNT) {
+                ok = false;
+                break;
+            }
+            memcpy(&b.floorMasks[t * TILE_SIZE], r + 2, TILE_SIZE);
+            memcpy(&b.lWallMasks[t * TILE_SIZE], r + 2 + TILE_SIZE, TILE_SIZE);
+            memcpy(&b.rWallMasks[t * TILE_SIZE], r + 2 + 2 * TILE_SIZE, TILE_SIZE);
+            memcpy(&b.roofMasks[t * TILE_SIZE], r + 2 + 3 * TILE_SIZE, TILE_SIZE);
+            memcpy(&b.angles[t], r + 2 + 4 * TILE_SIZE, 4);
+            b.flags[t] = r[2 + 4 * TILE_SIZE + 4];
+        }
+    }
+    else
+        ok = false;
     fclose(f);
     return ok;
 }
@@ -1297,7 +1344,7 @@ void LoadStageChunks()
 void LoadStageCollisions()
 {
 #if RETRO_PLATFORM == RETRO_PS1 && !defined RETRO_PS1_HOST_TOOL
-    if (PS1LoadStagePacked("CollisionMasks.ps1", "PCM1", collisionMasks, sizeof(collisionMasks)))
+    if (PS1LoadCollisionMasks())
         return;
 #endif
     FileInfo info;
