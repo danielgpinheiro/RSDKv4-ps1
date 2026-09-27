@@ -168,6 +168,24 @@ int main(int argc, char **argv)
                 for (int o = 0; o < OBJECT_COUNT; ++o) hasPlayer |= StrComp(typeNames[o], "Player Object");
                 if ((hasPlayer && (playerListPos == 0 || playerListPos == 3)) || StrComp(stageList[list][pos].folder, "Ending"))
                     AddAnimationFile("SuperSonic.ani");
+                if (!written.count(out + "/" + stageList[list][pos].folder + ".txt")) {
+                    // docs/30 phase 7.3: what LoadStageChunks / LoadStageCollisions left (the PS1 arrays, this same
+                    // code) as 128x128Tiles.ps1 / CollisionMasks.ps1 beside the originals: the console reads them in.
+                    auto pack = [&](const char *bin, const char *name, const char *tag, const void *data, size_t size) {
+                        std::string dir = std::string("Data/Stages/") + stageList[list][pos].folder + "/";
+                        if (access((dir + bin).c_str(), R_OK))
+                            return;
+                        FILE *pf = fopen((dir + name).c_str(), "wb");
+                        if (!pf || fwrite(tag, 1, 4, pf) != 4 || fwrite(data, 1, size, pf) != size) {
+                            perror((dir + name).c_str());
+                            exit(1);
+                        }
+                        fclose(pf);
+                    };
+                    pack("128x128Tiles.bin", "128x128Tiles.ps1", "PCT1", tiles128x128.ps1Tile,
+                         sizeof(tiles128x128.ps1Tile) + sizeof(tiles128x128.ps1Collision));
+                    pack("CollisionMasks.bin", "CollisionMasks.ps1", "PCM1", collisionMasks, sizeof(collisionMasks));
+                }
                 std::string path = out + "/" + stageList[list][pos].folder + ".txt";
                 FILE *f          = fopen(path.c_str(), written.count(path) ? "a" : "w");
                 if (!f) {

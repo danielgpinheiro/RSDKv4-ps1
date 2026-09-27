@@ -36,5 +36,11 @@ done
 /usr/bin/python3 tools/audio/build_sfx.py "$SRC/Data" build/iso/Data "$SRC/Bytecode"
 # Music (phase 5.2): 44 Ogg tracks -> Data/Music/Music.xa (CD-XA, 8 channels, loop rows from the scripts) + Music.bin
 /usr/bin/python3 tools/audio/build_music.py "$SRC/Data" build/iso/Data "$SRC/Bytecode"
+# docs/30 phase 7.3: the console reads 128x128Tiles.ps1 / CollisionMasks.ps1 (written by rsdkmanifest above with the
+# engine's own loaders); the originals were only needed by the host tools (BG strips)
+for d in build/iso/Data/Stages/*/; do
+    [ -f "$d/128x128Tiles.ps1" ] && rm -f "$d/128x128Tiles.bin"
+    [ -f "$d/CollisionMasks.ps1" ] && rm -f "$d/CollisionMasks.bin"
+done
 echo "iso root: $(find build/iso -type f | wc -l | tr -d ' ') files, $(du -sh build/iso | cut -f1)"
 make -s disc

@@ -1239,8 +1239,29 @@ void LoadStageBackground()
         CloseFile();
     }
 }
+#if RETRO_PLATFORM == RETRO_PS1 && !defined RETRO_PS1_HOST_TOOL
+// Build-time copies of what LoadStageChunks / LoadStageCollisions below leave in RAM (docs/30 phase 7.3): the host
+// build of this same code writes them (tools/rsdkmanifest, PS1 configuration), as a 4-byte tag + the arrays, read
+// straight in here instead of 32,768 three-byte reads / the per-byte mask decode. A stage without them loads as upstream.
+static bool PS1LoadStagePacked(const char *file, const char *tag, void *dst, int size)
+{
+    char path[0x60];
+    snprintf(path, sizeof(path), "Data/Stages/%s/%s", stageList[activeStageList][stageListPosition].folder, file);
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return false;
+    char head[4];
+    bool ok = fread(head, 1, 4, f) == 4 && memcmp(head, tag, 4) == 0 && fread(dst, 1, size, f) == (size_t)size;
+    fclose(f);
+    return ok;
+}
+#endif
 void LoadStageChunks()
 {
+#if RETRO_PLATFORM == RETRO_PS1 && !defined RETRO_PS1_HOST_TOOL
+    if (PS1LoadStagePacked("128x128Tiles.ps1", "PCT1", tiles128x128.ps1Tile, sizeof(tiles128x128.ps1Tile) + sizeof(tiles128x128.ps1Collision)))
+        return;
+#endif
     FileInfo info;
     byte entry[3];
 
@@ -1271,6 +1292,10 @@ void LoadStageChunks()
 }
 void LoadStageCollisions()
 {
+#if RETRO_PLATFORM == RETRO_PS1 && !defined RETRO_PS1_HOST_TOOL
+    if (PS1LoadStagePacked("CollisionMasks.ps1", "PCM1", collisionMasks, sizeof(collisionMasks)))
+        return;
+#endif
     FileInfo info;
     if (LoadStageFile("CollisionMasks.bin", stageListPosition, &info)) {
 
