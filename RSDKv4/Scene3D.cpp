@@ -570,6 +570,7 @@ static inline int PS1Side2(uint32_t k)
 // face, or a corner left to the CPU: Draw3DScene's general path), so the draw order stays the sorted one.
 volatile uint32_t g_ps1FadedFast   = 0; // faded faces through the fast path (GDB)
 volatile uint32_t g_ps1FadedCulled = 0; // ... of them off screen or degenerate (not drawn)
+void PS1FadeRecordRun(uint32_t *first, int count, int stride); // ps1/render.cpp: faded at FlipScreen by a screen fade
 int PS1FadedFaces(int i, int count)
 {
     const bool draw = PS1Draw3DOpen();
@@ -631,8 +632,10 @@ int PS1FadedFaces(int i, int count)
             cacheCmd   = 0x28000000u | rb << 3 | g << 11; // GP0 28h flat quad: R bits 3-7, G 11-15, B 19-23
         }
         if (used == cap) {
-            if (run)
+            if (run) {
                 PS1ChainBulkEnd(used);
+                PS1FadeRecordRun(run, used, 6);
+            }
             run = PS1ChainBulkBegin(128, 5);
             cap = run ? 128 : 0, used = 0;
             if (!run)
@@ -647,8 +650,10 @@ int PS1FadedFaces(int i, int count)
         ++used;
         ++drawn;
     }
-    if (run)
+    if (run) {
         PS1ChainBulkEnd(used);
+        PS1FadeRecordRun(run, used, 6); // 5 words + the chain tag
+    }
     g_ps1Faces       = g_ps1Faces + drawn;
     g_ps1FadedFast   = g_ps1FadedFast + fast;
     g_ps1FadedCulled = g_ps1FadedCulled + culled;

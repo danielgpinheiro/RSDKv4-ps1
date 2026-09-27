@@ -121,16 +121,36 @@ static psyqo::Prim::FastFill *s_clearPrim = nullptr;
 volatile uint32_t g_ps1ClutFades = 0; // frames whose fade went into the CLUTs (exact)
 
 // Direct-colour primitives of the frame (flat rectangles such as the Title's background, flat 3D faces
-// such as the menu's panels, the ClearScreen rectangle): the CLUT fade doesn't reach them, so FlipScreen
-// applies the same blend to their colour words, still in the chain there (psyqo sends it after flip()).
-struct PS1DirectColour {
+// such as the menu's panels and the special stage's half-pipe, the ClearScreen rectangle): the CLUT fade doesn't
+// reach them, so FlipScreen applies the same blend to their colour words, still in the chain there (psyqo sends it
+// after flip()). Recorded as runs: `count` primitives `stride` words apart, the colour in each one's first word
+// (PS1FadedFaces' bulk runs: 128 faces an entry; single primitives chained back to back merge into one run). Before,
+// the half-pipe's faces were not recorded at all and the special stage's fades left them at full colour.
+struct PS1DirectRun {
     uint32_t *word;
-    uint8_t r, g, b;
+    uint16_t count, stride;
 };
-#define PS1_DIRECT_COLOURS 96
-static PS1DirectColour s_directColours[PS1_DIRECT_COLOURS];
+#define PS1_DIRECT_RUNS 96
+static PS1DirectRun s_directRuns[PS1_DIRECT_RUNS];
 static int s_directCount = 0;
 volatile uint32_t g_ps1FadeDirect = 0, g_ps1FadeDirectDropped = 0; // colours faded / not recorded (list full)
+
+void PS1FadeRecordRun(uint32_t *first, int count, int stride)
+{
+    if (count <= 0)
+        return;
+    if (s_directCount) {
+        PS1DirectRun &r = s_directRuns[s_directCount - 1];
+        if (r.stride == stride && r.word + r.count * stride == first && r.count + count <= 0xFFFF) {
+            r.count = (uint16_t)(r.count + count);
+            return;
+        }
+    }
+    if (s_directCount < PS1_DIRECT_RUNS)
+        s_directRuns[s_directCount++] = PS1DirectRun{ first, (uint16_t)count, (uint16_t)stride };
+    else
+        g_ps1FadeDirectDropped = g_ps1FadeDirectDropped + count;
+}
 
 // One flat primitive (w[0] = GP0 command | BGR) written straight into the chain, its colour recorded.
 static void PS1ChainFlatRaw(const uint32_t *w, int words)
@@ -140,10 +160,7 @@ static void PS1ChainFlatRaw(const uint32_t *w, int words)
         return;
     for (int i = 0; i < words; ++i) d[i] = w[i];
     PS1ChainRawEnd();
-    if (s_directCount < PS1_DIRECT_COLOURS)
-        s_directColours[s_directCount++] = PS1DirectColour{ d, (uint8_t)(w[0] & 0xFF), (uint8_t)(w[0] >> 8), (uint8_t)(w[0] >> 16) };
-    else
-        g_ps1FadeDirectDropped = g_ps1FadeDirectDropped + 1;
+    PS1FadeRecordRun(d, 1, words + 1); // + 1: the next fragment's chain tag
 }
 
 static void PS1BuildPalette(int bank)
@@ -625,23 +642,25 @@ static void PS1ChainPieceQuad(const PS1Piece &p, const int16_t *xs, const int16_
     PS1ChainQuad(q);
 }
 
-// Axis-aligned piece at screen rect (x, y, w, h) with optional mirroring: 1:1 mirrors sample texel
-// u + w - 1 - k at column k (UV edges u + w - 1 .. u - 1), scaled ones the full [u, u + w) range.
+// Axis-aligned piece at screen rect (x, y, w, h) with optional mirroring. The GPU samples a quad's texels from its
+// top-left corner and leaves out the right / bottom edge, so a texture axis running backwards on screen must not start
+// at its far edge (u + w: the atlas's next piece, a dark line along a mirrored sprite). 1:1 mirrors sample texel
+// u + w - 1 - k at column k (UV edges u + w - 1 .. u - 1, exact); scaled mirrors take u + w - 1 .. u (one texel
+// narrower: a scaled edge has no exact integer UV); unmirrored scaled pieces the full [u, u + w) range.
 static void PS1ChainPieceRect(const PS1Piece &p, int x, int y, int w, int h, bool flipX, bool flipY)
 {
     if (!flipX && !flipY && w == p.w && h == p.h) {
         PS1ChainPieceSprite(p, x, y);
         return;
     }
-    bool unit = w == p.w && h == p.h;
     int u0 = p.u, u1 = p.u + p.w, v0 = p.v, v1 = p.v + p.h;
     if (flipX) {
-        u0 = unit ? p.u + p.w - 1 : p.u + p.w;
-        u1 = unit ? p.u - 1 : p.u;
+        u0 = p.u + p.w - 1;
+        u1 = w == p.w ? p.u - 1 : p.u;
     }
     if (flipY) {
-        v0 = unit ? p.v + p.h - 1 : p.v + p.h;
-        v1 = unit ? p.v - 1 : p.v;
+        v0 = p.v + p.h - 1;
+        v1 = h == p.h ? p.v - 1 : p.v;
     }
     int16_t xs[4] = { (int16_t)x, (int16_t)(x + w), (int16_t)x, (int16_t)(x + w) };
     int16_t ys[4] = { (int16_t)y, (int16_t)y, (int16_t)(y + h), (int16_t)(y + h) };
@@ -655,6 +674,11 @@ static void PS1ChainPieceRect(const PS1Piece &p, int x, int y, int w, int h, boo
 // project to several screens).
 volatile uint32_t g_ps1GpuClipped = 0; // primitives clipped to the screen because they were beyond the limits
 volatile uint32_t g_ps1GpuLimit   = 0; // primitives still beyond the limits (drawn as they are: GDB check)
+volatile uint32_t g_ps1ClipRects = 0, g_ps1ClipQuads = 0, g_ps1ClipBillboards = 0; // ... of them: scaled pieces, rotozoom pieces, 3D billboards
+// Billboards / rotozoom pieces beyond the limits and wholly off screen: before the fix they were chained as they were and
+// their wrapped coordinates drew them across the screen (the gate / text flicker). g_ps1LimitFix = 0 (GDB) restores that
+// for the A/B.
+volatile uint32_t g_ps1WrapCulled = 0, g_ps1LimitFix = 1;
 
 static bool PS1BeyondGpuLimits(int x0, int y0, int x1, int y1)
 {
@@ -670,6 +694,7 @@ static void PS1ChainPieceRectClipped(const PS1Piece &p, int x, int y, int w, int
         return;
     }
     g_ps1GpuClipped = g_ps1GpuClipped + 1;
+    g_ps1ClipRects = g_ps1ClipRects + 1;
     int cx0 = x < 0 ? 0 : x, cx1 = x + w > SCREEN_XSIZE ? SCREEN_XSIZE : x + w;
     int cy0 = y < 0 ? 0 : y, cy1 = y + h > SCREEN_YSIZE ? SCREEN_YSIZE : y + h;
     if (cx0 >= cx1 || cy0 >= cy1)
@@ -680,6 +705,10 @@ static void PS1ChainPieceRectClipped(const PS1Piece &p, int x, int y, int w, int
     };
     int u0 = edge(p.u, p.w, cx0 - x, w, flipX), u1 = edge(p.u, p.w, cx1 - x, w, flipX);
     int v0 = edge(p.v, p.h, cy0 - y, h, flipY), v1 = edge(p.v, p.h, cy1 - y, h, flipY);
+    if (flipX && u0 > p.u + p.w - 1) // mirrored: never start at the far edge (PS1ChainPieceRect)
+        u0 = p.u + p.w - 1;
+    if (flipY && v0 > p.v + p.h - 1)
+        v0 = p.v + p.h - 1;
     int16_t xs[4] = { (int16_t)cx0, (int16_t)cx1, (int16_t)cx0, (int16_t)cx1 };
     int16_t ys[4] = { (int16_t)cy0, (int16_t)cy0, (int16_t)cy1, (int16_t)cy1 };
     PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
@@ -733,6 +762,87 @@ static void PS1ChainFlatPolygonClipped(const int *px, const int *py, int n, uint
                           (uint32_t)(uint16_t)ax[i + 1] | ((uint32_t)(uint16_t)ay[i + 1] << 16) };
         for (int r = 0; r < repeat; ++r) PS1ChainFlatRaw(w, 4);
     }
+}
+
+// A textured piece quad (corners A B C D and texel-edge UVs as PS1ChainPieceQuad) beyond the GPU limits: cut to the
+// screen (Sutherland-Hodgman, the UVs carried with 8 fractional bits) and chained as a fan of textured triangles
+// (GP0 24h / 26h), ink and bank split as PS1ChainPieceQuad. Rotozoomed sprites passing the screen (the special stage's
+// messages zooming in: the Sonic CD UFO's bug on the rotation path) wrapped or were dropped by the GPU before.
+static void PS1ChainPieceQuadClipped(const PS1Piece &p, const int *qx, const int *qy, int u0, int u1, int v0, int v1)
+{
+    int ax[12] = { qx[0], qx[1], qx[3], qx[2] }, ay[12] = { qy[0], qy[1], qy[3], qy[2] }; // A B D C: around the outline
+    int au[12] = { u0 << 8, u1 << 8, u1 << 8, u0 << 8 }, av[12] = { v0 << 8, v0 << 8, v1 << 8, v1 << 8 };
+    int bx[12], by[12], bu[12], bv[12];
+    int n = 4;
+    for (int side = 0; side < 4 && n > 0; ++side) {
+        auto dist = [side](int x, int y) { // >= 0: inside this screen edge
+            return side == 0 ? x : side == 1 ? SCREEN_XSIZE - x : side == 2 ? y : SCREEN_YSIZE - y;
+        };
+        int m = 0;
+        for (int i = 0; i < n && m < 10; ++i) {
+            int j = (i + 1) % n, d0 = dist(ax[i], ay[i]), d1 = dist(ax[j], ay[j]);
+            if (d0 >= 0)
+                bx[m] = ax[i], by[m] = ay[i], bu[m] = au[i], bv[m] = av[i], ++m;
+            if ((d0 >= 0) != (d1 >= 0)) { // the crossing: i + (j - i) * d0 / (d0 - d1)
+                int64_t num = d0, den = (int64_t)d0 - d1;
+                auto lerp = [&](int a, int b) { return a + (int)((int64_t)(b - a) * num / den); };
+                bx[m] = side == 0 ? 0 : side == 1 ? SCREEN_XSIZE : lerp(ax[i], ax[j]);
+                by[m] = side == 2 ? 0 : side == 3 ? SCREEN_YSIZE : lerp(ay[i], ay[j]);
+                bu[m] = lerp(au[i], au[j]), bv[m] = lerp(av[i], av[j]);
+                ++m;
+            }
+        }
+        n = m;
+        for (int i = 0; i < n; ++i) ax[i] = bx[i], ay[i] = by[i], au[i] = bu[i], av[i] = bv[i];
+    }
+    if (n < 3)
+        return;
+    g_ps1GpuClipped = g_ps1GpuClipped + 1;
+    g_ps1ClipQuads = g_ps1ClipQuads + 1;
+    psyqo::PrimPieces::TPageAttr tpa = PS1ClusterTPage(p.c);
+    bool semi                        = s_ink != PS1_INK_OPAQUE;
+    if (semi) {
+        PS1ApplyInk(tpa);
+        g_ps1InkPieces = g_ps1InkPieces + 1;
+    }
+    uint16_t tpage, clutA, clutB;
+    psyqo::PrimPieces::ClutIndex ca = PS1ClusterClut(p.c);
+    __builtin_memcpy(&tpage, &tpa, 2);
+    __builtin_memcpy(&clutA, &ca, 2);
+    const uint32_t cmd = (semi ? 0x26000000u : 0x24000000u) | s_inkMod | (uint32_t)s_inkMod << 8 | (uint32_t)s_inkMod << 16;
+    auto xy = [&](int k) { return (uint32_t)(uint16_t)ax[k] | ((uint32_t)(uint16_t)ay[k] << 16); };
+    auto uv = [&](int k) {
+        int u = (au[k] + 128) >> 8, v = (av[k] + 128) >> 8;
+        return (uint32_t)(u < 0 ? 0 : u > 255 ? 255 : u) | (uint32_t)(v < 0 ? 0 : v > 255 ? 255 : v) << 8;
+    };
+    auto emit = [&](uint16_t clut) {
+        for (int i = 1; i + 1 < n; ++i) {
+            uint32_t w[7] = { cmd, xy(0), uv(0) | (uint32_t)clut << 16, xy(i), uv(i) | (uint32_t)tpage << 16, xy(i + 1), uv(i + 1) };
+            PS1ChainPrimsRawN(w, 7, 1);
+        }
+    };
+    int ymin = ay[0], ymax = ay[0];
+    for (int k = 1; k < n; ++k) {
+        ymin = ay[k] < ymin ? ay[k] : ymin;
+        ymax = ay[k] > ymax ? ay[k] : ymax;
+    }
+    int y0 = s_splitY;
+    if (y0 && ymax > y0) { // bank split (PS1ChainPieceQuad): set B below the line
+        PS1EnsureSetB();
+        psyqo::PrimPieces::ClutIndex cb = PS1ClusterClut(p.c, true);
+        __builtin_memcpy(&clutB, &cb, 2);
+        if (ymin < y0) {
+            PS1ChainDrawArea(0, 0, SCREEN_XSIZE, y0);
+            emit(clutA);
+            PS1ChainDrawArea(0, y0, SCREEN_XSIZE, SCREEN_YSIZE);
+            g_ps1SplitQuads = g_ps1SplitQuads + 1;
+        }
+        emit(clutB);
+        if (ymin < y0)
+            PS1ChainDrawAreaReset();
+        return;
+    }
+    emit(clutA);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -835,13 +945,21 @@ void FlipScreen()
         clear = psyqo::Color{ { .r = (uint8_t)(s_fadeR * s_fadeA / 255), .g = (uint8_t)(s_fadeG * s_fadeA / 255),
                                 .b = (uint8_t)(s_fadeB * s_fadeA / 255) } };
     if (s_fadePending) { // before the bank regions replay (copy) the frame's fragments
-        int a = s_fadeA, na = 255 - a;
+        // c * (255 - a) + fade * a, / 255 as (n + 1 + (n >> 8)) >> 8 (exact for n <= 65025: the CLUT fade's result)
+        const uint32_t a = s_fadeA, na = 255 - a, fr = s_fadeR * a, fg = s_fadeG * a, fb = s_fadeB * a;
+        auto div255 = [](uint32_t n) { return (n + 1 + (n >> 8)) >> 8; };
+        uint32_t faded = 0;
         for (int i = 0; i < s_directCount; ++i) {
-            const PS1DirectColour &c = s_directColours[i];
-            uint32_t r = (c.r * na + s_fadeR * a) / 255, g = (c.g * na + s_fadeG * a) / 255, b = (c.b * na + s_fadeB * a) / 255;
-            *c.word    = (*c.word & 0xFF000000) | r | g << 8 | b << 16;
+            const PS1DirectRun &run = s_directRuns[i];
+            uint32_t *w = run.word;
+            for (int k = 0; k < run.count; ++k, w += run.stride) {
+                uint32_t c = *w;
+                uint32_t r = div255((c & 0xFF) * na + fr), g = div255((c >> 8 & 0xFF) * na + fg), b = div255((c >> 16 & 0xFF) * na + fb);
+                *w         = (c & 0xFF000000) | r | g << 8 | b << 16;
+            }
+            faded += run.count;
         }
-        g_ps1FadeDirect = g_ps1FadeDirect + s_directCount;
+        g_ps1FadeDirect = g_ps1FadeDirect + faded;
     }
     uint32_t tb       = PS1Hblanks();
     g_ps1ReplayWalked = 0;
@@ -1769,17 +1887,49 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
     int sn = sin512LookupTable[rotation] * scale >> 9;
     int cs = cos512LookupTable[rotation] * scale >> 9;
     bool fx = direction != FLIP_NONE;
+    // Texel edges (PS1ChainPieceRect): at right angles and scale 1 (Sonic's static-frame rotations 0 / 90 / 180 / 270,
+    // mirrored when he faces left) the quad is axis-aligned and exact when a texture axis running left, or up, on
+    // screen has its edges pulled back one texel; before, a mirrored frame read the atlas's next column along its left
+    // edge (a dark line). Other angles / scales can't be exact with integer UVs: the far edges come one texel in, so
+    // no pixel reads a neighbouring piece.
+    const bool right = scale == 0x200 && !(rotation & 0x7F);
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
-        int16_t xs[4], ys[4];
+        int qx[4], qy[4];
         const int lx[4] = { p.ox, p.ox + p.w, p.ox, p.ox + p.w };
         const int ly[4] = { p.oy, p.oy, p.oy + p.h, p.oy + p.h };
+        int xmin = 0x7FFFFFFF, xmax = -0x7FFFFFFF, ymin = 0x7FFFFFFF, ymax = -0x7FFFFFFF;
         for (int k = 0; k < 4; ++k) {
             int x = fx ? pivotX - lx[k] : lx[k] - pivotX;
             int y = ly[k] - pivotY;
-            xs[k] = (int16_t)(XPos + ((x * cs + y * sn) >> 9));
-            ys[k] = (int16_t)(YPos + ((y * cs - x * sn) >> 9));
+            qx[k] = XPos + ((x * cs + y * sn) >> 9);
+            qy[k] = YPos + ((y * cs - x * sn) >> 9);
+            xmin = qx[k] < xmin ? qx[k] : xmin, xmax = qx[k] > xmax ? qx[k] : xmax;
+            ymin = qy[k] < ymin ? qy[k] : ymin, ymax = qy[k] > ymax ? qy[k] : ymax;
         }
-        PS1ChainPieceQuad(p, xs, ys, p.u, p.u + p.w, p.v, p.v + p.h);
+        bool beyond = PS1BeyondGpuLimits(xmin, ymin, xmax, ymax);
+        if (xmax <= 0 || ymax <= 0 || xmin >= SCREEN_XSIZE || ymin >= SCREEN_YSIZE) {
+            if (beyond)
+                g_ps1WrapCulled = g_ps1WrapCulled + 1;
+            if (g_ps1LimitFix)
+                return; // wholly off screen
+        }
+        int u0 = p.u, u1 = p.u + p.w, v0 = p.v, v1 = p.v + p.h;
+        if (right) { // u runs from corner A to B, v from A to C
+            int ux = qx[1] - qx[0], uy = qy[1] - qy[0], vx = qx[2] - qx[0], vy = qy[2] - qy[0];
+            if (ux < 0 || (ux == 0 && uy < 0))
+                --u0, --u1;
+            if (vx < 0 || (vx == 0 && vy < 0))
+                --v0, --v1;
+        }
+        else
+            --u1, --v1;
+        if (beyond && g_ps1LimitFix) { // zoomed past the GPU limits: cut to the screen
+            PS1ChainPieceQuadClipped(p, qx, qy, u0, u1, v0, v1);
+            return;
+        }
+        int16_t xs[4] = { (int16_t)qx[0], (int16_t)qx[1], (int16_t)qx[2], (int16_t)qx[3] };
+        int16_t ys[4] = { (int16_t)qy[0], (int16_t)qy[1], (int16_t)qy[2], (int16_t)qy[3] };
+        PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
     });
 }
 
@@ -2117,8 +2267,29 @@ PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, i
         return;
     }
     int umin = u0 < u1 ? u0 : u1, umax = u0 < u1 ? u1 : u0, vmin = v0 < v1 ? v0 : v1, vmax = v0 < v1 ? v1 : v0;
-    if (PS1BeyondGpuLimits(x0 < x1 ? x0 : x1, y0 < y1 ? y0 : y1, x0 < x1 ? x1 : x0, y0 < y1 ? y1 : y0))
-        g_ps1GpuLimit = g_ps1GpuLimit + 1;
+    int xmin = x0 < x1 ? x0 : x1, xmax = x0 < x1 ? x1 : x0, ymin = y0 < y1 ? y0 : y1, ymax = y0 < y1 ? y1 : y0;
+    bool beyond = PS1BeyondGpuLimits(xmin, ymin, xmax, ymax);
+    if (xmax <= 0 || ymax <= 0 || xmin >= SCREEN_XSIZE || ymin >= SCREEN_YSIZE || xmin == xmax || ymin == ymax) {
+        if (beyond)
+            g_ps1WrapCulled = g_ps1WrapCulled + 1;
+        if (g_ps1LimitFix)
+            return; // nothing on screen
+    }
+    // A billboard passing the camera (the special stage's checkpoint gate balls, rings) projects far beyond the GPU
+    // limits (psx-spx GPU "Vertex": 11-bit coordinates wrap, a polygon over 1023 x 511 is not drawn): it flickered.
+    // Cut to the screen with the UVs moved in proportion, as the Sonic CD port's UFO fix (PS1ChainPieceRectClipped).
+    if (beyond && g_ps1LimitFix) {
+        g_ps1GpuClipped = g_ps1GpuClipped + 1;
+        g_ps1ClipBillboards = g_ps1ClipBillboards + 1;
+        auto cut = [](int &a0, int &a1, int &t0, int &t1, int lim) {
+            int n0 = a0 < 0 ? 0 : a0 > lim ? lim : a0, n1 = a1 < 0 ? 0 : a1 > lim ? lim : a1;
+            int64_t span = a1 - a0, dt = t1 - t0;
+            int m0 = t0 + (int)(dt * (n0 - a0) / span), m1 = t0 + (int)(dt * (n1 - a0) / span);
+            a0 = n0, a1 = n1, t0 = m0, t1 = m1;
+        };
+        cut(x0, x1, u0, u1, SCREEN_XSIZE);
+        cut(y0, y1, v0, v1, SCREEN_YSIZE);
+    }
     const PS1AtlasCluster *c = PS1FindCluster(sheet, umin, vmin);
     if (!c || umax > c->srcX + c->w || vmax > c->srcY + c->h) {
         g_ps1FaceTexMiss   = g_ps1FaceTexMiss + 1;
