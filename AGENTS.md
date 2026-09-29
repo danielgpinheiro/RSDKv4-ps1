@@ -11,8 +11,8 @@ Sonic 2 itself changes: Sonic 1-only code goes behind `#if PS1_GAME == 1` with S
 Sonic 1-only opcodes after Sonic 2's (docs/37 choices 9-10).
 
 ## What this is
-RSDKv4-Decompilation (Retro Engine v4, Sonic 1/2 2013) being ported to the PS1 with **psyqo** (C++20) on
-branch `ps1`: **Sonic 2** (done, published) and **Sonic 1** (`GAME=1`, docs/37). Remotes: `origin` =
+RSDKv4-Decompilation (Retro Engine v4, Sonic 1/2 2013) ported to the PS1 with **psyqo** (C++20) on
+branch `ps1`: **Sonic 2** and **Sonic 1** (`GAME=1`, docs/37), both done, run on a PSone and published as ISO builders. Remotes: `origin` =
 upstream RSDKModding (read-only), `fork` = github.com/danielgpinheiro/RSDKv4-ps1 (**private**; push here).
 
 ## First checks (every session)
@@ -50,7 +50,7 @@ tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, la
 GAME=1 tools/zone_sweep.sh OUT Zone01:0 ...   # per FOLDER:PLAYER a BOOT= build + logic test, one line each (restores make)
 make BOOT=X SAMPLER=1 && tools/pc_profile.sh OUT [START END]   # CPU profile by PC sampling (root counter 0 IRQ records
                                               # EPC, ps1/pc_sampler.cpp): share per function; not for make dist
-GAME=1 tools/export_builder.sh ../Sonic-1-PS1-ISO-Builder   # the Sonic 1 builder (local; publish only with the user's OK)
+GAME=1 tools/export_builder.sh ../Sonic-1-PS1-ISO-Builder   # the Sonic 1 builder (published: github.com/danielgpinheiro/Sonic-1-PS1-ISO-Builder)
 tools/load_profile.sh [OUT] [STOP]            # BOOT= build: load-time profile, stages switched by GDB (SCHEDULE=,
                                               # PRE='set var g_ps1FsFastLoad = 0' / g_ps1ScriptImageOn = 0 for A/B)
 python3 tools/tiles_check.py ../Sonic2_Extracted/Data/Stages/Zone01 OUT     # packed chunk tiles == file
