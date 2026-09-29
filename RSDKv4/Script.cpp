@@ -9341,6 +9341,40 @@ static void PS1SpecialRingUpdate()
 #else
 #define PS1_RAW(p) scriptCode[p]
 #endif
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
+// Sonic 1's special stage runs ~400 object subs a frame that are just one native opcode (docs/37 phase 7): `op End`,
+// `op int End` or `op int int End` as tools/scripts/patch_bytecode.py writes them. For those the VM's per-sub work (the
+// instruction loop, operand decoding, dispatch, write-back, then End) is skipped: the native runs directly, with what
+// the VM leaves behind done the same way (scriptText cleared per instruction, the operands' values). Anything else,
+// and every nested run (a native's PS1CallScriptFunction), takes the VM.
+static bool PS1S1FastSub(int p)
+{
+    int op = PS1_RAW(p);
+    if (op < FUNC_PS1SSROTPOS || op > FUNC_PS1SSOBJUPDATE)
+        return false;
+    int n = s_ps1OpSize[op];
+    for (int i = 0; i < n; ++i)
+        if (PS1_RAW(p + 1 + 2 * i) != SCRIPTVAR_INTCONST)
+            return false;
+    if (PS1_RAW(p + 1 + 2 * n) != FUNC_END)
+        return false;
+    for (int i = 0; i < n; ++i) scriptEng.operands[i] = scriptCode[p + 2 + 2 * i];
+    scriptText[0] = '\0';
+    switch (op) {
+        case FUNC_PS1SSRING: PS1SSRingUpdate(); break;
+        case FUNC_PS1SSBLOCKUPDATE: PS1SSBlockUpdate(); break;
+        case FUNC_PS1SSBLOCKDRAW: PS1SSBlockDraw(scriptEng.operands[0], scriptEng.operands[1]); break;
+        case FUNC_PS1SSPLACEDRAW: PS1SSPlaceDraw(scriptEng.operands[0]); break;
+        case FUNC_PS1SSANIMDRAW: PS1SSAnimDraw(scriptEng.operands[0]); break;
+        case FUNC_PS1SSGEMDRAW: PS1SSGemDraw(); break;
+        case FUNC_PS1SSOBJUPDATE: PS1SSObjUpdate(scriptEng.operands[0]); break;
+        default: return false; // functions' natives (`op return`): never a sub
+    }
+    scriptText[0] = '\0'; // End
+    return true;
+}
+#endif
+
 void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 {
     bool running      = true;
@@ -9363,6 +9397,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
     jumpTableStackPos = 0;
     functionStackPos  = 0;
     foreachStackPos   = 0;
+#endif
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
+    if (!ps1FuncBase && PS1S1FastSub(scriptCodePtr))
+        return;
 #endif
 
     while (running) {
