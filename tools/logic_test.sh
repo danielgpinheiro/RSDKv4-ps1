@@ -9,7 +9,8 @@
 #   S2  airborne                   -> release all
 #   S3  landed / stopped           -> end
 # The guard counters at S3 are also dumped to OUT_guards.bin (12 u32, the GUARDS order without copyTile / nested):
-# GDB printf output is sometimes lost, a dump is not (tools/zone_sweep.sh reads it).
+# GDB printf output is sometimes lost, a dump is not (tools/zone_sweep.sh reads it). OUT_audio.bin: 6 u32, the SFX
+# key-ons, PlaySfx of unloaded ids, bank errors, no free channel, frames of silent music, banks uploaded.
 # Usage: make BOOT=Zone01 && tools/logic_test.sh [OUT_PREFIX] [S0=240] [S1=420] [S2=432] [S3=600]
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/rsdkv4_logic}; S0=${2:-240}; S1=${3:-420}; S2=${4:-432}; S3=${5:-600}
@@ -77,6 +78,12 @@ if g_ps1PerfFrames == $S3
   append binary value ${OUT}_guards.bin g_ps1PauseRequests
   append binary value ${OUT}_guards.bin g_ps1Scene3DOverflow
   append binary value ${OUT}_guards.bin g_ps1SaveRAMClamped
+  dump binary value ${OUT}_audio.bin g_ps1SfxPlays
+  append binary value ${OUT}_audio.bin g_ps1SfxUnloaded
+  append binary value ${OUT}_audio.bin g_ps1SfxBankErrors
+  append binary value ${OUT}_audio.bin g_ps1SfxNoChannel
+  append binary value ${OUT}_audio.bin g_ps1MusicSilentFrames
+  append binary value ${OUT}_audio.bin g_ps1SfxBanks
   detach
 else
   continue

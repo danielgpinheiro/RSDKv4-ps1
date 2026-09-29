@@ -131,7 +131,7 @@ def main():
         log=os.path.join(mdir, 'bgstrips.log'), env=env)  # Sonic 1: BGS3 (segment maps, 4-bit rows; docs/37 phase 3)
     run('6 menus', [PY, os.path.join(HERE, 'menu', 'build_menu.py'), sdata, data] + (['--game', '1'] if s1 else []), env=env)
     run('7 sfx', [PY, os.path.join(HERE, 'audio', 'build_sfx.py'), sdata, data, sbc], env=env)
-    run('8 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), sdata, data, sbc], env=env)
+    run('8 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), sdata, data, sbc] + (['--game', '1'] if s1 else []), env=env)
 
     # the console reads 128x128Tiles.ps1 / CollisionMasks.ps1 (written by rsdkmanifest with the engine's own loaders)
     for st in sorted(os.listdir(os.path.join(data, 'Stages'))):

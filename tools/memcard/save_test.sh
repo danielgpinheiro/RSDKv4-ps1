@@ -11,9 +11,10 @@ set -u
 cd "$(dirname "$0")/../.."
 W=${1:-/tmp/rsdkv4_save_test}; mkdir -p "$W"
 . tools/redux_env.sh
-CFG="$HOME/.config/pcsx-redux"
+CFG=${REDUX_PORTABLE:-$HOME/.config/pcsx-redux} # GAME=1: its own instance's settings (tools/redux_env.sh)
 MCD="python3 tools/memcard/mcd.py"
 FILE=BAHBRW-00004SONIC2
+[ "${GAME:-2}" = 1 ] && FILE=BAHBRW-00005SONIC1 # RSDKv4/Userdata.cpp PS1_SAVE_FILE (docs/37)
 redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
 cp -p "$CFG/pcsx.json" "$W/pcsx.json.bak"
 shasum "$CFG"/memcard*.mcd > "$W/cards.sha" 2>/dev/null

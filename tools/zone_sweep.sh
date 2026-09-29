@@ -13,7 +13,7 @@ for spec in "$@"; do
     tag=${folder}_p${player}${id:+_id$id}
     make -j8 GAME="$GAME" BOOT="$folder" BOOT_PLAYER="$player" ${id:+BOOT_ID=$id} >"$OUT/$tag.build.log" 2>&1 ||
         { echo "$tag: BUILD FAILED"; continue; }
-    rm -f "$OUT/${tag}_guards.bin"
+    rm -f "$OUT/${tag}_guards.bin" "$OUT/${tag}_audio.bin"
     GAME=$GAME tools/logic_test.sh "$OUT/$tag" >"$OUT/$tag.stdout" 2>&1
     f=$OUT/$tag.txt
     # guards from the dump (logic_test.sh: GDB printf lines can be lost); no dump -> unknown, never 0
@@ -31,7 +31,14 @@ print(' '.join('%s=%d' % kv for kv in zip(n, v) if kv[1]) or '0')" "$OUT/${tag}_
     x1=$(grep -oE "^F600 .*P0 type=[0-9]+ x=-?[0-9]+" "$f" | grep -oE "x=-?[0-9]+$" | cut -d= -f2)
     tm=$(grep -oE "^F600 .*time [0-9]+:[0-9]+\.[0-9]+" "$f" | grep -oE "[0-9]+:[0-9]+\.[0-9]+$")
     ents=$(grep -oE "ENTITIES [0-9]+ active" "$OUT/$tag.stdout" 2>/dev/null | grep -oE "[0-9]+" | head -1)
-    printf '%-18s %s | player x %s -> %s | timer %s | hblanks %s| entities %s | guards %s\n' "$tag" "$heap" "$x0" "$x1" \
-        "$tm" "$hbl" "$ents" "$bad"
+    audio=$(/usr/bin/python3 -c "
+import struct, sys
+try:
+    v = struct.unpack('<6I', open(sys.argv[1], 'rb').read())
+except Exception:
+    print('?'); sys.exit()
+print('sfx %d, unloaded %d, bank errors %d, no channel %d, silent music %d frames' % v[:5])" "$OUT/${tag}_audio.bin")
+    printf '%-18s %s | player x %s -> %s | timer %s | hblanks %s| entities %s | guards %s | %s\n' "$tag" "$heap" "$x0" \
+        "$x1" "$tm" "$hbl" "$ents" "$bad" "$audio"
 done
 make -j8 GAME="$GAME" >"$OUT/natural.build.log" 2>&1 && echo "natural GAME=$GAME build restored"
