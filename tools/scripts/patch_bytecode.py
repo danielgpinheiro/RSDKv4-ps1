@@ -6201,6 +6201,276 @@ def patch_ss_draws(bcdir):
     return 'special stage draws native: %s%s' % (', '.join(done) or '-', ' (already: %s)' % ', '.join(already) if already else '')
 
 
+# The special stage's other update subs (with their jump-table entries), transcribed by PS1SSObjUpdate kind.
+SSOBJUPDATE_SIGS_S1 = {
+    0: [  # Red White Block
+        'ForEachActive 0 256 ARRAYPOS6',
+        'IfEqual 2 OBJECTPROPERTYVALUE 0',
+        'CallFunction 10',
+        'else',
+        'switch 4 OBJECTPROPERTYVALUE',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -160 36 160 60 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 13 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'BoxCollisionTest 0 OBJECTENTITYPOS 36 -160 60 160 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 15 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -60 -160 -36 160 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 17 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -160 -60 160 -36 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 19 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'BoxCollisionTest 0 OBJECTENTITYPOS 36 -24 60 24 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 21 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'endswitch',
+        'endif',
+        'next',
+        'End',
+        'JT 0 ForEachActive @0 @38',
+        'JT 1 IfEqual @4 @37',
+        'JT 4 switch 1 5 @35 @36 @5 @11 @17 @23 @29',
+        'JT 6 IfEqual @9 @10',
+        'JT 12 IfEqual @15 @16',
+        'JT 18 IfEqual @21 @22',
+        'JT 24 IfEqual @27 @28',
+        'JT 30 IfEqual @33 @34',
+    ],
+    1: [  # Gem Block
+        'IfEqual 0 OBJECTSTATE 1',
+        'Equal OBJECTPROPERTYVALUE OBJECTVALUE0',
+        'ShR OBJECTPROPERTYVALUE 1',
+        'And OBJECTPROPERTYVALUE 3',
+        'Inc OBJECTVALUE0',
+        'IfEqual 2 OBJECTVALUE0 16',
+        'Equal OBJECTPRIORITY 0',
+        'Equal OBJECTVALUE0 0',
+        'Equal OBJECTPROPERTYVALUE OBJECTVALUE1',
+        'Inc OBJECTPROPERTYVALUE',
+        'IfEqual 4 OBJECTPROPERTYVALUE 4',
+        'Equal OBJECTTYPE 0',
+        'else',
+        'Equal OBJECTSTATE 0',
+        'endif',
+        'Equal LOCAL[1,0,2026] 0',
+        'endif',
+        'ForEachActive 6 256 ARRAYPOS6',
+        'CallFunction 10',
+        'next',
+        'else',
+        'ForEachActive 8 256 ARRAYPOS6',
+        'CallFunction 10',
+        'IfEqual 10 LOCAL[1,0,2026] 0',
+        'IfGreater 12 CHECKRESULT 0',
+        'Equal OBJECTSTATE 1',
+        'Equal OBJECTPRIORITY 1',
+        'Equal LOCAL[1,0,2026] 1',
+        'Equal OBJECTVALUE1 OBJECTPROPERTYVALUE',
+        'IfEqual 14 LOCAL[1,0,3] 0',
+        'PlaySfx 43 0',
+        'endif',
+        'endif',
+        'endif',
+        'next',
+        'endif',
+        'End',
+        'JT 0 IfEqual @21 @36',
+        'JT 5 IfEqual @16 @17',
+        'JT 10 IfEqual @13 @15',
+        'JT 17 ForEachActive @17 @20',
+        'JT 21 ForEachActive @21 @35',
+        'JT 23 IfEqual @33 @34',
+        'JT 24 IfGreater @32 @33',
+        'JT 29 IfEqual @31 @32',
+    ],
+    2: [  # Up Down Block
+        'ForEachActive 0 256 ARRAYPOS6',
+        'CallFunction 10',
+        'IfNotEqual 2 CHECKRESULT 0',
+        'IfEqual 4 OBJECTVALUE15[1,1,6] 0',
+        'Equal OBJECTVALUE15[1,1,6] 30',
+        'IfEqual 6 OBJECTPROPERTYVALUE 0',
+        'IfLower 8 LOCAL[1,0,1] 1',
+        'Inc LOCAL[1,0,1]',
+        'Equal OBJECTPROPERTYVALUE 1',
+        'PlaySfx 42 0',
+        'endif',
+        'else',
+        'IfGreater 10 LOCAL[1,0,1] 0',
+        'Dec LOCAL[1,0,1]',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'PlaySfx 42 0',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'next',
+        'End',
+        'JT 0 ForEachActive @0 @21',
+        'JT 2 IfNotEqual @19 @20',
+        'JT 3 IfEqual @18 @19',
+        'JT 5 IfEqual @12 @18',
+        'JT 6 IfLower @10 @11',
+        'JT 12 IfGreater @16 @17',
+    ],
+    3: [  # Rotate Block
+        'IfEqual 0 OBJECTSTATE 1',
+        'Equal OBJECTFRAME OBJECTVALUE0',
+        'ShR OBJECTFRAME 3',
+        'Inc OBJECTVALUE0',
+        'IfEqual 2 OBJECTVALUE0 32',
+        'Equal OBJECTVALUE0 0',
+        'Equal OBJECTSTATE 0',
+        'Equal OBJECTFRAME 0',
+        'endif',
+        'endif',
+        'ForEachActive 4 256 ARRAYPOS6',
+        'CallFunction 10',
+        'IfNotEqual 6 CHECKRESULT 0',
+        'IfEqual 8 OBJECTVALUE14[1,1,6] 0',
+        'Equal OBJECTVALUE14[1,1,6] 30',
+        'Equal OBJECTSTATE 1',
+        'Xor LOCAL[1,0,2] 1',
+        'PlaySfx 42 0',
+        'endif',
+        'endif',
+        'next',
+        'End',
+        'JT 0 IfEqual @9 @10',
+        'JT 4 IfEqual @8 @9',
+        'JT 10 ForEachActive @10 @21',
+        'JT 12 IfNotEqual @19 @20',
+        'JT 13 IfEqual @18 @19',
+    ],
+    4: [  # Goal Block
+        'ForEachActive 0 256 ARRAYPOS6',
+        'CallFunction 10',
+        'IfGreater 2 CHECKRESULT 0',
+        'Equal OBJECTSTATE[1,1,6] 1',
+        'Equal OBJECTXVEL[1,1,6] 0',
+        'Equal OBJECTYVEL[1,1,6] 0',
+        'Equal OBJECTSPEED[1,1,6] 0',
+        'Equal OBJECTVALUE0 0',
+        'Equal OBJECTINTERACTION[1,1,6] 0',
+        'ResetObjectEntity 20 22 0 0 0',
+        'Equal OBJECTPRIORITY[1,0,20] 1',
+        'PlaySfx 45 0',
+        'Equal STAGETIMEENABLED 0',
+        'Equal GLOBAL[1,0,7] 0',
+        'endif',
+        'next',
+        'End',
+        'JT 0 ForEachActive @0 @16',
+        'JT 2 IfGreater @14 @15',
+    ],
+    5: [  # Bumper
+        'IfGreater 0 OBJECTSTATE 0',
+        'Equal OBJECTFRAME OBJECTVALUE0',
+        'Div OBJECTFRAME 5',
+        'Inc OBJECTFRAME',
+        'Inc OBJECTVALUE0',
+        'IfGreater 2 OBJECTVALUE0 22',
+        'Equal OBJECTVALUE0 0',
+        'Equal OBJECTSTATE 0',
+        'Equal OBJECTFRAME 0',
+        'endif',
+        'endif',
+        'IfEqual 4 OBJECTOUTOFBOUNDS 1',
+        'Equal OBJECTPRIORITY 0',
+        'endif',
+        'ForEachActive 6 256 ARRAYPOS6',
+        'CallFunction 10',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -14 -14 14 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 8 CHECKRESULT 1',
+        'IfEqual 10 OBJECTSTATE 0',
+        'PlaySfx 41 0',
+        'endif',
+        'IfGreater 12 OBJECTVALUE0 5',
+        'PlaySfx 41 0',
+        'endif',
+        'Equal OBJECTSTATE 1',
+        'Equal OBJECTPRIORITY 1',
+        'Equal TEMP0 OBJECTXPOS[1,1,6]',
+        'Sub TEMP0 OBJECTXPOS',
+        'Equal TEMP1 OBJECTYPOS[1,1,6]',
+        'Sub TEMP1 OBJECTYPOS',
+        'ATan2 TEMP2 TEMP0 TEMP1',
+        'Cos256 TEMP0 TEMP2',
+        'Sin256 TEMP1 TEMP2',
+        'Mul TEMP0 1792',
+        'Mul TEMP1 1792',
+        'Equal OBJECTVALUE1[1,1,6] 0',
+        'Equal OBJECTVALUE12[1,1,6] TEMP0',
+        'Equal OBJECTVALUE13[1,1,6] TEMP1',
+        'Equal OBJECTSPEED[1,1,6] OBJECTXVEL',
+        'Equal OBJECTGRAVITY[1,1,6] 1',
+        'endif',
+        'next',
+        'End',
+        'JT 0 IfGreater @10 @11',
+        'JT 5 IfGreater @9 @10',
+        'JT 11 IfEqual @13 @14',
+        'JT 14 ForEachActive @14 @42',
+        'JT 17 IfEqual @40 @41',
+        'JT 18 IfEqual @20 @21',
+        'JT 21 IfGreater @23 @24',
+    ],
+}
+SS_UPDATES = (('Red White Block', 0), ('Gem Block', 1), ('Up Down Block', 2), ('Rotate Block', 3), ('Goal Block', 4),
+              ('Bumper', 5))
+
+
+def patch_ss_updates(bcdir):
+    """Special's other update subs -> PS1SSObjUpdate kind / End when exactly SSOBJUPDATE_SIGS_S1[kind]; function 10 must
+    be SSBLOCKCOLLIDE_FN_SIG_S1 or already PS1SSBlockCollide (the native calls it directly)."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1SSObjUpdate'), fn.index('End')
+    path = os.path.join(bcdir, 'Special.bin')
+    raw = open(path, 'rb').read()
+    own, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    full = bs.full_code(path)[0]
+    base = len(full) - len(own)
+    f10 = bs.load(path)[4][10][0]
+    if full[f10] != fn.index('PS1SSBlockCollide') and fn_listing(path, 10, names, vars_) != SSBLOCKCOLLIDE_FN_SIG_S1:
+        return 'special stage updates: function 10 is not the one PS1SSBlockCollide transcribes (not patched)'
+    objs = object_sheets.stage_config(os.path.join(bcdir, '..', 'Data'), 'Special')[2]
+    done, already = [], []
+    for name, kind in SS_UPDATES:
+        k = objs.index(name)
+        ptr = bs.load(path)[2][k][0]
+        if full[ptr] == op:
+            already.append(name)
+            continue
+        if sub_listing(path, k, 0, names, vars_)[3] != SSOBJUPDATE_SIGS_S1[kind]:
+            sys.exit('ERROR patch_bytecode: %s update sub is not the one PS1SSObjUpdate %d transcribes' % (name, kind))
+        own[ptr - base:ptr - base + 4] = [op, 2, kind, end]
+        full[ptr:ptr + 4] = [op, 2, kind, end]
+        done.append(name)
+    open(path, 'wb').write(encode(own) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    return 'special stage updates native: %s%s' % (', '.join(done) or '-', ' (already: %s)' % ', '.join(already) if already else '')
+
+
 def s1_patches():
     """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
@@ -6219,6 +6489,7 @@ def s1_patches():
                                                       calls=(71, 51))),
             ('ssring', lambda d: patch_stage_sub(d, 'Ring', 0, SSRING_SIG_S1, 'PS1SSRing', with_jumps=True)),
             ('ssblockupdate', patch_ss_block_update),  # before ssblockcollide: it checks function 10's signature
+            ('ssupdates', patch_ss_updates),  # before ssblockcollide too
             ('ssblockdraw', patch_ss_block_draw),  # before ssrotpos: it checks function 9's signature
             ('ssdraws', patch_ss_draws),  # before ssrotpos too
             ('ssrotpos', lambda d: patch_stage_function(d, 'Special', 9, SSROTPOS_FN_SIG_S1, 'PS1SSRotPos')),

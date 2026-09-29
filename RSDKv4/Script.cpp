@@ -803,6 +803,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SSPlaceDraw", 1),
     FunctionInfo("PS1SSAnimDraw", 1),
     FunctionInfo("PS1SSGemDraw", 0),
+    FunctionInfo("PS1SSObjUpdate", 1),
 #endif
 #endif
 };
@@ -1363,6 +1364,7 @@ enum ScrFunc {
     FUNC_PS1SSPLACEDRAW,
     FUNC_PS1SSANIMDRAW,
     FUNC_PS1SSGEMDRAW,
+    FUNC_PS1SSOBJUPDATE,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -6281,6 +6283,204 @@ static void PS1SSGemDraw()
         default: break;
     }
     PS1S1DrawFX(me.propertyValue, FX_FLIP, t[0], t[1]);
+}
+#endif
+
+#if PS1_GAME == 1
+// The special stage's other update subs (SSOBJUPDATE_SIGS_S1; the operand says which), all around function 10 (a block
+// against the player: PS1SSBlockCollide) in the players' loop (group 256, ARRAYPOS6). One statement per instruction.
+// 0 Red White Block: property 0 = solid; 1-5 = a trigger box (its side) that turns it solid (property 0, ink 0).
+// 1 Gem Block: its fade-out steps (state 1) and the touch that starts them (the "gem" sound).
+// 2 Up Down Block: toggles LOCAL[1] (the maze's speed step) with a 30-frame cool-down on the player.
+// 3 Rotate Block: reverses LOCAL[2] (the rotation's direction) and flashes; the same cool-down (value 14).
+// 4 Goal Block: stops the player and starts the stage's end (entity 20 = object 22).
+// 5 Bumper: bounces the player away from its centre (ATan2), with its 3-frame animation.
+static void PS1SSObjUpdate(int kind)
+{
+    int *t   = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    TypeGroupList &players = objectTypeGroupList[256];
+    auto me = [&]() -> Entity & { return PS1_OBJ(self); };
+    auto L  = [](int pos) { return (int)scriptCode[pos]; };
+    switch (kind) {
+        case 0: // Red White Block
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                if (me().propertyValue == 0) {
+                    PS1SSBlockCollide(); // CallFunction 10
+                }
+                else {
+                    // switch OBJECTPROPERTYVALUE 1-5: BoxCollisionTest C_TOUCH with that case's box (else nothing)
+                    static const int16_t box[5][4] = { { -160, 36, 160, 60 }, { 36, -160, 60, 160 }, { -60, -160, -36, 160 },
+                                                       { -160, -60, 160, -36 }, { 36, -24, 60, 24 } };
+                    int k = me().propertyValue;
+                    if (k >= 1 && k <= 5) {
+                        const int16_t *b = box[k - 1];
+                        TouchCollision(&PS1_OBJ(self), b[0], b[1], b[2], b[3], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                        if (cr == 1) {
+                            me().propertyValue = 0;
+                            me().inkEffect     = 0;
+                        }
+                    }
+                }
+            }
+            break;
+        case 1: // Gem Block
+            if (me().state == 1) {
+                me().propertyValue = me().values[0];
+                me().propertyValue = me().propertyValue >> 1;
+                me().propertyValue &= 3;
+                me().values[0]++;
+                if (me().values[0] == 16) {
+                    me().priority      = 0;
+                    me().values[0]     = 0;
+                    me().propertyValue = me().values[1];
+                    me().propertyValue++;
+                    if (me().propertyValue == 4)
+                        me().type = 0;
+                    else
+                        me().state = 0;
+                    PS1ScriptWrite(2026, 0); // LOCAL[2026]
+                }
+                for (int loop = 0; loop < players.listSize; ++loop) {
+                    ap[6] = players.entityRefs[loop];
+                    PS1SSBlockCollide();
+                }
+            }
+            else {
+                for (int loop = 0; loop < players.listSize; ++loop) {
+                    ap[6] = players.entityRefs[loop];
+                    PS1SSBlockCollide();
+                    if (L(2026) == 0) {
+                        if (cr > 0) {
+                            me().state     = 1;
+                            me().priority  = 1;
+                            PS1ScriptWrite(2026, 1);
+                            me().values[1] = me().propertyValue;
+                            if (L(3) == 0)
+                                PlaySfx(43, 0);
+                        }
+                    }
+                }
+            }
+            break;
+        case 2: // Up Down Block
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                PS1SSBlockCollide();
+                if (cr != 0) {
+                    Entity &p = PS1_OBJ(ap[6]);
+                    if (p.values[15] == 0) {
+                        p.values[15] = 30;
+                        if (me().propertyValue == 0) {
+                            if (L(1) < 1) {
+                                PS1ScriptWrite(1, L(1) + 1);
+                                me().propertyValue = 1;
+                                PlaySfx(42, 0);
+                            }
+                        }
+                        else {
+                            if (L(1) > 0) {
+                                PS1ScriptWrite(1, L(1) - 1);
+                                me().propertyValue = 0;
+                                PlaySfx(42, 0);
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        case 3: // Rotate Block
+            if (me().state == 1) {
+                me().frame = me().values[0];
+                me().frame = me().frame >> 3;
+                me().values[0]++;
+                if (me().values[0] == 32) {
+                    me().values[0] = 0;
+                    me().state     = 0;
+                    me().frame     = 0;
+                }
+            }
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                PS1SSBlockCollide();
+                if (cr != 0) {
+                    Entity &p = PS1_OBJ(ap[6]);
+                    if (p.values[14] == 0) {
+                        p.values[14] = 30;
+                        me().state   = 1;
+                        PS1ScriptWrite(2, L(2) ^ 1);
+                        PlaySfx(42, 0);
+                    }
+                }
+            }
+            break;
+        case 4: // Goal Block
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                PS1SSBlockCollide();
+                if (cr > 0) {
+                    Entity &p            = PS1_OBJ(ap[6]);
+                    p.state              = 1;
+                    p.xvel               = 0;
+                    p.yvel               = 0;
+                    p.speed              = 0;
+                    me().values[0]       = 0;
+                    p.objectInteractions = 0;
+                    PS1ResetObjectEntity(20, 22, 0, 0, 0);
+                    PS1_OBJ(20).priority = 1;
+                    PlaySfx(45, 0);
+                    timeEnabled = 0;
+                    G[7]        = 0;
+                }
+            }
+            break;
+        case 5: // Bumper
+            if (me().state > 0) {
+                me().frame = me().values[0];
+                me().frame = PS1ScriptDiv(me().frame, 5);
+                me().frame++;
+                me().values[0]++;
+                if (me().values[0] > 22) {
+                    me().values[0] = 0;
+                    me().state     = 0;
+                    me().frame     = 0;
+                }
+            }
+            if (PS1ObjectOutOfBounds(&me()) == 1)
+                me().priority = 0;
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                PS1SSBlockCollide();
+                TouchCollision(&PS1_OBJ(self), -14, -14, 14, 14, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                if (cr == 1) {
+                    if (me().state == 0)
+                        PlaySfx(41, 0);
+                    if (me().values[0] > 5)
+                        PlaySfx(41, 0);
+                    me().state    = 1;
+                    me().priority = 1;
+                    Entity &p     = PS1_OBJ(ap[6]);
+                    t[0]          = p.xpos;
+                    t[0] -= me().xpos;
+                    t[1] = p.ypos;
+                    t[1] -= me().ypos;
+                    t[2] = ArcTanLookup(t[0], t[1]);
+                    t[0] = Cos256(t[2]);
+                    t[1] = Sin256(t[2]);
+                    t[0] *= 1792;
+                    t[1] *= 1792;
+                    p.values[1]  = 0;
+                    p.values[12] = t[0];
+                    p.values[13] = t[1];
+                    p.speed      = me().xvel;
+                    p.gravity    = 1;
+                }
+            }
+            break;
+    }
 }
 #endif
 
@@ -11528,6 +11728,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SSANIMDRAW: // the special stage's animated draw subs (SSANIMDRAW_SIGS_S1): which one
                 opcodeSize = 0;
                 PS1SSAnimDraw(scriptEng.operands[0]);
+                break;
+            case FUNC_PS1SSOBJUPDATE: // the special stage's other update subs (SSOBJUPDATE_SIGS_S1): which one
+                opcodeSize = 0;
+                PS1SSObjUpdate(scriptEng.operands[0]);
                 break;
             case FUNC_PS1SSGEMDRAW: // Gem Block's draw sub (SSGEMDRAW_SIG_S1)
                 opcodeSize = 0;
