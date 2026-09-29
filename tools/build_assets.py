@@ -129,10 +129,7 @@ def main():
     run('4 tiles', [PY, os.path.join(HERE, 'tiles', 'convert_tiles.py'), sdata, data], env=env)
     run('5 strips', [PY, os.path.join(HERE, 'bgstrips', 'build_bgstrips.py'), data] + (['--game', '1'] if s1 else []),
         log=os.path.join(mdir, 'bgstrips.log'), env=env)  # Sonic 1: BGS3 (segment maps, 4-bit rows; docs/37 phase 3)
-    if s1:  # Sonic 1's menu screens and art: docs/37 phase 4 (the builder's strings / Time Attack layout are Sonic 2's)
-        print('[6 menus] Sonic 1: not yet (docs/37 phase 4)', flush=True)
-    else:
-        run('6 menus', [PY, os.path.join(HERE, 'menu', 'build_menu.py'), sdata, data], env=env)
+    run('6 menus', [PY, os.path.join(HERE, 'menu', 'build_menu.py'), sdata, data] + (['--game', '1'] if s1 else []), env=env)
     run('7 sfx', [PY, os.path.join(HERE, 'audio', 'build_sfx.py'), sdata, data, sbc], env=env)
     run('8 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), sdata, data, sbc], env=env)
 

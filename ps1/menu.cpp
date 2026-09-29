@@ -152,7 +152,11 @@ void PS1MenuTestService() {
 // calls the same InitStartingStage as the native code (quoted per action).
 
 #include "RetroEngine.hpp"
+#if PS1_GAME == 1
+#include "menu_pack_s1.h" // Sonic 1 (docs/37 phase 4)
+#else
 #include "menu_pack.h"
+#endif
 
 #include <psyqo/primitives/common.hh>
 #include <psyqo/primitives/sprites.hh>
@@ -203,6 +207,22 @@ void drawImage(const PS1MenuImage &img, int x, int y, int semiMode = 0) {
     s.texInfo  = psyqo::PrimPieces::TexInfo{ img.u, img.v, clut };
     PS1ChainSprite(s);
 }
+
+#if PS1_GAME == 1
+// An image modulated by an RGB colour (the native SetRenderVertexColor tints: texel x colour / 255 -> the GPU's
+// texel x c / 128 with c = colour / 2).
+void drawImageTint(const PS1MenuImage &img, int x, int y, uint32_t rgb) {
+    chainTexPage(img.tpage, -1);
+    psyqo::Prim::Sprite s(psyqo::Color{ { .r = (uint8_t)((rgb >> 17) & 0x7F), .g = (uint8_t)((rgb >> 9) & 0x7F),
+                                          .b = (uint8_t)((rgb >> 1) & 0x7F) } });
+    psyqo::PrimPieces::ClutIndex clut;
+    memcpy(&clut, &img.clut, 2);
+    s.position = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)y } };
+    s.size     = psyqo::Vertex{ { .w = (int16_t)img.w, .h = (int16_t)img.h } };
+    s.texInfo  = psyqo::PrimPieces::TexInfo{ img.u, img.v, clut };
+    PS1ChainSprite(s);
+}
+#endif
 
 const PS1MenuGlyph *findGlyph(const PS1MenuPack &pack, int font, int code) {
     if (font >= pack.fontCount)
@@ -351,9 +371,16 @@ void loadSavedGame(int slot) {
     }
 }
 
+#if PS1_GAME == 1
+// ---- Time Attack, Sonic 1 (TimeAttack.cpp / RecordsScreen.cpp GAME_SONIC1): six zones of 3 acts, the Final Zone (1)
+// and the special stages (6: records blank at 30000). Records: 3 per act (centiseconds), 60000 = the native blank.
+// Pictures (PS1TimeAttack.pmn, 112 x 84): acts 0-17, the Final Zone, special stages 1-6.
+enum { TA_ZONES = 8, TA_ACTS = 3, TA_PIC_W = 112, TA_PIC_H = 84 };
+#else
 // ---- Time Attack (TimeAttack.cpp, RecordsScreen.cpp; Sonic 2 without Egg Gauntlet: 11 zones of 2 acts, Metropolis
 // 3, Wing Fortress / Boss Attack / Hidden Palace 1). Records: 3 per act (centiseconds), 60000 = the native blank.
 enum { TA_ZONES = 11, TA_ACTS = 2 };
+#endif
 struct TAState {
     int zone, act;
     int button;   // records screen: 0 PLAY, 1 NEXT ACT
@@ -362,6 +389,13 @@ struct TAState {
     bool pending; // a run was started from the records screen: RESETGAME comes back to it
 } s_ta;
 
+#if PS1_GAME == 1
+int taActCount(int z) { return z == 6 ? 1 : z == 7 ? 6 : TA_ACTS; }            // RecordsScreen: final / special
+int taOffset(int z) { return z == 6 ? TA_ACTS * 6 : z == 7 ? TA_ACTS * 6 + 1 : TA_ACTS * z; } // recordOffset
+int taRecordPos(int z) { return 3 * taOffset(z); }
+int taPicture(int z, int act) { return taOffset(z) + act; }                     // PS1TimeAttack.pmn order
+int taName(int z, int act) { return PS1_STR_SAVE_STAGE_NAME1 + taOffset(z) + act; } // strSaveStageList[nameID + act]
+#else
 int taActCount(int z) { return z == 7 ? 3 : z >= 8 ? 1 : TA_ACTS; } // RecordsScreen: "metropolis sux"
 int taRecordPos(int z) { return 3 * (z >= 8 ? TA_ACTS * 8 + 1 + (z - 8) : TA_ACTS * z); }
 int taPicture(int z, int act) { return z < 8 ? TA_ACTS * z + act : 17 + (z - 8); } // PS1TimeAttack.pmn order
@@ -370,29 +404,47 @@ int taName(int z, int act) { // strSaveStageList[nameID + actID]
     int off = z < 8 ? TA_ACTS * z : offs[z - 8];
     return PS1_STR_SAVE_STAGE_NAME1 + (off == TA_ACTS * 8 + 1 ? off + 1 : off) + act;
 }
+#endif
 int taZoneTotal(int z) {
     const SaveGame *saveGame = (const SaveGame *)saveRAM;
     int t = 0;
     for (int a = 0; a < taActCount(z); ++a) t += saveGame->records[taRecordPos(z) + 3 * a];
     return t;
 }
+#if PS1_GAME == 1
+bool taUnlocked(int z) { // TimeAttack_Create GAME_SONIC1: past the zone's last act; Final Zone past 18, specials past 19
+    const SaveGame *saveGame = (const SaveGame *)saveRAM;
+    int need = z == 6 ? TA_ACTS * 6 : z == 7 ? TA_ACTS * 6 + 1 : TA_ACTS * (z + 1);
+    return saveGame->unlockedActs > need && saveGame->unlockedActs < 0x80;
+}
+#else
 bool taUnlocked(int z) { // TimeAttack_Create: reached in a save (unlockedActs), Hidden Palace by its own flag
     const SaveGame *saveGame = (const SaveGame *)saveRAM;
     if (z == 10)
         return saveGame->unlockedHPZ;
     return saveGame->unlockedActs > TA_ACTS * (z + 1) && saveGame->unlockedActs < 0x80;
 }
+#endif
 
 // TimeAttack_Create: blank records -> 60000 (saved), unlockedActs = the furthest stage of the files.
 void taCreate() {
     SaveGame *saveGame = (SaveGame *)saveRAM;
     bool updated       = false;
+#if PS1_GAME == 1
+    for (int i = 0; i < (6 * TA_ACTS + 1) * 3 + 6 * 3; ++i) { // 19 acts at 60000, then 6 special stages at 30000
+        if (!saveGame->records[i]) {
+            saveGame->records[i] = i < (6 * TA_ACTS + 1) * 3 ? 60000 : 30000;
+            updated              = true;
+        }
+    }
+#else
     for (int i = 0; i < TA_ZONES * TA_ACTS * 3; ++i) {
         if (!saveGame->records[i]) {
             saveGame->records[i] = 60000;
             updated              = true;
         }
     }
+#endif
     if (updated)
         WriteSaveRAMData();
     int zone = saveGame->unlockedActs;
@@ -417,6 +469,12 @@ void taPlay() {
     setGlobal("starPostID", 0);
     setGlobal("timeAttack.result", 0);
     int z = s_ta.zone;
+#if PS1_GAME == 1
+    if (z >= 7) // RECORDSSCREEN_STATE_LOADSTAGE GAME_SONIC1: the special stages
+        InitStartingStage(STAGELIST_SPECIAL, s_ta.act, 0);
+    else
+        InitStartingStage(STAGELIST_REGULAR, z * TA_ACTS + s_ta.act, 0); // the Final Zone: 18
+#else
     if (z >= 9) {
         if (z == 9)
             InitStartingStage(STAGELIST_BONUS, 1, 0);
@@ -427,6 +485,7 @@ void taPlay() {
         InitStartingStage(STAGELIST_REGULAR, 18, 0);
     else
         InitStartingStage(STAGELIST_REGULAR, z * TA_ACTS + s_ta.act, 0);
+#endif
     s_ta.pending = true;
 }
 
@@ -525,6 +584,255 @@ void mainScreen(int move, bool ok, bool back) {
         go(PS1_MENU_TITLE);
 }
 
+#if PS1_GAME == 1
+void saveScreen(int move, bool ok, bool back) {
+    const PS1MenuPack &mp = g_ps1MenuScreens;
+    SaveGame *saveGame    = (SaveGame *)saveRAM;
+    static const int icons[4] = { PS1_MENU_ICON_SONIC, PS1_MENU_ICON_TAILS, PS1_MENU_ICON_KNUX, PS1_MENU_ICON_SONIC };
+    static const uint32_t emeralds[6] = { 0x8080FF, 0xFFFF00, 0xFF60C0, 0xA0FF00, 0xFF4060, 0xFFFFFF }; // SubMenuButton S1
+    s_m.sel = (s_m.sel + move + 5) % 5;
+    drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SAVE_SELECT), 160, 6, 1);
+    for (int i = 0; i < 5; ++i) {
+        int y = 44 + i * 38;
+        drawBar(y, 32, i == s_m.sel);
+        if (!i) {
+            drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(PS1_STR_NO_SAVE), 60, y + 8);
+            continue;
+        }
+        const SaveFile &f = saveGame->files[i - 1];
+        if (f.stageID <= 0) {
+            drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(PS1_STR_NEW_GAME), 60, y + 8);
+            continue;
+        }
+        // SaveSelect.cpp: special stages SaveStageName20+, past the Final Zone "COMPLETE" (strSaveStageList[25])
+        int name = f.stageID >= 0x80 ? PS1_STR_SAVE_STAGE_NAME1 + f.specialStageID + 19
+                   : f.stageID - 1 > 18 ? PS1_STR_SAVE_STAGE_NAME26 : PS1_STR_SAVE_STAGE_NAME1 + f.stageID - 1;
+        if (name > PS1_STR_SAVE_STAGE_NAME26)
+            name = PS1_STR_SAVE_STAGE_NAME26;
+        const PS1MenuImage &icon = mp.images[icons[f.characterID & 3]];
+        drawImage(icon, 14, y + 2);
+        if ((f.characterID & 3) == 3)
+            drawImage(mp.images[PS1_MENU_ICON_TAILS], 28, y + 2);
+        drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(name), 60, y + 3);
+        for (int e = 0; e < 6; ++e) { // six emeralds, each in its colour when collected (SubMenuButton, GAME_SONIC1)
+            if ((f.emeralds >> e) & 1)
+                drawImageTint(mp.images[PS1_MENU_EMERALD_ON], 60 + e * 12, y + 20, emeralds[e]);
+            else
+                drawImage(mp.images[PS1_MENU_EMERALD_OFF], 60 + e * 12, y + 20);
+        }
+    }
+    if (ok) {
+        PlaySfxByName("Menu Select", false);
+        int slot = s_m.sel - 1;
+        if (slot >= 0 && saveGame->files[slot].stageID > 0)
+            loadSavedGame(slot);
+        else {
+            s_m.saveSlot = slot;
+            go(PS1_MENU_PLAYER, 0);
+        }
+    }
+    else if (back)
+        go(PS1_MENU_MAIN, 0);
+}
+
+// Player select, Sonic 1 (PlayerSelectScreen.cpp): Tails and Knuckles start locked (the save's flags, set by the
+// Ending): only the unlocked ones can be chosen (Sonic; + Sonic & Tails, Tails; + Knuckles), locked ones not shown.
+void playerScreen(int moveX, bool ok, bool back) {
+    const PS1MenuPack &mp    = g_ps1MenuScreens;
+    const SaveGame *saveGame = (const SaveGame *)saveRAM;
+    int count                = saveGame->knuxUnlocked ? 4 : saveGame->tailsUnlocked ? 3 : 1;
+    if (count > 1)
+        s_m.sel = (s_m.sel + moveX + count) % count;
+    else
+        s_m.sel = 0;
+    drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_PLAYER_SELECT), 160, 6, 1);
+    drawImage(mp.images[PS1_MENU_PLATE], 85, 50);
+    switch (s_m.sel) {
+        case 0: drawImage(mp.images[PS1_MENU_PORTRAIT_SONIC], 90, 52); break;
+        case 1:
+            drawImage(mp.images[PS1_MENU_PORTRAIT_TAILS], 118, 58);
+            drawImage(mp.images[PS1_MENU_PORTRAIT_SONIC], 62, 52);
+            break;
+        case 2: drawImage(mp.images[PS1_MENU_PORTRAIT_TAILS], 90, 52); break;
+        default: drawImage(mp.images[PS1_MENU_PORTRAIT_KNUX], 90, 52); break;
+    }
+    if (count > 1) {
+        drawText(mp, PS1_FONT_LABEL_L, "<", 40, 110);
+        drawText(mp, PS1_FONT_LABEL_L, ">", 265, 110);
+    }
+    drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(kPlayerName[s_m.sel]), 160, 206, 1);
+    if (ok) {
+        PlaySfxByName("Menu Select", false);
+        startNewGame(s_m.saveSlot, kPlayerChar[s_m.sel]);
+    }
+    else if (back)
+        go(PS1_MENU_SAVE, s_m.saveSlot + 1);
+}
+
+// Options, Sonic 1 (SettingsScreen.cpp GAME_SONIC1): music / SFX volume, the spin dash (on / off: saveGame's value 35,
+// which Sonic 1's player script reads), the staff credits.
+void optionsScreen(int moveY, int moveX, bool ok, bool back) {
+    const PS1MenuPack &mp = g_ps1MenuScreens;
+    SaveGame *saveGame    = (SaveGame *)saveRAM;
+    s_m.sel               = (s_m.sel + moveY + 4) % 4;
+    drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SETTINGS), 160, 6, 1);
+    static const int items[4] = { PS1_STR_MUSIC, PS1_STR_SOUND_F_X, PS1_STR_SPIN_DASH, PS1_STR_STAFF_CREDITS };
+    for (int i = 0; i < 4; ++i) {
+        int y = 56 + i * 36;
+        drawBar(y - 4, 28, i == s_m.sel);
+        drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(items[i]), 40, y);
+        if (i < 2) { // volume: 5 notches
+            int vol = i == 0 ? saveGame->musVolume : saveGame->sfxVolume;
+            for (int k = 0; k < 5; ++k) {
+                bool on = vol > k * (MAX_VOLUME / 5);
+                drawRect(200 + k * 18, y + 2, 12, 12, on ? 255 : 40, on ? 210 : 40, on ? 0 : 80);
+            }
+        }
+        else if (i == 2) { // ON / OFF, the chosen one lit (the native buttons' bgColor)
+            bool on = saveGame->spindashEnabled;
+            drawRect(196, y - 2, 42, 18, on ? 0 : 0, on ? 160 : 96, on ? 72 : 32);
+            drawRect(244, y - 2, 42, 18, 0, !on ? 160 : 96, !on ? 72 : 32);
+            drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_ON), 217, y + 1, 1);
+            drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_OFF), 265, y + 1, 1);
+        }
+    }
+    if (moveX && s_m.sel < 2) { // SettingsScreen.cpp SETTINGSSCREEN_SEL_MUSVOL / SFXVOL
+        PlaySfxByName("Menu Move", false);
+        int &vol = s_m.sel == 0 ? saveGame->musVolume : saveGame->sfxVolume;
+        if (moveX < 0) {
+            if (vol > 0)
+                vol -= (MAX_VOLUME / 5);
+            SetGameVolumes(saveGame->musVolume, saveGame->sfxVolume);
+            if (s_m.sel == 0 && !saveGame->musVolume)
+                musicEnabled = false;
+        }
+        else {
+            if (vol < MAX_VOLUME)
+                vol += (MAX_VOLUME / 5);
+            if (s_m.sel == 0 && !musicEnabled) {
+                musicEnabled = true;
+                PlayMusic(0, 0);
+            }
+            SetGameVolumes(saveGame->musVolume, saveGame->sfxVolume);
+        }
+    }
+    else if (moveX && s_m.sel == 2) { // SETTINGSSCREEN_SEL_SPINDASH: left / right flip it
+        PlaySfxByName("Menu Move", false);
+        saveGame->spindashEnabled = !saveGame->spindashEnabled;
+    }
+    if (ok && s_m.sel == 3) {
+        PlaySfxByName("Menu Select", false);
+        InitStartingStage(STAGELIST_PRESENTATION, 2, 0); // the scripted Staff Credits; its end returns to the menus
+    }
+    else if (back) {
+        WriteSaveRAMData();
+        go(PS1_MENU_MAIN, 2);
+    }
+}
+
+// Time Attack, Sonic 1: the six zones, the Final Zone and the special stages in a list; the selected one's first
+// picture (112 x 84) with its total time, and the total of every entry.
+void timeAttackScreen(int moveY, bool ok, bool back) {
+    const PS1MenuPack &mp = g_ps1MenuScreens;
+    char buf[16];
+    s_m.sel = (s_m.sel + moveY + TA_ZONES) % TA_ZONES;
+    drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_TIME_ATTACK), 160, 6, 1);
+    int total = 0;
+    for (int z = 0; z < TA_ZONES; ++z) {
+        int y = 46 + z * 22;
+        total += taZoneTotal(z);
+        if (z == s_m.sel)
+            drawRect(0, y - 4, 180, 18, 200, 160, 0, 0);
+        drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_STAGE_NAME1 + z), 10, y);
+        if (!taUnlocked(z)) {
+            drawRect(0, y - 4, 180, 18, 16, 40, 140, 0); // dimmed
+            drawImage(mp.images[PS1_MENU_LOCK], 160, y - 3);
+        }
+    }
+    int z = s_m.sel;
+    drawRect(190, 48, TA_PIC_W + 4, TA_PIC_H + 4, 128, 128, 128); // the native grey frame
+    if (s_taPack.imageCount)
+        drawImage(s_taPack.images[taPicture(z, 0)], 192, 50);
+    if (!taUnlocked(z)) {
+        drawRect(192, 50, TA_PIC_W, TA_PIC_H, 0, 0, 0, 0);
+        drawImage(mp.images[PS1_MENU_LOCK], 192 + TA_PIC_W / 2 - 8, 50 + TA_PIC_H / 2 - 8);
+    }
+    formatTime(buf, taZoneTotal(z));
+    drawText(mp, PS1_FONT_LABEL_M, buf, 248, 142, 1);
+    drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_TOTAL_TIME), 248, 188, 1);
+    formatTime(buf, total);
+    drawText(mp, PS1_FONT_LABEL_M, buf, 248, 206, 1);
+    if (ok && taUnlocked(z)) {
+        PlaySfxByName("Menu Select", false);
+        s_ta.zone   = z;
+        s_ta.act    = 0;
+        s_ta.button = 0;
+        s_ta.rank   = 0;
+        s_ta.flash  = 0;
+        debugMode   = false; // RecordsScreen_Create
+        go(PS1_MENU_RECORDS);
+    }
+    else if (back)
+        go(PS1_MENU_MAIN, 1);
+}
+
+// Records, Sonic 1: as Sonic 2's (the act's picture, name, 3 records, PLAY / NEXT ACT), 112 x 84 pictures.
+void recordsScreen(int moveX, bool ok, bool back) {
+    const PS1MenuPack &mp = g_ps1MenuScreens;
+    const SaveGame *saveGame = (const SaveGame *)saveRAM;
+    char buf[24];
+    int z = s_ta.zone, n = taActCount(z);
+    if (s_ta.flash > 0 && !--s_ta.flash)
+        s_ta.rank = 0;
+    if (!s_ta.flash) { // RECORDSSCREEN_STATE_MAIN (EXITRESULTS takes no input)
+        if (n > 1 && moveX < 0 && --s_ta.button < 0) {
+            s_ta.button = 1;
+            s_ta.act    = (s_ta.act + n - 1) % n;
+        }
+        else if (n > 1 && moveX > 0 && ++s_ta.button >= 2) {
+            s_ta.button = 0;
+            s_ta.act    = (s_ta.act + 1) % n;
+        }
+    }
+    drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(taName(z, s_ta.act)), 160, 8, 1);
+    drawRect(158 - TA_PIC_W / 2, 32, TA_PIC_W + 4, TA_PIC_H + 4, 128, 128, 128);
+    if (s_taPack.imageCount)
+        drawImage(s_taPack.images[taPicture(z, s_ta.act)], 160 - TA_PIC_W / 2, 34);
+    drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_RECORDS), 160, 132, 1);
+    const int *rec = &saveGame->records[taRecordPos(z) + 3 * s_ta.act];
+    for (int r = 0; r < 3; ++r) {
+        if (s_ta.rank == r + 1 && s_ta.flash % 6 >= 3) // the new record blinks (0.1 s period)
+            continue;
+        buf[0] = '1' + r;
+        buf[1] = '.';
+        buf[2] = ' ';
+        formatTime(buf + 3, rec[r]);
+        drawText(mp, PS1_FONT_LABEL_M, buf, 124, 150 + r * 16);
+    }
+    int px = n > 1 ? 100 : 160;
+    drawRect(px - 44, 208, 88, 18, s_ta.button == 0 ? 200 : 0, s_ta.button == 0 ? 160 : 0, s_ta.button == 0 ? 0 : 40, 0);
+    drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_PLAY), px, 212, 1);
+    if (n > 1) {
+        drawRect(176, 208, 88, 18, s_ta.button == 1 ? 200 : 0, s_ta.button == 1 ? 160 : 0, s_ta.button == 1 ? 0 : 40, 0);
+        drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_NEXT_ACT), 220, 212, 1);
+    }
+    if (s_ta.flash)
+        return;
+    if (ok && s_ta.button == 1) {
+        PlaySfxByName("Menu Move", false);
+        s_ta.act = (s_ta.act + 1) % n;
+    }
+    else if (ok) {
+        PlaySfxByName("Menu Select", false);
+        taPlay();
+    }
+    else if (back) {
+        PlaySfxByName("Menu Back", false);
+        go(PS1_MENU_TIMEATTACK, z);
+    }
+}
+
+#else
 void saveScreen(int move, bool ok, bool back) {
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
@@ -748,6 +1056,7 @@ void recordsScreen(int moveX, bool ok, bool back) {
     }
 }
 
+#endif
 }  // namespace
 
 volatile uint32_t g_ps1TAZone = 0, g_ps1TAAct = 0, g_ps1TARank = 0;

@@ -112,9 +112,8 @@ typedef unsigned int uint;
 #ifndef PS1_GAME
 #define PS1_GAME (2)
 #endif
-// The PS1 menus (ps1/menu.cpp: the mobile front end's flow in 2D) exist for Sonic 2; Sonic 1's come with docs/37 phase 4.
-// Until then its build boots the scripted Title and a game's end goes back to it, as the BOOT= builds do.
-#define PS1_MENUS (PS1_GAME == 2)
+// The PS1 menus (ps1/menu.cpp: the mobile front end's flow in 2D), for both games (Sonic 1: docs/37 phase 4).
+#define PS1_MENUS (1) // the PS1 menu screens (ps1/menu.cpp): both games (Sonic 1 since docs/37 phase 4)
 // PS1 port: 320 px (user decision, docs/30; the Mega Drive original was 320x224). No mouse / touch.
 #define DEFAULT_SCREEN_XSIZE 320
 #define DEFAULT_FULLSCREEN   false
