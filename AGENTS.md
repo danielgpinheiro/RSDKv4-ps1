@@ -1,8 +1,12 @@
-# AGENTS.md — RSDKv4-ps1 (Sonic 2 on PlayStation)
+# AGENTS.md — RSDKv4-ps1 (Sonic 2 and Sonic 1 on PlayStation)
 
 Operating manual for this repo. Workspace rules: `../AGENTS.md`. Knowledge base: `../docs/` (start at
-`../docs/README.md`). **Plan and phase table: `../docs/30-rsdkv4-sonic2-port-plan.md`. Lessons from the
-Sonic CD port and what carries over: `../docs/29`.**
+`../docs/README.md`). **Plans and phase tables: `../docs/30-rsdkv4-sonic2-port-plan.md` (Sonic 2, done),
+`../docs/37-rsdkv4-sonic1-port-plan.md` (Sonic 1, `GAME=1`). Lessons from the earlier ports: `../docs/29`.**
+
+**Two games, one engine**: `make GAME=1` / `GAME=1 tools/data_disc.sh` / `GAME=1 tools/<test>.sh` for Sonic 1
+(`../Sonic1_Extracted`; its own natives, save file, loading icon; its own PCSX-Redux instance, `tools/redux_env.sh`);
+the default `GAME=2` is Sonic 2 and must stay byte-identical to the published EXE unless Sonic 2 itself changes.
 
 ## What this is
 RSDKv4-Decompilation (Retro Engine v4, Sonic 1/2 2013) being ported to the PS1 with **psyqo** (C++20) on

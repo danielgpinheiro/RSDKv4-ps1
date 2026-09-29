@@ -10,18 +10,18 @@
 set -u
 cd "$(dirname "$0")/../.."
 W=${1:-/tmp/rsdkv4_save_test}; mkdir -p "$W"
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 CFG="$HOME/.config/pcsx-redux"
 MCD="python3 tools/memcard/mcd.py"
 FILE=BAHBRW-00004SONIC2
-pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
+redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
 cp -p "$CFG/pcsx.json" "$W/pcsx.json.bak"
 shasum "$CFG"/memcard*.mcd > "$W/cards.sha" 2>/dev/null
 restore() { cp -p "$W/pcsx.json.bak" "$CFG/pcsx.json"; }
 trap restore EXIT
 
 run() { # run CARD1 GDBFILE: one emulator session
-    $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -memcard1 "$1" -memcard2 "$W/mc2.mcd" \
+    $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -memcard1 "$1" -memcard2 "$W/mc2.mcd" \
           -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
     local emu=$!
     sleep 4
@@ -29,7 +29,7 @@ run() { # run CARD1 GDBFILE: one emulator session
     kill $emu 2>/dev/null; wait $emu 2>/dev/null
 }
 at() { printf 'break PS1PerfTick if g_ps1PerfFrames == %d\ncontinue\ndelete\n' "$1"; }
-head_gdb() { printf 'set pagination off\nset confirm off\ntarget remote localhost:3333\nsymbol-file rsdkv4.elf\n'; }
+head_gdb() { printf 'set pagination off\nset confirm off\ntarget remote localhost:%s\nsymbol-file rsdkv4.elf\n' "$REDUX_PORT"; }
 
 echo "== part 1: write / re-read"
 $MCD format "$W/mc1.mcd" >/dev/null && $MCD raw "$W/mc2.mcd" >/dev/null

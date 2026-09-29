@@ -7,11 +7,11 @@
 #        variant's atlas; INJECT runs once, at the first PS1TileSetLoad, before the stage load picks the atlas)
 cd "$(dirname "$0")/.."
 STAGE=$1; OUT=${2:-/tmp/rsdkv4_vram}; F=${3:-10}
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:${REDUX_PORT}
 symbol-file rsdkv4.elf
 break PS1LoadingDoneHook if g_ps1InitDone
 commands
@@ -38,9 +38,9 @@ detach
 end
 continue
 GDBEOF
-# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
-pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -iso build/game.cue -exe rsdkv4.ps-exe \
+# Other sessions share the emulator (tools/redux_env.sh): never kill theirs, only our own PID.
+redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
+$PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -iso build/game.cue -exe rsdkv4.ps-exe \
       >/dev/null 2>&1 &
 EMU=$!
 sleep 4

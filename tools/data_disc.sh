@@ -15,7 +15,9 @@
 # Since phase 11 the steps live in tools/build_assets.py (shared with the public builder); this runs it on SRC.
 set -eu
 cd "$(dirname "$0")/.."
-SRC=${SRC:-../Sonic2_Extracted}
+# GAME=1: Sonic 1 (docs/37) from ../Sonic1_Extracted; default GAME=2, Sonic 2.
+GAME=${GAME:-2}
+SRC=${SRC:-../Sonic${GAME}_Extracted}
 # one pipeline for the port and the public builder (docs/30 phase 11): tools/build_assets.py
-/usr/bin/python3 tools/build_assets.py --src "$SRC"
-make -s disc
+/usr/bin/python3 tools/build_assets.py --src "$SRC" --game "$GAME"
+make -s disc GAME="$GAME"

@@ -10,11 +10,11 @@
 # Frame CPU time is in hblanks (16-bit root counter 1: a frame longer than ~4 s wraps; use LOAD us).
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/rsdkv4_boot}; F1=${2:-60}; F2=${3:-600}
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:${REDUX_PORT}
 symbol-file rsdkv4.elf
 break PS1LoadingDoneHook
 commands
@@ -37,9 +37,9 @@ end
 end
 continue
 GDBEOF
-# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
-pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv4.ps-exe \
+# Other sessions share the emulator (tools/redux_env.sh): never kill theirs, only our own PID.
+redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
+$PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe rsdkv4.ps-exe \
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
 EMU=$!
 sleep 4

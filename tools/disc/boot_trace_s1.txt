@@ -1,0 +1,9 @@
+# Sonic 1's boot (docs/37), until phase 9 traces it: Sonic 2's trace without the menus' files (PS1_MENUS 0 until
+# phase 4). Input of tools/disc/gen_load_order.py; OPEN lines only are read.
+OPEN settings.ini
+OPEN UData.bin
+OPEN Data/Game/PS1Scene3D.bin
+OPEN Data/Game/GameConfig.bin
+OPEN Data/Game/PS1SfxResident.bin
+OPEN Data/Music/Music.bin
+OPEN Data/Game/GameConfig.bin

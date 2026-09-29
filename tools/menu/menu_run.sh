@@ -5,7 +5,7 @@
 #   masks: bit = INPUT_* (Up 0x1, Down 0x2, Left 0x4, Right 0x8, A 0x10, B 0x20, C 0x40, X 0x80, Start 0x1000)
 cd "$(dirname "$0")/../.."
 EVENTS=$1; CAPS=$2; OUT=$3
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 # GDBEXTRA=FILE: lines "FRAME gdb-command" run at that frame (after the pad mask), e.g. saveRAM / global injections.
 EXTRA=${GDBEXTRA:-/dev/null}
 ALL=$( (echo "$EVENTS" | tr ',' '\n' | sed 's/:.*//'; echo "$CAPS" | tr ',' '\n'; sed 's/ .*//' "$EXTRA") | grep -v '^$' | sort -n -u)
@@ -13,7 +13,7 @@ ALL=$( (echo "$EVENTS" | tr ',' '\n' | sed 's/:.*//'; echo "$CAPS" | tr ',' '\n'
 cat <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:${REDUX_PORT}
 symbol-file rsdkv4.elf
 GDBEOF
 for F in $ALL; do
@@ -31,9 +31,9 @@ for F in $ALL; do
 done
 echo detach
 } > "$OUT.gdb"
-# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
-pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
+# Other sessions share the emulator (tools/redux_env.sh): never kill theirs, only our own PID.
+redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
+$PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
 EMU=$!
 sleep 4
 timeout ${TIMEOUT:-400} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "STATE .*|rror.*"

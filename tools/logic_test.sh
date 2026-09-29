@@ -19,11 +19,11 @@ INJECT_S0=${INJECT_S0:-}
 # PRE="gdb commands": before the game runs (e.g. 'set var g_ps1FsFastLoad = 0': a .data switch, crt0 keeps it).
 INJECT_AT=${INJECT_AT:-0}; INJECT=${INJECT:-}
 if [ "${HOLD_RIGHT:-0}" = 1 ]; then M1=0x08; M2=0x08; fi
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:${REDUX_PORT}
 symbol-file rsdkv4.elf
 ${PRE:-}
 break PS1LoadingDoneHook
@@ -70,9 +70,9 @@ end
 end
 continue
 GDBEOF
-# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
-pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv4.ps-exe \
+# Other sessions share the emulator (tools/redux_env.sh): never kill theirs, only our own PID.
+redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
+$PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe rsdkv4.ps-exe \
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
 EMU=$!
 sleep 4

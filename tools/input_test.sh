@@ -6,13 +6,13 @@
 # Usage: tools/input_test.sh [OUT_PREFIX] [FIRST_FRAME=200]
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/rsdkv4_input}; F=${2:-200}
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 BUTTONS="Up Down Left Right Cross Circle Square Triangle L2 R2 L1 R1 Start Select"
 {
 cat <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:${REDUX_PORT}
 symbol-file rsdkv4.elf
 GDBEOF
 k=0
@@ -22,12 +22,12 @@ cat <<GDBEOF
 break PS1PerfTick if g_ps1PerfFrames == $f0
 continue
 delete
-shell curl -s 'http://localhost:8080/api/v1/lua/pad?press=$b' >/dev/null
+shell curl -s 'http://localhost:${REDUX_WEB}/api/v1/lua/pad?press=$b' >/dev/null
 break PS1PerfTick if g_ps1PerfFrames == $f1
 continue
 delete
 printf "BUTTON $b expect=%d buttons=0x%04x connected=%d\\n", $k, g_ps1PadButtons, g_ps1PadConnected
-shell curl -s 'http://localhost:8080/api/v1/lua/pad?release=$b' >/dev/null
+shell curl -s 'http://localhost:${REDUX_WEB}/api/v1/lua/pad?release=$b' >/dev/null
 break PS1PerfTick if g_ps1PerfFrames == $f2
 continue
 delete
@@ -37,9 +37,9 @@ GDBEOF
 done
 echo detach
 } > "$OUT.gdb"
-# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
-pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -exec "dofile('$PWD/tools/pad.lua')" \
+# Other sessions share the emulator (tools/redux_env.sh): never kill theirs, only our own PID.
+redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
+$PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -exec "dofile('$PWD/tools/pad.lua')" \
       -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
 EMU=$!
 sleep 4

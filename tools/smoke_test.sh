@@ -3,12 +3,12 @@
 # checked against the host (file CRC-32s), a VRAM dump during the load (loading icon) and after,
 # and a Cross press through tools/pad.lua. Needs tools/smoke_disc.sh first.
 cd "$(dirname "$0")/.."
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 OUT=${1:-/tmp/rsdkv4_smoke}
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:${REDUX_PORT}
 symbol-file rsdkv4.elf
 break PS1LoadingDebugHook if tick == 3
 commands
@@ -33,17 +33,17 @@ while $i < 6
   printf "FILE %d size=%u crc=%08x\n", $i, g_ps1TestSize[$i], g_ps1TestCrc[$i]
   set $i = $i + 1
 end
-shell curl -s 'http://localhost:8080/api/v1/lua/pad?press=Cross' >/dev/null
+shell curl -s "http://localhost:${REDUX_WEB}/api/v1/lua/pad?press=Cross" >/dev/null
 tbreak PS1ChainEnd if g_ps1PerfFrames == 130
 continue
 printf "PAD pressed=%04x\n", g_ps1TestPad
-shell curl -s 'http://localhost:8080/api/v1/lua/pad?release=Cross' >/dev/null
+shell curl -s "http://localhost:${REDUX_WEB}/api/v1/lua/pad?release=Cross" >/dev/null
 GDBEOF
 echo "shell python3 tools/vramshot.py ${OUT}_f130" >> "$OUT.gdb"
 echo "detach" >> "$OUT.gdb"
-# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
-pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -exec "dofile('$PWD/tools/pad.lua')" \
+# Other sessions share the emulator (tools/redux_env.sh): never kill theirs, only our own PID.
+redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
+$PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -exec "dofile('$PWD/tools/pad.lua')" \
       -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
 EMU=$!
 sleep 4

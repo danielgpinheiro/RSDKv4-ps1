@@ -56,7 +56,15 @@ bool useSGame = false;
 #include "../ps1/memcard.hh"
 #include "../ps1/memcard_icons.h"
 #define PS1_SAVE_INTS 256
-#define PS1_SAVE_FILE "BAHBRW-00004SONIC2" // (psyqo ports are 0-based: Port0 = memory card slot 1)
+// (psyqo ports are 0-based: Port0 = memory card slot 1). Each game its own file (Sonic CD is 00003); Sonic 1 uses the
+// user's RSDKv4 icon too (tools/memcard: "Sonic 1 & 2").
+#if PS1_GAME == 1
+#define PS1_SAVE_FILE  "BAHBRW-00005SONIC1"
+#define PS1_SAVE_TITLE "SONIC 1"
+#else
+#define PS1_SAVE_FILE  "BAHBRW-00004SONIC2"
+#define PS1_SAVE_TITLE "SONIC 2"
+#endif
 volatile uint32_t g_ps1SaveReads = 0, g_ps1SaveWrites = 0;
 volatile int32_t g_ps1SaveLastError = -1; // last psyqo::MemoryCard::Error (0 = OK)
 static int s_ps1SaveState = 0;          // 0 = card not read yet, 1 = read (data), 2 = read (nothing)
@@ -85,7 +93,7 @@ bool PS1ReadSaveCard()
 bool PS1WriteSaveCard()
 {
     PS1LoadingBegin();
-    PS1McError e = PS1McSave(psyqo::MemoryCard::Port::Port0, PS1_SAVE_FILE, "SONIC 2", s_ps1McIconSonic2, saveRAM,
+    PS1McError e = PS1McSave(psyqo::MemoryCard::Port::Port0, PS1_SAVE_FILE, PS1_SAVE_TITLE, s_ps1McIconSonic2, saveRAM,
                              PS1_SAVE_INTS * sizeof(int), 1);
     PS1LoadingEnd();
     g_ps1SaveLastError = (int32_t)e;

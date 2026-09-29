@@ -582,7 +582,7 @@ void RetroEngine::RunFrame()
 
                 case ENGINE_PS1MENU: PS1MenuFrame(); break;
 
-#ifndef PS1_BOOT_FOLDER
+#if !defined(PS1_BOOT_FOLDER) && PS1_MENUS
                 // RetroGameLoop's menu path (not skipStartMenu): back to the menus; the end of a game also reloads
                 // the GameConfig (global variables' initial values), as the native RestoreNativeObjects path does.
                 case ENGINE_ENDGAME:

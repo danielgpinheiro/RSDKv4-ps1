@@ -15,7 +15,8 @@ Output: one 4-bit texture (PER_ROW frames per SIZE-row band, 256 texels wide) + 
 compared with the reduced frames (load_frames(), shared with check_icon.py).
 
 Usage: build_icon.py [GIF] [OUT_HEADER] [--frame-ms N] [--crop X,Y,W,H]
-  defaults: ../Memcard icons/sonic-2-loading.gif cropped to its first 144x144 cell, ps1/loading_icon.h;
+  defaults (GAME=2): ../Memcard icons/sonic-2-loading.gif cropped to its first 144x144 cell, ps1/loading_icon.h;
+  GAME=1: sonic-1-loading.gif whole (172x200), ps1/loading_icon_s1.h;
   frame time from the GIF, or --frame-ms (default 83 ms when the GIF has none)
 """
 import collections, os, sys
@@ -27,13 +28,18 @@ SIZE = 48
 PER_ROW = 5
 TEX_W = 256  # texels
 DEFAULT_FRAME_MS = 83
-DEFAULT_CROP = (0, 0, 144, 144)  # the default GIF's first pose cell
+# Per game (GAME env var, as the Makefile: 2 = Sonic 2, 1 = Sonic 1 / docs/37): the GIF, the crop to its first pose
+# cell and the header. sonic-1-loading.gif (Sonic running, 4 frames of 172x200) is used whole.
+GAMES = {'2': ('sonic-2-loading.gif', (0, 0, 144, 144), 'ps1/loading_icon.h'),
+         '1': ('sonic-1-loading.gif', (0, 0, 172, 200), 'ps1/loading_icon_s1.h')}
+GAME = os.environ.get('GAME', '2')
+DEFAULT_CROP = GAMES[GAME][1]
 
 
 def default_gif():
-    p = os.path.join(REPO, '..', 'Memcard icons', 'sonic-2-loading.gif')
+    p = os.path.join(REPO, '..', 'Memcard icons', GAMES[GAME][0])
     if not os.path.exists(p):
-        sys.exit('sonic-2-loading.gif not found in PS1/Memcard icons/')
+        sys.exit('%s not found in PS1/Memcard icons/' % GAMES[GAME][0])
     return p
 
 
@@ -100,7 +106,7 @@ def main():
     if '--crop' in args:
         i = args.index('--crop'); crop = tuple(int(v) for v in args[i + 1].split(',')); del args[i:i + 2]
     gif = args[0] if len(args) > 0 else default_gif()
-    out = args[1] if len(args) > 1 else os.path.join(REPO, 'ps1', 'loading_icon.h')
+    out = args[1] if len(args) > 1 else os.path.join(REPO, GAMES[GAME][2])
     frames, gif_ms = load_frames(gif, crop)
     frame_ms = frame_ms or gif_ms or DEFAULT_FRAME_MS
     rows = (len(frames) + PER_ROW - 1) // PER_ROW

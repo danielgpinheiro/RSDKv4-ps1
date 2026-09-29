@@ -37,7 +37,8 @@ natively, leaving the same temps and table / local writes behind.
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected stops the
 build. Already patched files are recognised and left alone.
 
-Usage: patch_bytecode.py BYTECODE_DIR   (the disc tree's Bytecode/, e.g. build/iso/Bytecode)
+Usage: patch_bytecode.py BYTECODE_DIR [--game 1|2]   (the disc tree's Bytecode/, e.g. build/iso/Bytecode;
+       --game 1: Sonic 1's list, docs/37 -- default 2, Sonic 2's)
 """
 import os, struct, sys
 
@@ -2315,9 +2316,11 @@ PS1_TEMPENTITY_START = 0x380 - 0x80
 # forward from their own slot. Title Card (the stage pauses when a title card is placed), Special Setup, Bridge End
 # (Zone01, Zone08), Breakable Wall (Zone08), Spikes Activator (Zone07), Belt Activation (Zone09).
 ENTITY_BOUND_SITES = {'GlobalCode': 1, 'Special': 1, 'Zone01': 1, 'Zone07': 1, 'Zone08': 2, 'Zone09': 1}
+# Sonic 1 (docs/37): its own scans (the special stage's 707 placed blocks end at slot 738, inside the PS1's 768)
+ENTITY_BOUND_SITES_S1 = {'GlobalCode': 2, 'Special': 7, 'Zone01': 1, 'Zone03': 1, 'Zone04': 2, 'Zone05': 1, 'Zone06': 1}
 
 
-def patch_entity_layout(bcdir):
+def patch_entity_layout(bcdir, expected=None):
     """`WLower / IfGreaterOrEqual ARRAYPOSn 1056` -> 768: the end of the stage slots in the PS1 layout. Upstream's
     scans stop before the temp slots; on the PS1 they would reach them, and during an object's startup the running
     entity (ProcessStartupObjects: slot TEMPENTITY_START, type = the object) is there: the Title Card's startup found
@@ -2358,16 +2361,18 @@ def patch_entity_layout(bcdir):
     # A patched tree has no 1056 bound left (768 also occurs as a genuine bound: Special Setup sorts slots 32-767).
     if not done:
         return 'stage-slot bounds already %d' % PS1_TEMPENTITY_START
-    if done != {k: v for k, v in ENTITY_BOUND_SITES.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
-        sys.exit('ERROR patch_bytecode: entity bound sites %s, expected %s' % (done, ENTITY_BOUND_SITES))
+    expected = expected or ENTITY_BOUND_SITES
+    if done != {k: v for k, v in expected.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
+        sys.exit('ERROR patch_bytecode: entity bound sites %s, expected %s' % (done, expected))
     return 'stage-slot bounds 1056 -> %d: %s' % (PS1_TEMPENTITY_START, ' '.join('%s %d' % kv for kv in sorted(done.items())))
 
 
 UPSTREAM_ENTITY_COUNT, PS1_ENTITY_COUNT = 1184, 0x380
 CLEARALL_SITES = {'Special': 1}
+CLEARALL_SITES_S1 = {'Special': 2}  # Sonic 1 (docs/37)
 
 
-def patch_clear_all(bcdir):
+def patch_clear_all(bcdir, expected=None):
     """Clear-all loops `WLower v 1184 / ResetObjectEntity v 0 0 0 0 / Inc v / loop` (the special stage's Special Finish)
     -> 896, the PS1's entity count: its slots 0-895 (temp slots included) are all the loop can reset; past them it only
     reset the blank scratch entity, counted as out-of-range accesses (288 a stage end)."""
@@ -2405,8 +2410,9 @@ def patch_clear_all(bcdir):
             assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
     if not done:
         return 'clear-all loops already %d' % PS1_ENTITY_COUNT
-    if done != {k: v for k, v in CLEARALL_SITES.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
-        sys.exit('ERROR patch_bytecode: clear-all sites %s, expected %s' % (done, CLEARALL_SITES))
+    expected = expected or CLEARALL_SITES
+    if done != {k: v for k, v in expected.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
+        sys.exit('ERROR patch_bytecode: clear-all sites %s, expected %s' % (done, expected))
     return 'clear-all loops 1184 -> %d: %s' % (PS1_ENTITY_COUNT, ' '.join('%s %d' % kv for kv in sorted(done.items())))
 
 
@@ -5411,9 +5417,27 @@ def patch_oscillate(bcdir):
         f, c['state'], c['params'], c['bits'], c['n'])
 
 
+def s1_patches():
+    """Sonic 1 (docs/37): its own list. Of Sonic 2's natives only the oscillators and Green Hill's Bridge draw match
+    Sonic 1's scripts word for word; its own natives are added here as they are written (phase 2b)."""
+    return (('oscillate', patch_oscillate),
+            ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
+            ('entitylayout', lambda d: patch_entity_layout(d, ENTITY_BOUND_SITES_S1)),
+            ('clearall', lambda d: patch_clear_all(d, CLEARALL_SITES_S1)))
+
+
 def main():
-    bcdir = sys.argv[1]
+    args = sys.argv[1:]
+    game = '2'
+    if '--game' in args:
+        i = args.index('--game'); game = args[i + 1]; del args[i:i + 2]
+    bcdir = args[0]
     only = os.environ.get('PS1_PATCH_ONLY')  # tests: e.g. "oscillate" (a comma list of the patch names below)
+    if game == '1':
+        for name, fn in s1_patches():
+            if not only or name in only.split(','):
+                print('%s: %s' % (name, fn(bcdir)))
+        return
     for name, fn in (('oscillate', patch_oscillate), ('ring', patch_ring),
                      ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
                      ('losering', lambda d: patch_global_sub(d, 'Lose Ring', 0, LOSERING_SIG, 'PS1LoseRing')),

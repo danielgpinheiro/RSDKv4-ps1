@@ -15,12 +15,14 @@ DEFAULT="60:1:1 100:1:1 140:1:2 180:1:4 220:1:6 260:1:8 300:1:10 340:1:12 380:1:
 SCHEDULE=${SCHEDULE:-$DEFAULT}
 LAST=$(echo $SCHEDULE | awk '{print $NF}' | cut -d: -f1)
 STOP=${2:-$((LAST + 40))}
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 {
 cat <<'GDBEOF'
 set pagination off
 set confirm off
-target remote localhost:3333
+GDBEOF
+echo "target remote localhost:$REDUX_PORT"
+cat <<'GDBEOF'
 symbol-file rsdkv4.elf
 @PRE@
 break PS1FsProfileHook
@@ -67,9 +69,9 @@ end
 continue
 GDBEOF
 } | sed "s|@PRE@|${PRE:-}|" > "$OUT.gdb"
-# Other sessions share this emulator (GDB port 3333): never kill theirs, only our own PID.
-pgrep -x PCSX-Redux >/dev/null && { echo "PCSX-Redux is already running (another session?): not starting it" >&2; exit 2; }
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
+# Other sessions share the emulator (tools/redux_env.sh): never kill theirs, only our own PID.
+redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
+$PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
 EMU=$!
 sleep 4
 timeout ${TIMEOUT:-1800} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -E "^(REQ|OPEN|LOAD|GOTO|DONE|GUARDS) " > "$OUT.log"

@@ -306,3 +306,4 @@ tools/rsdkmanifest/rsdkmanifest
 *.rsdk
 *.ogv
 .DS_Store
+tools/rsdkmanifest/rsdkmanifest-s1

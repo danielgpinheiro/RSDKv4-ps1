@@ -1,7 +1,8 @@
-# RSDKv4 (Sonic 2) PS1 port — Makefile
+# RSDKv4 (Sonic 2, Sonic 1) PS1 port — Makefile
 #
 # Builds a .ps-exe via the psyqo toolchain (mipsel-none-elf, C++20), with the Sonic CD port's flags
-# (../RSDKv3-ps1/Makefile). Plan: ../docs/30.
+# (../RSDKv3-ps1/Makefile). Plans: ../docs/30 (Sonic 2), ../docs/37 (Sonic 1).
+# `make GAME=1`: the Sonic 1 build (its natives, save file, menus; disc from ../Sonic1_Extracted); default GAME=2.
 #
 # The RSDKv4 engine (RSDKv4/, PS1 app in RSDKv4/main.cpp) on the PS1 platform layer (ps1/, copied from
 # RSDKv3-ps1 at 1e583ad). Phase 3: the GPU renderer (ps1/render.cpp, 3.2) over the tile pages and sprite atlas
@@ -63,6 +64,12 @@ endif
 # flags off (docs/30 phase 11); for the 2013 mobile data it changes nothing (no Amy, no game.hasPlusDLC before REV03).
 CPPFLAGS = -I ps1/libc -I RSDKv4 -I RSDKv4/NativeObjects -DRETRO_USE_MOD_LOADER=0 -DRETRO_USE_NETWORKING=0 -DRSDK_AUTOBUILD=1
 
+GAME ?= 2
+ifeq ($(filter 1 2,$(GAME)),)
+$(error GAME must be 1 (Sonic 1) or 2 (Sonic 2))
+endif
+CPPFLAGS += -DPS1_GAME=$(GAME)
+
 # `make BOOT=<stage folder>` (e.g. Zone01): start in that stage (test harness): its first GameConfig entry
 # unless BOOT_ID is given, with player BOOT_PLAYER (stage.playerListPos: 0 Sonic, 1 Tails, 2 Knuckles,
 # 3 Sonic & Tails). Rebuild RSDKv4/main.cpp and RetroEngine.cpp when switching (touch them).
@@ -82,10 +89,13 @@ SRCS += ps1/memcard_test.cpp
 endif
 
 # Build-flag stamp: every object depends on build/flags.txt, rewritten only when PROFILE / BOOT / BOOT_ID /
-# BOOT_PLAYER change, so switching them rebuilds everything (make only sees source timestamps otherwise: a
+# BOOT_PLAYER / GAME change, so switching them rebuilds everything (make only sees source timestamps otherwise: a
 # PROFILE=1 build once kept a non-profile Object.o).
-BUILD_FLAGS := PROFILE=$(PROFILE) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER)
-$(shell mkdir -p build; echo '$(BUILD_FLAGS)' | cmp -s - build/flags.txt || echo '$(BUILD_FLAGS)' > build/flags.txt)
+BUILD_FLAGS := PROFILE=$(PROFILE) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER) GAME=$(GAME)
+# The objects are deleted too: macOS's make 3.81 compares timestamps to the second, and an object built in the same second
+# as the rewrite (a GAME=2 build followed at once by GAME=1) looked up to date and kept the other game's code.
+$(shell mkdir -p build; echo '$(BUILD_FLAGS)' | cmp -s - build/flags.txt || { echo '$(BUILD_FLAGS)' > build/flags.txt; \
+        rm -f $(addsuffix .o,$(basename $(SRCS) ps1/platform_test.cpp ps1/memcard_test.cpp)) rsdkv4.elf; })
 EXTRA_DEPS += build/flags.txt
 
 # C++20 is the minimum required by psyqo.
@@ -126,8 +136,10 @@ $(OBJS): build/flags.txt
 
 # Test disc (phase 0): a hand-picked subset of ../Sonic2_Extracted/Data (tools/smoke_disc.sh), then
 # mkpsxiso + the byte-level verifier. The real asset pipeline arrives in phase 1.
+# GAME=1: Sonic 1's load order (tools/disc/load_order_s1.txt, written by GAME=1 tools/data_disc.sh).
+ORDER_ENV := $(if $(filter 1,$(GAME)),PS1_LOAD_ORDER=tools/disc/load_order_s1.txt)
 disc:
-	/usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe none build/game
+	$(ORDER_ENV) /usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe none build/game
 	/usr/bin/python3 tools/disc/verify_disc.py build/game.bin build/iso rsdkv4.ps-exe none
 
 # Distribution image (docs/30 phase 10): the natural game only (not a BOOT= / PROFILE / MEMCARD_TEST / PLATFORM_TEST
@@ -135,14 +147,16 @@ disc:
 # LICENSE=none for an unlicensed image), verified byte by byte against build/iso, as build/dist/Sonic2-PS1.bin/.cue
 # + SHA256SUMS. Needs the disc tree from tools/data_disc.sh.
 LICENSE ?= ../LICENSE.DAT
+DIST := build/dist/Sonic$(GAME)-PS1
 dist:
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1BootBuild; then echo "dist: rsdkv4.ps-exe is a BOOT= test build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1McTestSteps; then echo "dist: rsdkv4.ps-exe is a MEMCARD_TEST build"; exit 1; fi
 	@if ! mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1InitDone; then echo "dist: rsdkv4.ps-exe is not the game (PLATFORM_TEST?)"; exit 1; fi
 	@if ! grep -q "^PROFILE= " build/flags.txt; then echo "dist: rsdkv4.ps-exe is a PROFILE build"; exit 1; fi
+	@if ! grep -q " GAME=$(GAME)$$" build/flags.txt; then echo "dist: rsdkv4.ps-exe was built for another GAME"; exit 1; fi
 	mkdir -p build/dist
-	/usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe $(LICENSE) build/dist/Sonic2-PS1
-	/usr/bin/python3 tools/disc/verify_disc.py build/dist/Sonic2-PS1.bin build/iso rsdkv4.ps-exe $(LICENSE)
-	cd build/dist && shasum -a 256 Sonic2-PS1.bin Sonic2-PS1.cue > SHA256SUMS && cat SHA256SUMS
+	$(ORDER_ENV) /usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe $(LICENSE) $(DIST)
+	/usr/bin/python3 tools/disc/verify_disc.py $(DIST).bin build/iso rsdkv4.ps-exe $(LICENSE)
+	cd build/dist && shasum -a 256 Sonic$(GAME)-PS1.bin Sonic$(GAME)-PS1.cue > SHA256SUMS && cat SHA256SUMS
 
 .PHONY: disc dist

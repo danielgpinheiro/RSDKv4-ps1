@@ -1,5 +1,9 @@
 #include "RetroEngine.hpp"
 #include <cmath>
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 2 && !defined(RETRO_PS1_HOST_TOOL)
+// Sonic 2's natives are compiled only into its own build (their dispatch cases below): here they are unused statics
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/video.hh"
@@ -10402,6 +10406,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             }
 #if RETRO_PLATFORM == RETRO_PS1
+#if PS1_GAME == 2
+            // Sonic 2's natives (docs/30): only its build compiles them (the functions they call are static, so the
+            // Sonic 1 build leaves them out entirely); the oscillators and the Bridge draw below serve both games.
             case FUNC_PS1RING:
                 opcodeSize = 0;
                 PS1RingUpdate();
@@ -10625,6 +10632,26 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 }
                 break;
             }
+#else
+            // another game's native opcode (tools/scripts/patch_bytecode.py patches each game's own): stop the sub,
+            // counted like a bad opcode
+            case FUNC_PS1RING: case FUNC_PS1LOSERING: case FUNC_PS1BUTTONBRIDGE: case FUNC_PS1PLANESWITCHV:
+            case FUNC_PS1PLANESWITCHH: case FUNC_PS1ROTATEPLATFORM: case FUNC_PS1ROTATEPLATFORMDRAW: case FUNC_PS1HPZBRIDGE:
+            case FUNC_PS1HPZBRIDGEDRAW: case FUNC_PS1STAGESETUP: case FUNC_PS1HUDDRAW: case FUNC_PS1TURRETPLATFORM:
+            case FUNC_PS1BELTPLATFORM: case FUNC_PS1HFLIPPER: case FUNC_PS1EARTHQUAKE: case FUNC_PS1SPIKES:
+            case FUNC_PS1PLAYERINPUT: case FUNC_PS1CLEDGE: case FUNC_PS1STEAMPISTON: case FUNC_PS1PLAYERFN2:
+            case FUNC_PS1PLAYERFN3: case FUNC_PS1PLAYERFN4: case FUNC_PS1PLAYERFN5: case FUNC_PS1PLAYERFN6:
+            case FUNC_PS1PLAYERFN51: case FUNC_PS1PLAYERFN52: case FUNC_PS1PLAYERFN53: case FUNC_PS1PLAYERSTATE10:
+            case FUNC_PS1PLAYERSTATE12: case FUNC_PS1TAILSFN61: case FUNC_PS1TAILSFN62: case FUNC_PS1TAILSFN66:
+            case FUNC_PS1TAILSFN67: case FUNC_PS1MPZSETUP: case FUNC_PS1MONITOR: case FUNC_PS1INVISIBLEBLOCK:
+            case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
+            case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
+            case FUNC_PS1HORIZONTALDOOR:
+                opcodeSize           = 0;
+                g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
+                running              = false;
+                break;
+#endif
             case FUNC_PS1BRIDGEDRAW: {
                 // Emerald Hill's Bridge draw sub (stage object "Bridge"), natively: the logs of a sagging bridge, a
                 // sine curve on each side of the log the player stands on (~170 VM instructions a frame, 45 hblanks).

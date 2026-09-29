@@ -7,7 +7,7 @@ and OUT_PREFIX_fb1.png (Y 256-495). With BASELINE_PNG (a complete 320x240 frame,
 tools/baseline/ssz_full.png), prints how many pixels of each framebuffer differ from it;
 the buffer that holds the finished frame should be ~0 (the other may be mid-draw).
 """
-import struct, sys, urllib.request, warnings
+import os, struct, sys, urllib.request, warnings
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 from PIL import Image
 
@@ -20,7 +20,8 @@ def to_rgb(v):
 
 def main():
     out = sys.argv[1]
-    raw = urllib.request.urlopen('http://localhost:8080/api/v1/gpu/vram/raw', timeout=10).read()
+    port = os.environ.get('REDUX_WEB', '8080')  # tools/redux_env.sh: the instance the harness started
+    raw = urllib.request.urlopen('http://localhost:%s/api/v1/gpu/vram/raw' % port, timeout=10).read()
     assert len(raw) == W * H * 2, len(raw)
     open(out + '_vram.bin', 'wb').write(raw)
     px = struct.unpack('<%dH' % (W * H), raw)
