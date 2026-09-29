@@ -6471,6 +6471,230 @@ def patch_ss_updates(bcdir):
     return 'special stage updates native: %s%s' % (', '.join(done) or '-', ' (already: %s)' % ', '.join(already) if already else '')
 
 
+# Sonic 1's zone objects' update subs (with their jump-table entries), transcribed by PS1S1ZoneObj kind.
+S1ZONEOBJ_SIGS = {
+    0: [  # Door
+        'switch 0 OBJECTSTATE',
+        'IfEqual 9 OBJECTPROPERTYVALUE 2',
+        'IfLower 11 OBJECTXPOS[1,0,0] OBJECTXPOS',
+        'Equal LOCAL[1,0,59874] 4',
+        'endif',
+        'endif',
+        'IfEqual 13 OBJECTVALUE0[2,0,1] 1',
+        'Inc OBJECTSTATE',
+        'endif',
+        'break',
+        'Sub OBJECTYPOS 131072',
+        'Dec OBJECTVALUE0',
+        'IfLower 15 OBJECTVALUE0 0',
+        'Inc OBJECTSTATE',
+        'IfEqual 17 OBJECTPROPERTYVALUE 1',
+        'Inc OBJECTSTATE',
+        'endif',
+        'endif',
+        'break',
+        'break',
+        'IfGreater 19 OBJECTXPOS[1,0,0] 287309824',
+        'Inc OBJECTSTATE',
+        'endif',
+        'break',
+        'Add OBJECTYPOS 131072',
+        'Inc OBJECTVALUE0',
+        'IfGreaterOrEqual 21 OBJECTVALUE0 32',
+        'Equal OBJECTSTATE 0',
+        'endif',
+        'break',
+        'endswitch',
+        'ForEachActive 23 256 ARRAYPOS6',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -8 -32 8 32 ARRAYPOS6 65536 65536 65536 65536',
+        'next',
+        'End',
+        'JT 0 switch 0 4 @30 @31 @1 @10 @19 @20 @24',
+        'JT 1 IfEqual @5 @6',
+        'JT 2 IfLower @4 @5',
+        'JT 6 IfEqual @8 @9',
+        'JT 12 IfLower @17 @18',
+        'JT 14 IfEqual @16 @17',
+        'JT 20 IfGreater @22 @23',
+        'JT 26 IfGreaterOrEqual @28 @29',
+        'JT 31 ForEachActive @31 @34',
+    ],
+    1: [  # Door Horizontal
+        'switch 0 OBJECTSTATE',
+        'IfEqual 8 LOCAL[1,0,56375] 1',
+        'Equal OBJECTSTATE 1',
+        'endif',
+        'IfEqual 10 OBJECTVALUE0[2,0,1] 1',
+        'Inc OBJECTSTATE',
+        'endif',
+        'ForEachActive 12 256 ARRAYPOS6',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -64 -16 64 16 ARRAYPOS6 65536 65536 65536 65536',
+        'next',
+        'break',
+        'Equal TEMP0 OBJECTXPOS',
+        'And TEMP0 -65536',
+        'IfEqual 14 OBJECTDIRECTION 0',
+        'Sub OBJECTXPOS 131072',
+        'else',
+        'Add OBJECTXPOS 131072',
+        'endif',
+        'Dec OBJECTVALUE0',
+        'IfLower 16 OBJECTVALUE0 0',
+        'Inc OBJECTSTATE',
+        'endif',
+        'Equal OBJECTVALUE1 OBJECTXPOS',
+        'And OBJECTVALUE1 -65536',
+        'Sub OBJECTVALUE1 TEMP0',
+        'Equal TEMP1 OBJECTXPOS',
+        'Equal OBJECTXPOS TEMP0',
+        'ForEachActive 18 256 ARRAYPOS6',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -64 -16 64 16 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 20 CHECKRESULT 1',
+        'Add OBJECTXPOS[1,1,6] OBJECTVALUE1',
+        'endif',
+        'next',
+        'Equal OBJECTXPOS TEMP1',
+        'break',
+        'endswitch',
+        'End',
+        'JT 0 switch 0 3 @35 @36 @4 @11 @7 @1',
+        'JT 1 IfEqual @3 @4',
+        'JT 4 IfEqual @6 @7',
+        'JT 7 ForEachActive @7 @10',
+        'JT 13 IfEqual @16 @18',
+        'JT 19 IfLower @21 @22',
+        'JT 27 ForEachActive @27 @33',
+        'JT 29 IfEqual @31 @32',
+    ],
+    2: [  # Invisible Block
+        'Equal TEMP0 OBJECTVALUE0',
+        'FlipSign TEMP0',
+        'Equal TEMP1 OBJECTVALUE1',
+        'FlipSign TEMP1',
+        'switch 0 OBJECTSTATE',
+        'ForEachActive 7 256 ARRAYPOS6',
+        'IfNotEqual 9 OBJECTSTATE[1,1,6] 24',
+        'BoxCollisionTest 1 OBJECTENTITYPOS TEMP0 TEMP1 OBJECTVALUE0 OBJECTVALUE1 ARRAYPOS6 65536 65536 65536 65536',
+        'switch 11 CHECKRESULT',
+        'Add TEMP0 2',
+        'Add TEMP1 2',
+        'Equal TEMP2 OBJECTVALUE0',
+        'Equal TEMP3 OBJECTVALUE1',
+        'Sub TEMP2 2',
+        'Sub TEMP3 2',
+        'BoxCollisionTest 0 OBJECTENTITYPOS TEMP0 TEMP1 TEMP2 TEMP3 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 20 CHECKRESULT 1',
+        'Equal OBJECTGRAVITY[1,1,6] 0',
+        'endif',
+        'break',
+        'IfEqual 22 OBJECTGRAVITY[1,1,6] 0',
+        'CallFunction 51',
+        'endif',
+        'break',
+        'endswitch',
+        'endif',
+        'next',
+        'break',
+        'ForEachActive 24 256 ARRAYPOS6',
+        'IfNotEqual 26 OBJECTSTATE[1,1,6] 24',
+        'BoxCollisionTest 0 OBJECTENTITYPOS TEMP0 TEMP1 OBJECTVALUE0 OBJECTVALUE1 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 28 CHECKRESULT 1',
+        'IfEqual 30 OBJECTGRAVITY[1,1,6] 0',
+        'Equal OBJECTXPOS[1,1,6] OBJECTCOLLISIONRIGHT[1,1,6]',
+        'FlipSign OBJECTXPOS[1,1,6]',
+        'Sub OBJECTXPOS[1,1,6] OBJECTVALUE0',
+        'ShL OBJECTXPOS[1,1,6] 16',
+        'Add OBJECTXPOS[1,1,6] OBJECTXPOS',
+        'IfGreater 32 OBJECTSPEED[1,1,6] 0',
+        'Equal OBJECTSPEED[1,1,6] 0',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'next',
+        'break',
+        'ForEachActive 34 256 ARRAYPOS6',
+        'IfNotEqual 36 OBJECTSTATE[1,1,6] 24',
+        'BoxCollisionTest 0 OBJECTENTITYPOS TEMP0 TEMP1 OBJECTVALUE0 OBJECTVALUE1 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 38 CHECKRESULT 1',
+        'IfEqual 40 OBJECTGRAVITY[1,1,6] 0',
+        'Equal OBJECTXPOS[1,1,6] OBJECTCOLLISIONLEFT[1,1,6]',
+        'FlipSign OBJECTXPOS[1,1,6]',
+        'Add OBJECTXPOS[1,1,6] OBJECTVALUE0',
+        'ShL OBJECTXPOS[1,1,6] 16',
+        'Add OBJECTXPOS[1,1,6] OBJECTXPOS',
+        'IfLower 42 OBJECTSPEED[1,1,6] 0',
+        'Equal OBJECTSPEED[1,1,6] 0',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'next',
+        'break',
+        'endswitch',
+        'End',
+        'JT 4 switch 0 2 @64 @65 @5 @28 @46',
+        'JT 5 ForEachActive @5 @27',
+        'JT 6 IfNotEqual @25 @26',
+        'JT 8 switch 0 4 @24 @25 @9 @24 @24 @24 @20',
+        'JT 16 IfEqual @18 @19',
+        'JT 20 IfEqual @22 @23',
+        'JT 28 ForEachActive @28 @45',
+        'JT 29 IfNotEqual @43 @44',
+        'JT 31 IfEqual @42 @43',
+        'JT 32 IfEqual @41 @42',
+        'JT 38 IfGreater @40 @41',
+        'JT 46 ForEachActive @46 @63',
+        'JT 47 IfNotEqual @61 @62',
+        'JT 49 IfEqual @60 @61',
+        'JT 50 IfEqual @59 @60',
+        'JT 56 IfLower @58 @59',
+    ],
+}
+S1ZONE_OBJS = (('Door', 0, ()), ('Door Horizontal', 1, ()), ('Invisible Block', 2, (51,)))
+
+
+def patch_s1_zone_objs(bcdir):
+    """Sonic 1's zone objects (S1ZONE_OBJS) -> PS1S1ZoneObj kind / End in every stage file whose update sub is exactly
+    S1ZONEOBJ_SIGS[kind] (with the jump-table entries) and whose script functions the native runs are callable."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1S1ZoneObj'), fn.index('End')
+    data = os.path.join(bcdir, '..', 'Data')
+    done, already = [], []
+    for f in sorted(os.listdir(bcdir)):
+        folder = f[:-4]
+        if not f.endswith('.bin') or folder == 'GlobalCode' or not os.path.exists(os.path.join(data, 'Stages', folder, 'StageConfig.bin')):
+            continue
+        objs = object_sheets.stage_config(data, folder)[2]
+        path = os.path.join(bcdir, f)
+        changed = False
+        for name, kind, calls in S1ZONE_OBJS:
+            if name not in objs:
+                continue
+            raw = open(path, 'rb').read()
+            own, p = bs.blocks(raw, 0)
+            rest = raw[p:]
+            full = bs.full_code(path)[0]
+            base = len(full) - len(own)
+            k = objs.index(name)
+            ptr = bs.load(path)[2][k][0]
+            if full[ptr] == op:
+                already.append('%s %s' % (folder, name))
+                continue
+            if sub_listing(path, k, 0, names, vars_)[3] != S1ZONEOBJ_SIGS[kind]:
+                continue
+            if calls and callable_from_native(path, calls):
+                continue
+            own[ptr - base:ptr - base + 4] = [op, 2, kind, end]
+            open(path, 'wb').write(encode(own) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+            done.append('%s %s' % (folder, name))
+    return 'PS1S1ZoneObj native in %s%s' % (', '.join(done) or '-', ' (already: %d)' % len(already) if already else '')
+
+
 def s1_patches():
     """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
@@ -6485,6 +6709,7 @@ def s1_patches():
             ('hud', lambda d: patch_global_function(d, HUD_FN_SIG_S1, 'PS1HUDDraw')),
             ('tailsai', lambda d: patch_tails_ai(d, TAILSFN_SIGS_S1, PLAYERFN_SIGS_S1[6])),
             ('ring', lambda d: patch_global_sub(d, 'Ring', 0, RING_SIG_S1, 'PS1Ring')),
+            ('zoneobjs', patch_s1_zone_objs),
             ('stagesetup', lambda d: patch_global_sub(d, 'Stage Setup', 0, STAGESETUP_SIG_S1, 'PS1StageSetup', with_jumps=True,
                                                       calls=(71, 51))),
             ('ssring', lambda d: patch_stage_sub(d, 'Ring', 0, SSRING_SIG_S1, 'PS1SSRing', with_jumps=True)),

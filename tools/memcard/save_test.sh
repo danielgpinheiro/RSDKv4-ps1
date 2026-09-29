@@ -10,7 +10,7 @@
 set -u
 cd "$(dirname "$0")/../.."
 W=${1:-/tmp/rsdkv4_save_test}; mkdir -p "$W"
-. tools/redux_env.sh
+HARNESS_CARDS=0 . tools/redux_env.sh # its own temporary cards below
 CFG=${REDUX_PORTABLE:-$HOME/.config/pcsx-redux} # GAME=1: its own instance's settings (tools/redux_env.sh)
 MCD="python3 tools/memcard/mcd.py"
 FILE=BAHBRW-00004SONIC2

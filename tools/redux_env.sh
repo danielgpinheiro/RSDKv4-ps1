@@ -19,6 +19,14 @@ if [ -n "${REDUX_PORTABLE:-}" ]; then
     mkdir -p "$REDUX_PORTABLE"
     [ -f "$REDUX_PORTABLE/pcsx.json" ] || echo '{}' > "$REDUX_PORTABLE/pcsx.json"
     REDUX_ARGS="$REDUX_ARGS -portable $REDUX_PORTABLE"
+    # Freshly formatted cards for every run (docs/37): a run that saves (the menus, a finished act) must not change the
+    # next run's game through the card (Sonic 1's scripts read the spin dash option from the save). HARNESS_CARDS=0: the
+    # script passes its own (tools/memcard/save_test.sh).
+    if [ "${HARNESS_CARDS:-1}" = 1 ]; then
+        python3 tools/memcard/mcd.py format "$REDUX_PORTABLE/harness_mc1.mcd" >/dev/null
+        python3 tools/memcard/mcd.py format "$REDUX_PORTABLE/harness_mc2.mcd" >/dev/null
+        REDUX_ARGS="$REDUX_ARGS -memcard1 $REDUX_PORTABLE/harness_mc1.mcd -memcard2 $REDUX_PORTABLE/harness_mc2.mcd"
+    fi
 fi
 # Busy: our portable instance's GDB port is taken, or (shared install) any PCSX-Redux runs.
 redux_busy() {
