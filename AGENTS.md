@@ -5,12 +5,14 @@ Operating manual for this repo. Workspace rules: `../AGENTS.md`. Knowledge base:
 `../docs/37-rsdkv4-sonic1-port-plan.md` (Sonic 1, `GAME=1`). Lessons from the earlier ports: `../docs/29`.**
 
 **Two games, one engine**: `make GAME=1` / `GAME=1 tools/data_disc.sh` / `GAME=1 tools/<test>.sh` for Sonic 1
-(`../Sonic1_Extracted`; its own natives, save file, loading icon; its own PCSX-Redux instance, `tools/redux_env.sh`);
-the default `GAME=2` is Sonic 2 and must stay byte-identical to the published EXE unless Sonic 2 itself changes.
+(`../Sonic1_Extracted`; its own natives, save file, loading icon, menus, BG strip format 'BGS3'; its own PCSX-Redux
+instance, `tools/redux_env.sh`); the default `GAME=2` is Sonic 2 and must stay byte-identical to the published EXE unless
+Sonic 2 itself changes: Sonic 1-only code goes behind `#if PS1_GAME == 1` with Sonic 2's text verbatim in `#else`, and
+Sonic 1-only opcodes after Sonic 2's (docs/37 choices 9-10).
 
 ## What this is
 RSDKv4-Decompilation (Retro Engine v4, Sonic 1/2 2013) being ported to the PS1 with **psyqo** (C++20) on
-branch `ps1`, focused on **Sonic 2** (Sonic 1 comes last, after the v5 port). Remotes: `origin` =
+branch `ps1`: **Sonic 2** (done, published) and **Sonic 1** (`GAME=1`, docs/37). Remotes: `origin` =
 upstream RSDKModding (read-only), `fork` = github.com/danielgpinheiro/RSDKv4-ps1 (**private**; push here).
 
 ## First checks (every session)
@@ -43,7 +45,10 @@ tools/vram_test.sh Zone01_st [OUT] [F]        # BOOT= build: tile pages + atlas 
 [MASK=8 FROM=240] tools/frame_capture.sh N OUT                  # both framebuffers as PNGs at frame N + renderer counters
 tools/input_test.sh [OUT] [F]   # every pad-1 button through the real pad path (tools/pad.lua) -> its engine input
 tools/boot_test.sh [OUT] [F1] [F2]            # headless boot over GDB: loads, fps, heap, VM/array guards
-tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, land (g_ps1PadTestMask) + dumps
+tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, land (g_ps1PadTestMask) + dumps (guards and
+                                              # audio counters as files: OUT_guards.bin / OUT_audio.bin)
+GAME=1 tools/zone_sweep.sh OUT Zone01:0 ...   # per FOLDER:PLAYER a BOOT= build + logic test, one line each (restores make)
+GAME=1 tools/export_builder.sh ../Sonic-1-PS1-ISO-Builder   # the Sonic 1 builder (local; publish only with the user's OK)
 tools/load_profile.sh [OUT] [STOP]            # BOOT= build: load-time profile, stages switched by GDB (SCHEDULE=,
                                               # PRE='set var g_ps1FsFastLoad = 0' / g_ps1ScriptImageOn = 0 for A/B)
 python3 tools/tiles_check.py ../Sonic2_Extracted/Data/Stages/Zone01 OUT     # packed chunk tiles == file
