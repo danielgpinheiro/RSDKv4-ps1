@@ -5,6 +5,9 @@ Data/Game/PS1Scene3D.bin
 Data/Game/GameConfig.bin
 Data/Game/PS1SfxResident.bin
 Data/Music/Music.bin
+Data/Game/Menu/PS1Fonts.pmn
+Data/Game/Menu/PS1Menu.pmn
+Data/Game/PS1SfxMenu.bin
 Data/Stages/Title/StageConfig.bin
 Data/Stages/Title/PS1Sfx.bin
 Data/Stages/Title/Scripts.ps1
