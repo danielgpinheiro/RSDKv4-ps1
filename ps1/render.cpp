@@ -198,13 +198,111 @@ static void PS1ReserveRow(int src, int count, int16_t x, int16_t y)
     }
 }
 
+#if PS1_GAME == 1
+// Sonic 1 (docs/37): the converted palette of a bank (colours + the atlas / strip 4-bit CLUTs, ~5 hblanks to build) is
+// kept in one of two slots (Labyrinth's water draws two banks a frame) with the RGB565 colours it came from. Each fill
+// compares the bank's colours with them (word by word: every palette writer is covered) and converts only the entries
+// that changed, then the CLUT maps if any did (palette cycling touches a few entries a frame); a slot built for another
+// atlas load / CLUT count, or a new bank, is converted whole; a fade in progress is always converted (PS1BuildPalette).
+struct PS1PalCache {
+    int bank, cluts;
+    uint32_t atlas;
+    bool valid;
+    alignas(4) uint16_t src[256];
+    uint16_t out[PS1_PAL_ENTRIES];
+};
+static PS1PalCache s_palCache[2];
+static int s_palCacheNext = 0;
+volatile uint32_t g_ps1PalCacheHits = 0, g_ps1PalCacheMisses = 0, g_ps1PalCacheBuilds = 0; // GDB: same / some entries / whole
+static inline uint16_t PS1Conv565(uint32_t c) // PS1BuildPalette's conversion of one RGB565 colour
+{
+    return (uint16_t)(0x8000 | (c >> 11) | ((c >> 1) & 0x3E0) | ((c & 0x1F) << 10));
+}
+static void PS1PalCacheMaps(uint16_t *out)
+{
+    for (int k = 0; k < g_ps1AtlasClutCount; ++k) {
+        const uint8_t *map = g_ps1AtlasCluts[k].map;
+        uint16_t *dst      = &out[256 + k * 16];
+        dst[0]             = 0x0000;
+        for (int i = 1; i < 16; ++i) dst[i] = out[map[i]];
+    }
+}
+static const uint16_t *PS1PaletteFor(int bank)
+{
+    if (s_fadePending) {
+        PS1BuildPalette(bank);
+        return s_pal;
+    }
+    const ushort *now = fullPalette[bank];
+    PS1PalCache *slot = nullptr;
+    for (int k = 0; k < 2 && !slot; ++k)
+        if (s_palCache[k].valid && s_palCache[k].bank == bank)
+            slot = &s_palCache[k];
+    if (slot && slot->atlas == g_ps1AtlasLoads && slot->cluts == g_ps1AtlasClutCount) {
+        bool changed = false;
+        if (!(reinterpret_cast<uintptr_t>(now) & 3)) {
+            const uint32_t *cur = reinterpret_cast<const uint32_t *>(now);
+            uint32_t *old       = reinterpret_cast<uint32_t *>(slot->src);
+            for (int w = 0; w < 128; ++w) {
+                if (old[w] == cur[w])
+                    continue;
+                old[w]  = cur[w];
+                changed = true;
+                for (int i = 2 * w; i < 2 * w + 2; ++i)
+                    if (i)
+                        slot->out[i] = PS1Conv565(now[i]); // entry 0 stays transparent
+            }
+        }
+        else {
+            for (int i = 0; i < 256; ++i) {
+                if (slot->src[i] == now[i])
+                    continue;
+                slot->src[i] = now[i];
+                changed      = true;
+                if (i)
+                    slot->out[i] = PS1Conv565(now[i]);
+            }
+        }
+        if (changed) {
+            PS1PalCacheMaps(slot->out);
+            g_ps1PalCacheMisses = g_ps1PalCacheMisses + 1;
+        }
+        else
+            g_ps1PalCacheHits = g_ps1PalCacheHits + 1;
+        return slot->out;
+    }
+    if (!slot) {
+        slot           = &s_palCache[s_palCacheNext];
+        s_palCacheNext = s_palCacheNext ^ 1;
+    }
+    g_ps1PalCacheBuilds = g_ps1PalCacheBuilds + 1;
+    uint16_t *out       = slot->out;
+    out[0]              = 0x0000;
+    for (int i = 1; i < 256; ++i) out[i] = PS1Conv565(now[i]);
+    PS1PalCacheMaps(out);
+    memcpy(slot->src, now, sizeof(slot->src));
+    slot->bank  = bank;
+    slot->atlas = g_ps1AtlasLoads;
+    slot->cluts = g_ps1AtlasClutCount;
+    slot->valid = true;
+    return out;
+}
+#endif
+
 // Fills chunks [first, end) (end < 0: up to s_palChunkCount) with `bank`'s palette.
 static void PS1FillPalette(int bank, int first = 0, int end = -1)
 {
+#if PS1_GAME == 1
+    const uint16_t *pal = PS1PaletteFor(bank);
+    if (end < 0)
+        end = s_palChunkCount;
+    for (int i = first; i < end; ++i) memcpy(s_palChunks[i].dst, &pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
+#else
     PS1BuildPalette(bank);
     if (end < 0)
         end = s_palChunkCount;
     for (int i = first; i < end; ++i) memcpy(s_palChunks[i].dst, &s_pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
+#endif
 }
 
 // Master + atlas 4-bit CLUT rows, chained here (filled by PS1FillPalette); dy > 0: the bottom bank's copy (set B).
