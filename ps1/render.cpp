@@ -1948,6 +1948,127 @@ void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, i
 
 // upstream (HW path) corners: (XPos, YPos) + R * (x, y), x = +-(local x - pivotX), y = local y - pivotY,
 // cos/sin from the 512-step tables (scaled by `scale` / 0x200 for rotozoom).
+#if PS1_GAME == 1
+// Sonic 1 (docs/37 phase 7): the special stage draws ~220 rotated sprites a frame from a handful of frames, all at the
+// maze's one rotation. A frame's pieces with their rotated corner offsets, bounds and UV edges -- everything but the
+// screen position, which the corners add after the shift as before -- are kept per (frame, pivot, rotation, scale,
+// flip, sheet) in a small direct-mapped cache (dropped when the atlas or the surface list changes). Frames of more
+// than 4 pieces, on-demand pictures or atlas misses (their lookups have side effects) are never cached. The quads,
+// culling and GPU-limit clipping are the same as the uncached path, so the output is identical.
+struct PS1AffinePiece {
+    PS1Piece p;
+    int dx[4], dy[4];
+    int xmin, xmax, ymin, ymax;
+    int u0, u1, v0, v1;
+};
+struct PS1AffineEntry {
+    int key[10];
+    uint32_t gen, atlas;
+    int n; // pieces; 0 = empty
+    PS1AffinePiece pc[4];
+};
+static PS1AffineEntry s_affine[32];
+volatile uint32_t g_ps1AffineHits = 0, g_ps1AffineMisses = 0; // GDB
+volatile uint8_t g_ps1AffineCache = 1; // initialised data: GDB sets 0 for the uncached A/B (same build)
+
+static void PS1AffinePieceMake(PS1AffinePiece &a, const PS1Piece &p, bool fx, int pivotX, int pivotY, int cs, int sn, bool right)
+{
+    a.p                = p;
+    const int lx[4]    = { p.ox, p.ox + p.w, p.ox, p.ox + p.w };
+    const int ly[4]    = { p.oy, p.oy, p.oy + p.h, p.oy + p.h };
+    a.xmin = 0x7FFFFFFF, a.xmax = -0x7FFFFFFF, a.ymin = 0x7FFFFFFF, a.ymax = -0x7FFFFFFF;
+    for (int k = 0; k < 4; ++k) {
+        int x   = fx ? pivotX - lx[k] : lx[k] - pivotX;
+        int y   = ly[k] - pivotY;
+        a.dx[k] = (x * cs + y * sn) >> 9;
+        a.dy[k] = (y * cs - x * sn) >> 9;
+        a.xmin = a.dx[k] < a.xmin ? a.dx[k] : a.xmin, a.xmax = a.dx[k] > a.xmax ? a.dx[k] : a.xmax;
+        a.ymin = a.dy[k] < a.ymin ? a.dy[k] : a.ymin, a.ymax = a.dy[k] > a.ymax ? a.dy[k] : a.ymax;
+    }
+    a.u0 = p.u, a.u1 = p.u + p.w, a.v0 = p.v, a.v1 = p.v + p.h;
+    if (right) { // u runs from corner A to B, v from A to C
+        int ux = a.dx[1] - a.dx[0], uy = a.dy[1] - a.dy[0], vx = a.dx[2] - a.dx[0], vy = a.dy[2] - a.dy[0];
+        if (ux < 0 || (ux == 0 && uy < 0))
+            --a.u0, --a.u1;
+        if (vx < 0 || (vx == 0 && vy < 0))
+            --a.v0, --a.v1;
+    }
+    else
+        --a.u1, --a.v1;
+}
+
+static void PS1AffinePieceDraw(const PS1AffinePiece &a, int XPos, int YPos)
+{
+    int qx[4], qy[4];
+    for (int k = 0; k < 4; ++k) {
+        qx[k] = XPos + a.dx[k];
+        qy[k] = YPos + a.dy[k];
+    }
+    int xmin = XPos + a.xmin, xmax = XPos + a.xmax, ymin = YPos + a.ymin, ymax = YPos + a.ymax;
+    bool beyond = PS1BeyondGpuLimits(xmin, ymin, xmax, ymax);
+    if (xmax <= 0 || ymax <= 0 || xmin >= SCREEN_XSIZE || ymin >= SCREEN_YSIZE) {
+        if (beyond)
+            g_ps1WrapCulled = g_ps1WrapCulled + 1;
+        if (g_ps1LimitFix)
+            return; // wholly off screen
+    }
+    if (beyond && g_ps1LimitFix) { // zoomed past the GPU limits: cut to the screen
+        PS1ChainPieceQuadClipped(a.p, qx, qy, a.u0, a.u1, a.v0, a.v1);
+        return;
+    }
+    int16_t xs[4] = { (int16_t)qx[0], (int16_t)qx[1], (int16_t)qx[2], (int16_t)qx[3] };
+    int16_t ys[4] = { (int16_t)qy[0], (int16_t)qy[1], (int16_t)qy[2], (int16_t)qy[3] };
+    PS1ChainPieceQuad(a.p, xs, ys, a.u0, a.u1, a.v0, a.v1);
+}
+
+static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
+                                int scale, int sheetID)
+{
+    if (width <= 0 || height <= 0 || scale == 0 || !s_frameOpen || PS1ObjectsHidden())
+        return;
+    rotation -= rotation >> 9 << 9;
+    if (rotation < 0)
+        rotation += 0x200;
+    if (rotation != 0)
+        rotation = 0x200 - rotation;
+    const int key[10] = { direction, pivotX, pivotY, sprX, sprY, width, height, rotation, scale, sheetID };
+    uint32_t h = 0;
+    for (int k = 0; k < 10; ++k) h = h * 31 + (uint32_t)key[k];
+    PS1AffineEntry &e = s_affine[(h ^ (h >> 5) ^ (h >> 10)) & 31];
+    if (e.n && g_ps1AffineCache && e.gen == g_ps1SurfaceGen && e.atlas == g_ps1AtlasLoads && !memcmp(e.key, key, sizeof(key))) {
+        g_ps1AffineHits = g_ps1AffineHits + 1;
+        for (int i = 0; i < e.n; ++i) PS1AffinePieceDraw(e.pc[i], XPos, YPos);
+        return;
+    }
+    g_ps1AffineMisses = g_ps1AffineMisses + 1;
+    int sn = sin512LookupTable[rotation] * scale >> 9;
+    int cs = cos512LookupTable[rotation] * scale >> 9;
+    bool fx = direction != FLIP_NONE;
+    // Texel edges: see the Sonic 2 version below (PS1ChainPieceRect's rule at right angles and scale 1).
+    const bool right  = scale == 0x200 && !(rotation & 0x7F);
+    uint32_t misses   = g_ps1AtlasDrawMiss;
+    int n             = 0;
+    bool cacheable    = true;
+    PS1AffinePiece tmp;
+    PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
+        PS1AffinePieceMake(tmp, p, fx, pivotX, pivotY, cs, sn, right);
+        PS1AffinePieceDraw(tmp, XPos, YPos);
+        if (n < 4 && !p.c->picture)
+            e.pc[n] = tmp;
+        else
+            cacheable = false;
+        ++n;
+    });
+    if (cacheable && n && g_ps1AtlasDrawMiss == misses) {
+        memcpy(e.key, key, sizeof(key));
+        e.gen   = g_ps1SurfaceGen;
+        e.atlas = g_ps1AtlasLoads;
+        e.n     = n;
+    }
+    else
+        e.n = 0;
+}
+#else
 static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                                 int scale, int sheetID)
 {
@@ -2006,6 +2127,8 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
     });
 }
+
+#endif
 
 void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                        int sheetID)

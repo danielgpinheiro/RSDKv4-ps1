@@ -5889,6 +5889,223 @@ STAGESETUP_SIG_S1 = [
 ]
 
 
+# Sonic 1's special stage function 9 (an object's place in the rotating maze), transcribed by PS1SSRotPos.
+SSROTPOS_FN_SIG_S1 = [
+    'Equal TEMP2 OBJECTXPOS',
+    'Sub TEMP2 OBJECTXPOS[1,0,0]',
+    'ShR TEMP2 8',
+    'Equal TEMP3 OBJECTYPOS',
+    'Sub TEMP3 OBJECTYPOS[1,0,0]',
+    'ShR TEMP3 8',
+    'Sin TEMP4 LOCAL[1,0,0]',
+    'Mul TEMP4 TEMP3',
+    'Cos TEMP5 LOCAL[1,0,0]',
+    'Mul TEMP5 TEMP2',
+    'Equal TEMP0 TEMP4',
+    'Add TEMP0 TEMP5',
+    'ShR TEMP0 1',
+    'Add TEMP0 OBJECTXPOS[1,0,0]',
+    'Cos TEMP4 LOCAL[1,0,0]',
+    'Mul TEMP4 TEMP3',
+    'Sin TEMP5 LOCAL[1,0,0]',
+    'Mul TEMP5 TEMP2',
+    'Equal TEMP1 TEMP4',
+    'Sub TEMP1 TEMP5',
+    'ShR TEMP1 1',
+    'Add TEMP1 OBJECTYPOS[1,0,0]',
+    'Equal OBJECTROTATION 512',
+    'Sub OBJECTROTATION LOCAL[1,0,0]',
+    'return',
+]
+
+
+# Sonic 1's special stage function 10 (a maze block against the player), transcribed by PS1SSBlockCollide.
+SSBLOCKCOLLIDE_FN_SIG_S1 = [
+    'BoxCollisionTest 2 OBJECTENTITYPOS -12 -12 12 12 0 65536 65536 65536 65536',
+    'IfNotEqual 0 CHECKRESULT 0',
+    'SetBit OBJECTVALUE11[1,0,0] CHECKRESULT 1',
+    'else',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -10 -10 10 10 0 65536 65536 65536 65536',
+    'IfEqual 2 CHECKRESULT 1',
+    'Equal TEMP0 OBJECTXVEL[1,0,0]',
+    'Equal TEMP1 OBJECTYVEL[1,0,0]',
+    'Abs TEMP0',
+    'Abs TEMP1',
+    'IfGreater 4 TEMP0 TEMP1',
+    'IfGreater 6 OBJECTXVEL[1,0,0] 0',
+    'SetBit OBJECTVALUE11[1,0,0] 2 1',
+    'Equal OBJECTXPOS[1,0,0] OBJECTCOLLISIONLEFT[1,0,0]',
+    'Sub OBJECTXPOS[1,0,0] 12',
+    'ShL OBJECTXPOS[1,0,0] 16',
+    'else',
+    'SetBit OBJECTVALUE11[1,0,0] 3 1',
+    'Equal OBJECTXPOS[1,0,0] OBJECTCOLLISIONRIGHT[1,0,0]',
+    'Add OBJECTXPOS[1,0,0] 12',
+    'ShL OBJECTXPOS[1,0,0] 16',
+    'endif',
+    'Add OBJECTXPOS[1,0,0] OBJECTXPOS',
+    'else',
+    'IfGreater 8 OBJECTYVEL[1,0,0] 0',
+    'SetBit OBJECTVALUE11[1,0,0] 1 1',
+    'Equal OBJECTYPOS[1,0,0] OBJECTCOLLISIONTOP[1,0,0]',
+    'Sub OBJECTYPOS[1,0,0] 12',
+    'ShL OBJECTYPOS[1,0,0] 16',
+    'else',
+    'SetBit OBJECTVALUE11[1,0,0] 4 1',
+    'Equal OBJECTYPOS[1,0,0] OBJECTCOLLISIONBOTTOM[1,0,0]',
+    'Add OBJECTYPOS[1,0,0] 12',
+    'ShL OBJECTYPOS[1,0,0] 16',
+    'endif',
+    'Add OBJECTYPOS[1,0,0] OBJECTYPOS',
+    'endif',
+    'endif',
+    'endif',
+    'return',
+    'JT 1 IfNotEqual @4 @39',
+    'JT 5 IfEqual @37 @38',
+    'JT 10 IfGreater @24 @37',
+    'JT 11 IfGreater @17 @22',
+    'JT 24 IfGreater @30 @35',
+]
+# The special stage's coloured blocks' draw sub with its jump-table entries, {a} / {b} the two type numbers (the opcode's
+# operands), transcribed by PS1SSBlockDraw (which runs function 9 as PS1SSRotPos).
+SSBLOCKDRAW_SIG_S1 = [
+    'IfGreater 0 OBJECTPROPERTYVALUE 0',
+    'Equal TEMP0 LOCAL[1,0,2027]',
+    'ShR TEMP0 3',
+    'Equal TEMP1 OBJECTPROPERTYVALUE',
+    'Sub TEMP1 TEMP0',
+    'switch 2 TEMP1',
+    'Equal OBJECTTYPE {a}',
+    'endswitch',
+    'endif',
+    'CallFunction 9',
+    'DrawSpriteFX 0 1 TEMP0 TEMP1',
+    'DrawSpriteXY 1 TEMP0 TEMP1',
+    'Equal TEMP2 OBJECTROTATION',
+    'ShR TEMP2 3',
+    'Add TEMP2 2',
+    'DrawSpriteFX TEMP2 1 TEMP0 TEMP1',
+    'Equal OBJECTTYPE {b}',
+    'End',
+    'JT 0 IfGreater @8 @9',
+    'JT 5 switch 1 3 @7 @8 @6 @7 @6',
+]
+SS_COLOURED_BLOCKS = ('Blue Block', 'Yellow Block', 'Pink Block', 'Green Block')
+
+
+def patch_ss_block_draw(bcdir):
+    """Special's coloured blocks: each draw sub that is SSBLOCKDRAW_SIG_S1 with its own two types -> PS1SSBlockDraw a b /
+    End. Function 9 must be SSROTPOS_FN_SIG_S1 or already PS1SSRotPos (the native calls it directly)."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1SSBlockDraw'), fn.index('End')
+    path = os.path.join(bcdir, 'Special.bin')
+    raw = open(path, 'rb').read()
+    own, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    full = bs.full_code(path)[0]
+    base = len(full) - len(own)
+    f9 = bs.load(path)[4][9][0]
+    if full[f9] != fn.index('PS1SSRotPos') and fn_listing(path, 9, names, vars_) != SSROTPOS_FN_SIG_S1:
+        return 'PS1SSBlockDraw: function 9 is not the one PS1SSRotPos transcribes (not patched)'
+    objs = object_sheets.stage_config(os.path.join(bcdir, '..', 'Data'), 'Special')[2]
+    done, already = [], []
+    for name in SS_COLOURED_BLOCKS:
+        k = objs.index(name)
+        ptr = bs.load(path)[2][k][1]
+        if full[ptr] == op:
+            already.append(name)
+            continue
+        got = sub_listing(path, k, 1, names, vars_)[3]
+        ab = [int(l.split()[-1]) for l in got if l.startswith('Equal OBJECTTYPE ')]
+        if len(ab) != 2 or got != [l.replace('{a}', str(ab[0])).replace('{b}', str(ab[1])) for l in SSBLOCKDRAW_SIG_S1]:
+            sys.exit('ERROR patch_bytecode: %s draw sub is not the one PS1SSBlockDraw transcribes' % name)
+        own[ptr - base:ptr - base + 6] = [op, 2, ab[0], 2, ab[1], end]
+        full[ptr:ptr + 6] = [op, 2, ab[0], 2, ab[1], end]
+        done.append('%s (%d, %d)' % (name, ab[0], ab[1]))
+    open(path, 'wb').write(encode(own) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    return 'PS1SSBlockDraw native: %s%s' % (', '.join(done) or '-', ' (already: %s)' % ', '.join(already) if already else '')
+
+
+# The special stage's Ring update sub (with its jump-table entries), transcribed by PS1SSRingUpdate.
+SSRING_SIG_S1 = [
+    'ForEachActive 0 256 ARRAYPOS6',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 2 CHECKRESULT 1',
+    'Equal OBJECTTYPE 19',
+    'Inc OBJECTVALUE0[1,1,6]',
+    'IfGreater 4 OBJECTVALUE0[1,1,6] 999',
+    'Equal OBJECTVALUE0[1,1,6] 999',
+    'endif',
+    'IfGreaterOrEqual 6 OBJECTVALUE0[1,1,6] GLOBAL[1,0,20]',
+    'IfNotEqual 8 GLOBAL[1,0,0] 2',
+    'Inc GLOBAL[1,0,23]',
+    'PlaySfx 24 0',
+    'PauseMusic',
+    'ResetObjectEntity 25 23 2 0 0',
+    'Equal OBJECTPRIORITY[1,0,25] 1',
+    'endif',
+    'Add GLOBAL[1,0,20] 100',
+    'IfGreaterOrEqual 10 GLOBAL[1,0,20] 300',
+    'Equal GLOBAL[1,0,20] 1000',
+    'endif',
+    'endif',
+    'IfEqual 12 LOCAL[1,0,3] 0',
+    'IfEqual 14 GLOBAL[1,0,19] 0',
+    'PlaySfx 1 0',
+    'SetSfxAttributes 1 -1 -100',
+    'Equal GLOBAL[1,0,19] 1',
+    'else',
+    'PlaySfx 2 0',
+    'SetSfxAttributes 2 -1 100',
+    'Equal GLOBAL[1,0,19] 0',
+    'endif',
+    'endif',
+    'IfEqual 16 OBJECTVALUE0[1,1,6] 50',
+    'Inc GLOBAL[1,0,24]',
+    'PlaySfx 46 0',
+    'endif',
+    'endif',
+    'next',
+    'End',
+    'JT 0 ForEachActive @0 @38',
+    'JT 2 IfEqual @36 @37',
+    'JT 5 IfGreater @7 @8',
+    'JT 8 IfGreaterOrEqual @20 @21',
+    'JT 9 IfNotEqual @15 @16',
+    'JT 17 IfGreaterOrEqual @19 @20',
+    'JT 21 IfEqual @31 @32',
+    'JT 22 IfEqual @27 @31',
+    'JT 32 IfEqual @35 @36',
+]
+# The special stage's coloured blocks' update sub (function 10 per player), transcribed by PS1SSBlockUpdate.
+SSBLOCKUPDATE_SIG_S1 = [
+    'ForEachActive 0 256 ARRAYPOS6',
+    'CallFunction 10',
+    'next',
+    'End',
+    'JT 0 ForEachActive @0 @3',
+]
+
+
+def patch_ss_block_update(bcdir):
+    """Special's coloured blocks' update subs -> PS1SSBlockUpdate / End; function 10 must be SSBLOCKCOLLIDE_FN_SIG_S1 or
+    already PS1SSBlockCollide (the native calls it directly)."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    path = os.path.join(bcdir, 'Special.bin')
+    full = bs.full_code(path)[0]
+    f10 = bs.load(path)[4][10][0]
+    if full[f10] != fn.index('PS1SSBlockCollide') and fn_listing(path, 10, names, vars_) != SSBLOCKCOLLIDE_FN_SIG_S1:
+        return 'PS1SSBlockUpdate: function 10 is not the one PS1SSBlockCollide transcribes (not patched)'
+    return ', '.join(patch_stage_sub(bcdir, name, 0, SSBLOCKUPDATE_SIG_S1, 'PS1SSBlockUpdate', with_jumps=True)
+                     for name in SS_COLOURED_BLOCKS)
+
+
 def s1_patches():
     """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
@@ -5904,7 +6121,12 @@ def s1_patches():
             ('tailsai', lambda d: patch_tails_ai(d, TAILSFN_SIGS_S1, PLAYERFN_SIGS_S1[6])),
             ('ring', lambda d: patch_global_sub(d, 'Ring', 0, RING_SIG_S1, 'PS1Ring')),
             ('stagesetup', lambda d: patch_global_sub(d, 'Stage Setup', 0, STAGESETUP_SIG_S1, 'PS1StageSetup', with_jumps=True,
-                                                      calls=(71, 51))))
+                                                      calls=(71, 51))),
+            ('ssring', lambda d: patch_stage_sub(d, 'Ring', 0, SSRING_SIG_S1, 'PS1SSRing', with_jumps=True)),
+            ('ssblockupdate', patch_ss_block_update),  # before ssblockcollide: it checks function 10's signature
+            ('ssblockdraw', patch_ss_block_draw),  # before ssrotpos: it checks function 9's signature
+            ('ssrotpos', lambda d: patch_stage_function(d, 'Special', 9, SSROTPOS_FN_SIG_S1, 'PS1SSRotPos')),
+            ('ssblockcollide', lambda d: patch_stage_function(d, 'Special', 10, SSBLOCKCOLLIDE_FN_SIG_S1, 'PS1SSBlockCollide')))
 
 
 def main():

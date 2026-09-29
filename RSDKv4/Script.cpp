@@ -794,6 +794,13 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SpecialPlayerRun", 0),
     FunctionInfo("PS1SpecialSetupSort", 0),
     FunctionInfo("PS1SpecialSetupUpdate", 0),
+#if PS1_GAME == 1
+    FunctionInfo("PS1SSRotPos", 0),
+    FunctionInfo("PS1SSBlockCollide", 0),
+    FunctionInfo("PS1SSBlockDraw", 2),
+    FunctionInfo("PS1SSRing", 0),
+    FunctionInfo("PS1SSBlockUpdate", 0),
+#endif
 #endif
 };
 
@@ -1343,6 +1350,14 @@ enum ScrFunc {
     FUNC_PS1SPECIALPLAYERRUN,
     FUNC_PS1SPECIALSETUPSORT,
     FUNC_PS1SPECIALSETUPUPDATE,
+#if PS1_GAME == 1
+    // Sonic 1's own natives (docs/37), after Sonic 2's: its build only (the tools list them too, after the same numbers)
+    FUNC_PS1SSROTPOS,
+    FUNC_PS1SSBLOCKCOLLIDE,
+    FUNC_PS1SSBLOCKDRAW,
+    FUNC_PS1SSRING,
+    FUNC_PS1SSBLOCKUPDATE,
+#endif
 #endif
     FUNC_MAX_CNT
 };
@@ -5926,6 +5941,208 @@ static void PS1PlayerInput()
         }
     }
 }
+
+#if PS1_GAME == 1
+// Sonic 1's special stage, function 9 (docs/37 phase 7): an object's place in the rotating maze -- its offset from
+// the player (entity 0) rotated by the maze angle (LOCAL[0]) into TEMP0 / TEMP1, and its rotation 512 - angle. Every
+// block's and ring's draw sub calls it (~200 a frame: 25 VM instructions each). One statement per instruction, the
+// temps left as the script leaves them. Patched to `PS1SSRotPos / return` when SSROTPOS_FN_SIG_S1 matches.
+static void PS1SSRotPos()
+{
+    int *t     = scriptEng.temp;
+    Entity &me = objectEntityList[objectEntityPos];
+    Entity &p  = PS1_OBJ(0);
+    t[2]       = me.xpos;
+    t[2] -= p.xpos;
+    t[2] >>= 8;
+    t[3] = me.ypos;
+    t[3] -= p.ypos;
+    t[3] >>= 8;
+    t[4] = Sin512(scriptCode[0]);
+    t[4] *= t[3];
+    t[5] = Cos512(scriptCode[0]);
+    t[5] *= t[2];
+    t[0] = t[4];
+    t[0] += t[5];
+    t[0] >>= 1;
+    t[0] += p.xpos;
+    t[4] = Cos512(scriptCode[0]);
+    t[4] *= t[3];
+    t[5] = Sin512(scriptCode[0]);
+    t[5] *= t[2];
+    t[1] = t[4];
+    t[1] -= t[5];
+    t[1] >>= 1;
+    t[1] += p.ypos;
+    me.rotation = 512;
+    me.rotation -= scriptCode[0];
+}
+#endif
+
+#if PS1_GAME == 1
+// Sonic 1's special stage, function 10 (docs/37 phase 7): a maze block against the player (entity 0), called by the
+// blocks' update subs from their player loop -- the solid box (bits of the player's value 11) or the touch box that
+// pushes the player out along the faster axis. One statement per instruction; SSBLOCKCOLLIDE_FN_SIG_S1.
+static int PS1CollisionTop(Entity &e); // below (VAR_OBJECTCOLLISIONTOP's getter)
+static void PS1SSBlockCollide()
+{
+    int *t   = scriptEng.temp;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    auto setBit = [](int &v, int bit, int on) {
+        if (on <= 0)
+            v &= ~(1 << bit);
+        else
+            v |= 1 << bit;
+    };
+    BoxCollision2(&PS1_OBJ(self), -12, -12, 12, 12, &PS1_OBJ(0), 65536, 65536, 65536, 65536);
+    if (cr != 0) {
+        setBit(PS1_OBJ(0).values[11], cr, 1);
+    }
+    else {
+        TouchCollision(&PS1_OBJ(self), -10, -10, 10, 10, &PS1_OBJ(0), 65536, 65536, 65536, 65536);
+        if (cr == 1) {
+            Entity &p = PS1_OBJ(0);
+            t[0]      = p.xvel;
+            t[1]      = p.yvel;
+            t[0]      = abs(t[0]);
+            t[1]      = abs(t[1]);
+            if (t[0] > t[1]) {
+                if (p.xvel > 0) {
+                    setBit(p.values[11], 2, 1);
+                    p.xpos = PS1CollisionLeft(p);
+                    p.xpos -= 12;
+                    p.xpos <<= 16;
+                }
+                else {
+                    setBit(p.values[11], 3, 1);
+                    p.xpos = PS1CollisionRight(p);
+                    p.xpos += 12;
+                    p.xpos <<= 16;
+                }
+                p.xpos += PS1_OBJ(self).xpos;
+            }
+            else {
+                if (p.yvel > 0) {
+                    setBit(p.values[11], 1, 1);
+                    p.ypos = PS1CollisionTop(p);
+                    p.ypos -= 12;
+                    p.ypos <<= 16;
+                }
+                else {
+                    setBit(p.values[11], 4, 1);
+                    p.ypos = PS1CollisionBottom(p);
+                    p.ypos += 12;
+                    p.ypos <<= 16;
+                }
+                p.ypos += PS1_OBJ(self).ypos;
+            }
+        }
+    }
+}
+
+// Sonic 1's special stage, the coloured blocks' draw sub (Blue / Yellow / Pink / Green: the same sub with two type
+// numbers, the opcode's operands a and b): on the flashing steps (LOCAL[2027] / 8 against the property value) the
+// block takes type a -- whose sprites the draws then use, as the VM reads the script info at every instruction --, it
+// is placed in the rotating maze (function 9, natively), drawn (frame 0 rotated, frame 1, frame 2 + rotation / 8
+// rotated), and gets type b back. SSBLOCKDRAW_SIG_S1.
+static void PS1SSBlockDraw(int a, int b)
+{
+    int *t     = scriptEng.temp;
+    Entity &me = objectEntityList[objectEntityPos];
+    auto rotated = [&](int frame) { // DrawSpriteFX frame FX_ROTATE TEMP0 TEMP1
+        ObjectScript *info = &objectScriptList[me.type];
+        SpriteFrame *f     = &scriptFrames[info->frameListOffset + frame];
+        DrawSpriteRotated(me.direction, (t[0] >> 16) - xScrollOffset, (t[1] >> 16) - yScrollOffset, -f->pivotX, -f->pivotY, f->sprX,
+                          f->sprY, f->width, f->height, me.rotation, info->spriteSheetID);
+    };
+    if (me.propertyValue > 0) {
+        t[0] = scriptCode[2027];
+        t[0] >>= 3;
+        t[1] = me.propertyValue;
+        t[1] -= t[0];
+        if (t[1] == 1 || t[1] == 3) // switch 1..3: cases 1 and 3
+            me.type = a;
+    }
+    PS1SSRotPos(); // CallFunction 9
+    rotated(0);
+    {
+        ObjectScript *info = &objectScriptList[me.type]; // DrawSpriteXY 1 TEMP0 TEMP1
+        SpriteFrame *f     = &scriptFrames[info->frameListOffset + 1];
+        DrawSprite((t[0] >> 16) - xScrollOffset + f->pivotX, (t[1] >> 16) - yScrollOffset + f->pivotY, f->width, f->height, f->sprX, f->sprY,
+                   info->spriteSheetID);
+    }
+    t[2] = me.rotation;
+    t[2] >>= 3;
+    t[2] += 2;
+    rotated(t[2]);
+    me.type = b;
+}
+#endif
+
+#if PS1_GAME == 1
+// Sonic 1's special stage Ring update sub (stage object "Ring" in Special; 72 on screen at a time): the pickup for
+// each player (group 256, ARRAYPOS6), the extra life at 100 / 200 rings, the alternating ring sound, the continue at
+// 50. One statement per instruction; SSRING_SIG_S1.
+static void PS1SSRingUpdate()
+{
+    int *ap  = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int *G   = globalVariables;
+    int self = objectEntityPos;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) { // ForEachActive 256, ARRAYPOS6
+        ap[6] = players.entityRefs[loop];
+        TouchCollision(&PS1_OBJ(self), -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        if (cr == 1) {
+            PS1_OBJ(self).type = 19;
+            Entity &p = PS1_OBJ(ap[6]);
+            p.values[0]++;
+            if (p.values[0] > 999)
+                p.values[0] = 999;
+            if (p.values[0] >= G[20]) {
+                if (G[0] != 2) {
+                    G[23]++;
+                    PlaySfx(24, 0);
+                    PauseSound();
+                    PS1ResetObjectEntity(25, 23, 2, 0, 0);
+                    PS1_OBJ(25).priority = 1;
+                }
+                G[20] += 100;
+                if (G[20] >= 300)
+                    G[20] = 1000;
+            }
+            if (scriptCode[3] == 0) { // LOCAL[3]
+                if (G[19] == 0) {
+                    PlaySfx(1, 0);
+                    SetSfxAttributes(1, -1, -100);
+                    G[19] = 1;
+                }
+                else {
+                    PlaySfx(2, 0);
+                    SetSfxAttributes(2, -1, 100);
+                    G[19] = 0;
+                }
+            }
+            if (PS1_OBJ(ap[6]).values[0] == 50) {
+                G[24]++;
+                PlaySfx(46, 0);
+            }
+        }
+    }
+}
+
+// The special stage's coloured blocks' update sub: function 10 (PS1SSBlockCollide) once per player. SSBLOCKUPDATE_SIG_S1.
+static void PS1SSBlockUpdate()
+{
+    int *ap                = scriptEng.arrayPosition;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) { // ForEachActive 256, ARRAYPOS6
+        ap[6] = players.entityRefs[loop];
+        PS1SSBlockCollide(); // CallFunction 10
+    }
+}
+#endif
 
 #if PS1_GAME == 1
 // Sonic 1's player input / timers (GlobalCode function 0, docs/37 phase 2b), like PS1PlayerInput: Sonic 2's function
@@ -11155,6 +11372,26 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1PLAYERINPUT: // Sonic 1's own input function (PLAYERINPUT_FN_SIG_S1)
                 opcodeSize = 0;
                 PS1PlayerInputS1();
+                break;
+            case FUNC_PS1SSROTPOS: // Sonic 1's special stage function 9 (SSROTPOS_FN_SIG_S1)
+                opcodeSize = 0;
+                PS1SSRotPos();
+                break;
+            case FUNC_PS1SSBLOCKCOLLIDE: // Sonic 1's special stage function 10 (SSBLOCKCOLLIDE_FN_SIG_S1)
+                opcodeSize = 0;
+                PS1SSBlockCollide();
+                break;
+            case FUNC_PS1SSRING: // the special stage's Ring update sub (SSRING_SIG_S1)
+                opcodeSize = 0;
+                PS1SSRingUpdate();
+                break;
+            case FUNC_PS1SSBLOCKUPDATE: // the special stage's coloured blocks' update sub (SSBLOCKUPDATE_SIG_S1)
+                opcodeSize = 0;
+                PS1SSBlockUpdate();
+                break;
+            case FUNC_PS1SSBLOCKDRAW: // the special stage's coloured blocks' draw sub (SSBLOCKDRAW_SIG_S1): the two types
+                opcodeSize = 0;
+                PS1SSBlockDraw(scriptEng.operands[0], scriptEng.operands[1]);
                 break;
             case FUNC_PS1STAGESETUP: // Sonic 1's own Stage Setup update (STAGESETUP_SIG_S1)
                 opcodeSize = 0;
