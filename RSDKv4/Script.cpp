@@ -800,6 +800,9 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SSBlockDraw", 2),
     FunctionInfo("PS1SSRing", 0),
     FunctionInfo("PS1SSBlockUpdate", 0),
+    FunctionInfo("PS1SSPlaceDraw", 1),
+    FunctionInfo("PS1SSAnimDraw", 1),
+    FunctionInfo("PS1SSGemDraw", 0),
 #endif
 #endif
 };
@@ -1357,6 +1360,9 @@ enum ScrFunc {
     FUNC_PS1SSBLOCKDRAW,
     FUNC_PS1SSRING,
     FUNC_PS1SSBLOCKUPDATE,
+    FUNC_PS1SSPLACEDRAW,
+    FUNC_PS1SSANIMDRAW,
+    FUNC_PS1SSGEMDRAW,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -6141,6 +6147,140 @@ static void PS1SSBlockUpdate()
         ap[6] = players.entityRefs[loop];
         PS1SSBlockCollide(); // CallFunction 10
     }
+}
+#endif
+
+#if PS1_GAME == 1
+// FUNC_DRAWSPRITEXY / FUNC_DRAWSPRITEFX for the running entity, for Sonic 1's natives: the VM's bodies with the frame,
+// the effect and the position as arguments (the script info read at the call, as the VM does per instruction).
+static void PS1S1DrawXY(int frame, int x, int y)
+{
+    ObjectScript *info = &objectScriptList[objectEntityList[objectEntityPos].type];
+    SpriteFrame *f     = &scriptFrames[info->frameListOffset + frame];
+    DrawSprite((x >> 16) - xScrollOffset + f->pivotX, (y >> 16) - yScrollOffset + f->pivotY, f->width, f->height, f->sprX, f->sprY,
+               info->spriteSheetID);
+}
+static void PS1S1DrawFX(int frame, int fx, int x, int y)
+{
+    Entity *e          = &objectEntityList[objectEntityPos];
+    ObjectScript *info = &objectScriptList[e->type];
+    SpriteFrame *f     = &scriptFrames[info->frameListOffset + frame];
+    int sx = (x >> 16) - xScrollOffset, sy = (y >> 16) - yScrollOffset;
+    switch (fx) {
+        default: break;
+        case FX_SCALE:
+            DrawSpriteScaled(e->direction, sx, sy, -f->pivotX, -f->pivotY, e->scale, e->scale, f->width, f->height, f->sprX, f->sprY,
+                             info->spriteSheetID);
+            break;
+        case FX_ROTATE:
+            DrawSpriteRotated(e->direction, sx, sy, -f->pivotX, -f->pivotY, f->sprX, f->sprY, f->width, f->height, e->rotation,
+                              info->spriteSheetID);
+            break;
+        case FX_ROTOZOOM:
+            DrawSpriteRotozoom(e->direction, sx, sy, -f->pivotX, -f->pivotY, f->sprX, f->sprY, f->width, f->height, e->rotation, e->scale,
+                               info->spriteSheetID);
+            break;
+        case FX_INK:
+            switch (e->inkEffect) {
+                case INK_NONE:
+                    DrawSprite(sx + f->pivotX, sy + f->pivotY, f->width, f->height, f->sprX, f->sprY, info->spriteSheetID);
+                    break;
+                case INK_BLEND:
+                    DrawBlendedSprite(sx + f->pivotX, sy + f->pivotY, f->width, f->height, f->sprX, f->sprY, info->spriteSheetID);
+                    break;
+                case INK_ALPHA:
+                    DrawAlphaBlendedSprite(sx + f->pivotX, sy + f->pivotY, f->width, f->height, f->sprX, f->sprY, e->alpha,
+                                           info->spriteSheetID);
+                    break;
+                case INK_ADD:
+                    DrawAdditiveBlendedSprite(sx + f->pivotX, sy + f->pivotY, f->width, f->height, f->sprX, f->sprY, e->alpha,
+                                              info->spriteSheetID);
+                    break;
+                case INK_SUB:
+                    DrawSubtractiveBlendedSprite(sx + f->pivotX, sy + f->pivotY, f->width, f->height, f->sprX, f->sprY, e->alpha,
+                                                 info->spriteSheetID);
+                    break;
+            }
+            break;
+        case FX_TINT:
+            if (e->inkEffect == INK_ALPHA)
+                DrawScaledTintMask(e->direction, sx, sy, -f->pivotX, -f->pivotY, e->scale, e->scale, f->width, f->height, f->sprX, f->sprY,
+                                   info->spriteSheetID);
+            else
+                DrawSpriteScaled(e->direction, sx, sy, -f->pivotX, -f->pivotY, e->scale, e->scale, f->width, f->height, f->sprX, f->sprY,
+                                 info->spriteSheetID);
+            break;
+        case FX_FLIP:
+            switch (e->direction) {
+                default:
+                case FLIP_NONE:
+                    DrawSpriteFlipped(sx + f->pivotX, sy + f->pivotY, f->width, f->height, f->sprX, f->sprY, FLIP_NONE, info->spriteSheetID);
+                    break;
+                case FLIP_X:
+                    DrawSpriteFlipped(sx - f->width - f->pivotX, sy + f->pivotY, f->width, f->height, f->sprX, f->sprY, FLIP_X,
+                                      info->spriteSheetID);
+                    break;
+                case FLIP_Y:
+                    DrawSpriteFlipped(sx + f->pivotX, sy - f->height - f->pivotY, f->width, f->height, f->sprX, f->sprY, FLIP_Y,
+                                      info->spriteSheetID);
+                    break;
+                case FLIP_XY:
+                    DrawSpriteFlipped(sx - f->width - f->pivotX, sy - f->height - f->pivotY, f->width, f->height, f->sprX, f->sprY, FLIP_XY,
+                                      info->spriteSheetID);
+                    break;
+            }
+            break;
+    }
+}
+
+// The special stage's plain draw subs, `CallFunction 9 / DrawSpriteXY <frame> TEMP0 TEMP1`: mode 0 the object's frame
+// (Rotate Block, Bumper), mode 1 GLOBAL[18] (Ring). SSPLACEDRAW_SIG_S1 (mode from the frame operand).
+static void PS1SSPlaceDraw(int mode)
+{
+    int *t = scriptEng.temp;
+    PS1SSRotPos(); // CallFunction 9
+    PS1S1DrawXY(mode ? globalVariables[18] : objectEntityList[objectEntityPos].frame, t[0], t[1]);
+}
+
+// Draw subs with a 2-frame animation step (GLOBAL[16] & 15 >> 3 into TEMP2): kind 0 Goal Block (DrawSpriteXY TEMP2),
+// 1 Up Down Block (frame 2 on the second step, else its property value), 2 Red White Block (DrawSpriteFX TEMP2 FX_INK).
+static void PS1SSAnimDraw(int kind)
+{
+    int *t = scriptEng.temp;
+    PS1SSRotPos(); // CallFunction 9
+    t[2] = globalVariables[16];
+    t[2] &= 15;
+    t[2] >>= 3;
+    Entity &me = objectEntityList[objectEntityPos];
+    if (kind == 0)
+        PS1S1DrawXY(t[2], t[0], t[1]);
+    else if (kind == 1) {
+        if (t[2] == 0)
+            PS1S1DrawXY(me.propertyValue, t[0], t[1]);
+        else
+            PS1S1DrawXY(2, t[0], t[1]);
+    }
+    else
+        PS1S1DrawFX(t[2], FX_INK, t[0], t[1]);
+}
+
+// Gem Block's draw sub: placed (function 9), its direction from LOCAL[2025] / 5 (0 / 1 / 3 / 2 for 0-3), drawn flipped
+// (DrawSpriteFX property value FX_FLIP). SSGEMDRAW_SIG_S1.
+static void PS1SSGemDraw()
+{
+    int *t     = scriptEng.temp;
+    Entity &me = objectEntityList[objectEntityPos];
+    PS1SSRotPos(); // CallFunction 9
+    t[2] = scriptCode[2025];
+    t[2] /= 5; // Div TEMP2 5 (the divisor is never 0)
+    switch (t[2]) {
+        case 0: me.direction = 0; break;
+        case 1: me.direction = 1; break;
+        case 2: me.direction = 3; break;
+        case 3: me.direction = 2; break;
+        default: break;
+    }
+    PS1S1DrawFX(me.propertyValue, FX_FLIP, t[0], t[1]);
 }
 #endif
 
@@ -11380,6 +11520,18 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SSBLOCKCOLLIDE: // Sonic 1's special stage function 10 (SSBLOCKCOLLIDE_FN_SIG_S1)
                 opcodeSize = 0;
                 PS1SSBlockCollide();
+                break;
+            case FUNC_PS1SSPLACEDRAW: // the special stage's plain draw subs (SSPLACEDRAW_SIG_S1): the frame's source
+                opcodeSize = 0;
+                PS1SSPlaceDraw(scriptEng.operands[0]);
+                break;
+            case FUNC_PS1SSANIMDRAW: // the special stage's animated draw subs (SSANIMDRAW_SIGS_S1): which one
+                opcodeSize = 0;
+                PS1SSAnimDraw(scriptEng.operands[0]);
+                break;
+            case FUNC_PS1SSGEMDRAW: // Gem Block's draw sub (SSGEMDRAW_SIG_S1)
+                opcodeSize = 0;
+                PS1SSGemDraw();
                 break;
             case FUNC_PS1SSRING: // the special stage's Ring update sub (SSRING_SIG_S1)
                 opcodeSize = 0;

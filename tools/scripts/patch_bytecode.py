@@ -6106,6 +6106,101 @@ def patch_ss_block_update(bcdir):
                      for name in SS_COLOURED_BLOCKS)
 
 
+# The special stage's other draw subs (with their jump-table entries), all placing the object with function 9 first:
+# PS1SSPlaceDraw mode (0: `DrawSpriteXY OBJECTFRAME`, 1: `DrawSpriteXY GLOBAL[18]`), PS1SSAnimDraw kind (Goal, Up Down,
+# Red White), PS1SSGemDraw.
+SSPLACEDRAW_SIGS_S1 = {0: ['CallFunction 9', 'DrawSpriteXY OBJECTFRAME TEMP0 TEMP1', 'End'],
+                       1: ['CallFunction 9', 'DrawSpriteXY GLOBAL[1,0,18] TEMP0 TEMP1', 'End']}
+SSANIMDRAW_GOAL_S1 = [
+    'CallFunction 9',
+    'Equal TEMP2 GLOBAL[1,0,16]',
+    'And TEMP2 15',
+    'ShR TEMP2 3',
+    'DrawSpriteXY TEMP2 TEMP0 TEMP1',
+    'End',
+]
+SSANIMDRAW_UPDOWN_S1 = [
+    'CallFunction 9',
+    'Equal TEMP2 GLOBAL[1,0,16]',
+    'And TEMP2 15',
+    'ShR TEMP2 3',
+    'IfEqual 0 TEMP2 0',
+    'DrawSpriteXY OBJECTPROPERTYVALUE TEMP0 TEMP1',
+    'else',
+    'DrawSpriteXY 2 TEMP0 TEMP1',
+    'endif',
+    'End',
+    'JT 4 IfEqual @7 @9',
+]
+SSANIMDRAW_REDWHITE_S1 = [
+    'CallFunction 9',
+    'Equal TEMP2 GLOBAL[1,0,16]',
+    'And TEMP2 15',
+    'ShR TEMP2 3',
+    'DrawSpriteFX TEMP2 3 TEMP0 TEMP1',
+    'End',
+]
+SSGEMDRAW_SIG_S1 = [
+    'CallFunction 9',
+    'Equal TEMP2 LOCAL[1,0,2025]',
+    'Div TEMP2 5',
+    'switch 0 TEMP2',
+    'Equal OBJECTDIRECTION 0',
+    'break',
+    'Equal OBJECTDIRECTION 1',
+    'break',
+    'Equal OBJECTDIRECTION 3',
+    'break',
+    'Equal OBJECTDIRECTION 2',
+    'break',
+    'endswitch',
+    'DrawSpriteFX OBJECTPROPERTYVALUE 5 TEMP0 TEMP1',
+    'End',
+    'JT 3 switch 0 3 @12 @13 @4 @6 @8 @10',
+]
+SS_DRAWS = (('Ring', 'PS1SSPlaceDraw', 1, SSPLACEDRAW_SIGS_S1[1]), ('Rotate Block', 'PS1SSPlaceDraw', 0, SSPLACEDRAW_SIGS_S1[0]),
+            ('Bumper', 'PS1SSPlaceDraw', 0, SSPLACEDRAW_SIGS_S1[0]), ('Goal Block', 'PS1SSAnimDraw', 0, SSANIMDRAW_GOAL_S1),
+            ('Up Down Block', 'PS1SSAnimDraw', 1, SSANIMDRAW_UPDOWN_S1),
+            ('Red White Block', 'PS1SSAnimDraw', 2, SSANIMDRAW_REDWHITE_S1), ('Gem Block', 'PS1SSGemDraw', None, SSGEMDRAW_SIG_S1))
+
+
+def patch_ss_draws(bcdir):
+    """Special's other draw subs (SS_DRAWS) -> op [operand] / End when exactly their signatures; function 9 must be
+    SSROTPOS_FN_SIG_S1 or already PS1SSRotPos (the natives call it directly)."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    end = fn.index('End')
+    path = os.path.join(bcdir, 'Special.bin')
+    raw = open(path, 'rb').read()
+    own, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    full = bs.full_code(path)[0]
+    base = len(full) - len(own)
+    f9 = bs.load(path)[4][9][0]
+    if full[f9] != fn.index('PS1SSRotPos') and fn_listing(path, 9, names, vars_) != SSROTPOS_FN_SIG_S1:
+        return 'special stage draws: function 9 is not the one PS1SSRotPos transcribes (not patched)'
+    objs = object_sheets.stage_config(os.path.join(bcdir, '..', 'Data'), 'Special')[2]
+    done, already = [], []
+    for name, op_name, arg, sig in SS_DRAWS:
+        k = objs.index(name)
+        ptr = bs.load(path)[2][k][1]
+        op = fn.index(op_name)
+        if full[ptr] == op:
+            already.append(name)
+            continue
+        if sub_listing(path, k, 1, names, vars_)[3] != sig:
+            sys.exit('ERROR patch_bytecode: %s draw sub is not the one %s transcribes' % (name, op_name))
+        words = [op, end] if arg is None else [op, 2, arg, end]
+        own[ptr - base:ptr - base + len(words)] = words
+        full[ptr:ptr + len(words)] = words
+        done.append(name)
+    open(path, 'wb').write(encode(own) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    return 'special stage draws native: %s%s' % (', '.join(done) or '-', ' (already: %s)' % ', '.join(already) if already else '')
+
+
 def s1_patches():
     """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
@@ -6125,6 +6220,7 @@ def s1_patches():
             ('ssring', lambda d: patch_stage_sub(d, 'Ring', 0, SSRING_SIG_S1, 'PS1SSRing', with_jumps=True)),
             ('ssblockupdate', patch_ss_block_update),  # before ssblockcollide: it checks function 10's signature
             ('ssblockdraw', patch_ss_block_draw),  # before ssrotpos: it checks function 9's signature
+            ('ssdraws', patch_ss_draws),  # before ssrotpos too
             ('ssrotpos', lambda d: patch_stage_function(d, 'Special', 9, SSROTPOS_FN_SIG_S1, 'PS1SSRotPos')),
             ('ssblockcollide', lambda d: patch_stage_function(d, 'Special', 10, SSBLOCKCOLLIDE_FN_SIG_S1, 'PS1SSBlockCollide')))
 
