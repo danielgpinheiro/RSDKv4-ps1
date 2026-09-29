@@ -4989,6 +4989,127 @@ static void PS1StageSetupUpdate()
         ap[6]--;
     }
 }
+#if PS1_GAME == 1
+// Sonic 1's Stage Setup update sub (docs/37 phase 2b), like PS1StageSetupUpdate: its main part runs only in stage state 1
+// (Sonic 2's: every state but 2 and 3), with Sonic 1's globals, timer local (22826), extra-life object (38) and death
+// function (51); the time-over path doesn't set a global first. Patched in when STAGESETUP_SIG_S1 matches.
+static void PS1StageSetupUpdateS1()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr = scriptEng.checkResult;
+    int *G  = globalVariables;
+    TypeGroupList &players = objectTypeGroupList[256];
+    if (stageMode == 1) {
+        G[17]++;
+        if (G[17] == 4) {
+            G[17] = 0;
+            G[18]++;
+            G[18] &= 7;
+        }
+        PS1ScriptWrite(22826, scriptCode[22826] + 1); // Inc LOCAL[22826]
+        if (scriptCode[22826] > 17)
+            PS1ScriptWrite(22826, 0);
+        if (G[0] != 2) {
+            if (G[21] >= G[22]) {
+                G[23]++;
+                G[22] += 50000;
+                PlaySfx(24, 0);
+                PauseSound();
+                PS1ResetObjectEntity(25, 38, 2, 0, 0);
+                PS1_OBJ(25).priority = 1;
+            }
+        }
+        G[16]++;
+        G[16] &= 511;
+        PS1CallScriptFunction(71, 0);
+        if (timeEnabled == 1) {
+            if (stageMinutes == 10) {
+                cr   = debugMode == 1;
+                t[0] = cr;
+                cr   = G[0] == 2;
+                t[0] |= cr;
+                if (t[0] == 0) {
+                    ap[6]           = 0;
+                    PS1_OBJ(0).type = 1;
+                    PS1CallScriptFunction(51, 0);
+                }
+                stageMinutes      = 9;
+                stageSeconds      = 59;
+                stageMilliseconds = 99;
+                timeEnabled       = 0;
+            }
+        }
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6]     = players.entityRefs[loop];
+            Entity &p = PS1_OBJ(ap[6]);
+            t[0]      = PS1CollisionLeft(p);
+            t[0] <<= 16;
+            t[0] += p.xpos;
+            t[1] = curXBoundary1;
+            t[1] <<= 16;
+            if (t[0] < t[1]) {
+                if (p.right == 1) {
+                    p.xvel  = 65536;
+                    p.speed = 65536;
+                }
+                else {
+                    p.xvel  = 0;
+                    p.speed = 0;
+                }
+                p.xpos = t[1];
+                t[0]   = PS1CollisionLeft(p);
+                t[0] <<= 16;
+                p.xpos -= t[0];
+            }
+            t[1] = curYBoundary2;
+            t[1] <<= 16;
+            if (t[1] < G[47]) {
+                if (p.ypos > G[47])
+                    PS1CallScriptFunction(51, 1);
+            }
+            else {
+                if (p.ypos > t[1])
+                    PS1CallScriptFunction(51, 1);
+            }
+        }
+    }
+    if (G[5] == 0) {
+        if (PS1_OBJ(0).controlMode > -1)
+            G[7] = 1;
+        else
+            G[7] = 0;
+    }
+    else {
+        G[7] = 0;
+    }
+    auto addRef = [](int layer, int ref) { drawListEntries[layer].entityRefs[drawListEntries[layer].listSize++] = ref; };
+    ap[6] = ap[7];
+    ap[6]--;
+    while (ap[6] > -1) {
+        if (PS1_OBJ(ap[6]).visible == 1) {
+            ap[6] += ap[7];
+            if (PS1_OBJ(ap[6]).values[18] == 0) {
+                ap[6] -= ap[7];
+                ap[0] = PS1_OBJ(ap[6]).values[18];
+                addRef(ap[0], ap[6]);
+                ap[6] += ap[7];
+                addRef(ap[0], ap[6]);
+                ap[6] -= ap[7];
+            }
+            else {
+                ap[6] -= ap[7];
+                ap[0] = PS1_OBJ(ap[6]).values[18];
+                ap[6] += ap[7];
+                addRef(ap[0], ap[6]);
+                ap[6] -= ap[7];
+                ap[0] = PS1_OBJ(ap[6]).values[18];
+                addRef(ap[0], ap[6]);
+            }
+        }
+        ap[6]--;
+    }
+}
+#endif
 static int PS1CollisionRight(Entity &e) // VAR_OBJECTCOLLISIONRIGHT's getter
 {
     AnimationFile *animFile = objectScriptList[e.type].animFile;
@@ -5805,6 +5926,211 @@ static void PS1PlayerInput()
         }
     }
 }
+
+#if PS1_GAME == 1
+// Sonic 1's player input / timers (GlobalCode function 0, docs/37 phase 2b), like PS1PlayerInput: Sonic 2's function
+// without the 2P VS parts (no GLOBAL[13] checks, no sums over both players), with Sonic 1's globals (97 / 98 / 102 / 95
+// / 39) and functions (42, 38); its pause blocks stop SFX 0. The mobile back key's pause is patched off before this
+// (patch_back_pause s1: its `IfEqual KEYDOWNBUTTONB 2` is never true). Patched in when PLAYERINPUT_FN_SIG_S1 matches.
+static void PS1PlayerInputS1()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr = scriptEng.checkResult;
+    int *G  = globalVariables;
+    auto E  = []() -> Entity & { return objectEntityList[objectEntityPos]; };
+    auto ic = []() { return !(forceUseScripts || Engine.usingOrigins) || objectEntityPos <= 1; }; // inputCheck
+    auto L  = [](int pos) { return (int)scriptCode[pos]; };
+    auto touch = [&](int l, int tp, int r, int b) { // FUNC_CHECKTOUCHRECT
+        cr = -1;
+#if !RETRO_USE_ORIGINAL_CODE
+        AddDebugHitbox(H_TYPE_FINGER, NULL, l, tp, r, b);
+#endif
+        for (int f = 0; f < touches; ++f) {
+            if (touchDown[f] && touchX[f] > l && touchX[f] < r && touchY[f] > tp && touchY[f] < b)
+                cr = f;
+        }
+    };
+    if (G[5] == 0) {
+        if (E().controlMode == 0) {
+            touch(0, 96, SCREEN_CENTERX, SCREEN_YSIZE);
+            if (cr > -1) {
+                ap[0] = cr;
+                t[0]  = touchX[ap[0]];
+                t[0] -= saveRAM[39];
+                t[1] = touchY[ap[0]];
+                t[1] -= saveRAM[40];
+                t[2] = ArcTanLookup(t[0], t[1]);
+                t[2] += 32;
+                t[2] &= 255;
+                t[2] >>= 6;
+                switch (t[2]) {
+                    case 0:
+                        if (ic())
+                            keyDown.right = 1;
+                        break;
+                    case 1:
+                        if (ic())
+                            keyDown.down = 1;
+                        break;
+                    case 2:
+                        if (ic())
+                            keyDown.left = 1;
+                        break;
+                    case 3:
+                        if (ic())
+                            keyDown.up = 1;
+                        break;
+                }
+            }
+            touch(SCREEN_CENTERX, 96, SCREEN_XSIZE, 240);
+            if (cr > -1) {
+                if (ic())
+                    keyDown.A = 1;
+            }
+            if (G[97] == 0) { // Or KEYPRESSBUTTONA KEYDOWNBUTTONA
+                int a = keyPress.A && ic();
+                a |= keyDown.A && ic();
+                if (ic())
+                    keyPress.A = a;
+            }
+            G[97] = keyDown.A && ic();
+            if (debugMode == 1) {
+                touch(0, 0, 112, 56);
+                if (cr > -1) {
+                    if (ic())
+                        keyDown.B = 1;
+                }
+                if (G[98] == 0) {
+                    int b = keyPress.B && ic();
+                    b |= keyDown.B && ic();
+                    if (ic())
+                        keyPress.B = b;
+                }
+                G[98] = keyDown.B && ic();
+            }
+            touch(240, 0, SCREEN_XSIZE, 40);
+            if (cr > -1) {
+                PlaySfx(23, 0);
+                StopSfx(19);
+                StopSfx(0);
+                Engine.gameMode = 5;
+            }
+            if ((keyPress.start && ic()) == 1) {
+                PlaySfx(23, 0);
+                StopSfx(19);
+                StopSfx(0);
+                Engine.gameMode = 5;
+            }
+            // IfEqual KEYDOWNBUTTONB 2: the mobile back key's pause, its 1 patched to 2 (never true)
+        }
+        ProcessObjectControl(&E());
+    }
+    else {
+        if (G[102] == 0) {
+            touch(0, 0, SCREEN_XSIZE, SCREEN_YSIZE);
+            if ((keyPress.start && ic()) == 1)
+                cr = 0;
+            if (cr > -1) {
+                if (L(12) > 1)
+                    PS1ScriptWrite(12, 1);
+            }
+            if ((keyPress.start && ic()) == 1) {
+                if (L(12) > 1)
+                    PS1ScriptWrite(12, 1);
+            }
+        }
+        if (E().controlMode == 0) {
+            PS1ScriptWrite(11, L(11) - 1);
+            if (L(11) < 1) {
+                if (L(9) < L(10)) {
+                    if (L(9) >= 0 && L(9) < scriptCode[L(8)]) // GetTableValue TEMP0 LOCAL9 LOCAL8
+                        t[0] = scriptCode[L(8) + L(9) + 1];
+                    E().up        = (t[0] & (1 << 0)) >> 0;
+                    E().down      = (t[0] & (1 << 1)) >> 1;
+                    E().left      = (t[0] & (1 << 2)) >> 2;
+                    E().right     = (t[0] & (1 << 3)) >> 3;
+                    E().jumpPress = (t[0] & (1 << 4)) >> 4;
+                    E().jumpHold  = (t[0] & (1 << 5)) >> 5;
+                    PS1ScriptWrite(9, L(9) + 1);
+                    if (L(9) >= 0 && L(9) < scriptCode[L(8)]) // GetTableValue LOCAL11 LOCAL9 LOCAL8
+                        PS1ScriptWrite(11, scriptCode[L(8) + L(9) + 1]);
+                    PS1ScriptWrite(9, L(9) + 1);
+                }
+            }
+            else {
+                if (E().jumpPress == 1)
+                    E().jumpPress = 0;
+            }
+            if (L(12) > 0) {
+                PS1ScriptWrite(12, L(12) - 1);
+                if (L(12) < 1) {
+                    PS1ResetObjectEntity(11, 6, 0, 0, 0);
+                    PS1_OBJ(11).state     = 8;
+                    PS1_OBJ(11).priority  = 1;
+                    PS1_OBJ(11).drawOrder = 6;
+                    E().values[7]         = 80;
+                    cameraEnabled         = 0;
+                }
+            }
+        }
+    }
+    if (E().values[6] > 0) {
+        E().values[6]--;
+        if (E().values[6] < 1) {
+            ap[6] = objectEntityPos;
+            PS1CallScriptFunction(42, 0);
+            if (G[95] != 0)
+                PS1CallScriptFunction(G[95], 0);
+            E().values[6] = 0;
+        }
+    }
+    if (E().state != 26) {
+        if (E().values[8] > 0) {
+            E().values[8]--;
+            t[0] = (E().values[8] & (1 << 2)) >> 2;
+            if (t[0] == 1)
+                E().visible = 0;
+            else
+                E().visible = 1;
+        }
+    }
+    if (E().values[7] > 0) {
+        E().values[7]--;
+        if (E().values[7] == 0) {
+            if (trackID == 2)
+                PlayMusic(0, 0);
+            if (PS1_OBJ(objectEntityPos + ap[7]).type == G[39]) { // OBJECTTYPE[2,1,7]: entity (this + arrayPos7)
+                ap[6] = objectEntityPos;
+                ap[0] = ap[6];
+                ap[0] += ap[7];
+                PS1CallScriptFunction(38, 0);
+            }
+        }
+    }
+    if (E().state != 15) {
+        if (E().state != 16) {
+            if (E().lookPosY > 0)
+                E().lookPosY -= 2;
+            if (E().lookPosY < 0)
+                E().lookPosY += 2;
+        }
+    }
+    if (E().values[11] > 0) {
+        E().values[11]--;
+        if (E().values[11] == 0) {
+            if (objectEntityPos == cameraTarget)
+                cameraStyle = 0;
+        }
+    }
+    if (E().state != 18) {
+        if (E().values[26] != 0) {
+            StopSfx(19);
+            StopSfx(20);
+            E().values[26] = 0;
+        }
+    }
+}
+#endif
 
 // Sonic 2's Spikes (GlobalCode object "Spikes"; update 121 VM instructions, ~3 hblanks a frame each), natively: one
 // statement per script instruction, in order. The moving spikes' states (switch OBJECTSTATE 1-5), then the player
@@ -10826,6 +11152,14 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 PS1HUDDraw();
                 break;
+            case FUNC_PS1PLAYERINPUT: // Sonic 1's own input function (PLAYERINPUT_FN_SIG_S1)
+                opcodeSize = 0;
+                PS1PlayerInputS1();
+                break;
+            case FUNC_PS1STAGESETUP: // Sonic 1's own Stage Setup update (STAGESETUP_SIG_S1)
+                opcodeSize = 0;
+                PS1StageSetupUpdateS1();
+                break;
             case FUNC_PS1RING: // Sonic 1's own Ring update (RING_SIG_S1)
                 opcodeSize = 0;
                 PS1RingUpdateS1();
@@ -10882,9 +11216,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             // counted like a bad opcode
             case FUNC_PS1LOSERING: case FUNC_PS1BUTTONBRIDGE: case FUNC_PS1PLANESWITCHV:
             case FUNC_PS1PLANESWITCHH: case FUNC_PS1ROTATEPLATFORM: case FUNC_PS1ROTATEPLATFORMDRAW: case FUNC_PS1HPZBRIDGE:
-            case FUNC_PS1HPZBRIDGEDRAW: case FUNC_PS1STAGESETUP: case FUNC_PS1TURRETPLATFORM:
+            case FUNC_PS1HPZBRIDGEDRAW: case FUNC_PS1TURRETPLATFORM:
             case FUNC_PS1BELTPLATFORM: case FUNC_PS1HFLIPPER: case FUNC_PS1EARTHQUAKE: case FUNC_PS1SPIKES:
-            case FUNC_PS1PLAYERINPUT: case FUNC_PS1CLEDGE: case FUNC_PS1STEAMPISTON: case FUNC_PS1PLAYERSTATE10:
+            case FUNC_PS1CLEDGE: case FUNC_PS1STEAMPISTON: case FUNC_PS1PLAYERSTATE10:
             case FUNC_PS1PLAYERSTATE12: case FUNC_PS1MPZSETUP: case FUNC_PS1MONITOR: case FUNC_PS1INVISIBLEBLOCK:
             case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
             case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
