@@ -8634,6 +8634,85 @@ static void PS1MonitorUpdate()
     }
 }
 
+#if PS1_GAME == 1
+// Sonic 1's Monitor update sub (GlobalCode object "Monitor", every zone), natively: one statement per script
+// instruction, in order (MONITOR_SIG_S1). Falling after a hit from below (state 1: gravity, then the floor), then per
+// player (group 256, ARRAYPOS6): a rolling / jumping / spin-dashing player (animation globals 64 / 81 / 83) coming
+// down or grounded breaks it (touch box against the player's attack box, values 38-41): the explosion (temp object
+// 18), the bounce, the Broken Monitor (type 14), the sound; otherwise it is solid (from below: knocked up).
+static void PS1MonitorUpdateS1()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    int *G     = globalVariables;
+    int self   = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    if (me.state == 1) {
+        me.yvel += 14336;
+        me.ypos += me.yvel;
+        if (me.yvel >= 0) {
+            ObjectFloorCollision(0, 16, 0); // ObjectTileCollision CSIDE_FLOOR 0 16 0
+            if (cr == 1) {
+                me.yvel  = 0;
+                me.state = 0;
+            }
+        }
+    }
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        cr        = p.yvel > -1;
+        t[0]      = cr;
+        cr        = p.gravity == 0;
+        t[0] |= cr;
+        if (t[0] == 1) {
+            cr   = p.animation == G[64];
+            t[0] = cr;
+            cr   = p.animation == G[81];
+            t[0] |= cr;
+            cr = p.animation == G[83];
+            t[0] |= cr;
+            if (t[0] == 1) {
+                if (p.values[16] == 0) {
+                    TouchCollision(&PS1_OBJ(self), -16, -14, 16, 16, &PS1_OBJ(ap[6]), p.values[40], p.values[38], p.values[41],
+                                   p.values[39]);
+                    if (cr == 1) {
+                        me.state = 0;
+                        PS1CreateTempObject(18, 0, me.xpos, me.ypos);
+                        PS1_OBJ(ap[8]).drawOrder = 4;
+                        p.yvel += p.values[25];
+                        p.yvel += p.values[25];
+                        p.yvel  = -p.yvel;
+                        me.type = 14;
+                        if (me.priority != 4)
+                            me.priority = 1;
+                        me.alpha     = 255;
+                        me.values[0] = me.ypos;
+                        me.values[1] = -196608;
+                        PlaySfx(8, 0);
+                    }
+                }
+                else {
+                    BoxCollision(&PS1_OBJ(self), -15, -14, 15, 16, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                }
+            }
+            else {
+                BoxCollision(&PS1_OBJ(self), -15, -14, 15, 16, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            }
+        }
+        else {
+            BoxCollision(&PS1_OBJ(self), -15, -16, 15, 16, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 4) {
+                me.state = 1;
+                me.yvel  = -131072;
+                p.yvel   = 131072;
+            }
+        }
+    }
+}
+#endif
+
 // Sonic 2's Invisible Block (GlobalCode object "Invisible Block"; update 81 VM instructions), natively: one statement
 // per script instruction, in order (the temps keep growing across the player loop, as in the script). Solid (state 0:
 // crushing a player against it long enough runs function 50, the death, in the VM from inside the loop), right wall
@@ -12040,6 +12119,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 PS1RingUpdateS1();
                 break;
+            case FUNC_PS1MONITOR: // Sonic 1's own Monitor update (MONITOR_SIG_S1)
+                opcodeSize = 0;
+                PS1MonitorUpdateS1();
+                break;
             case FUNC_PS1TAILSFN61:
                 opcodeSize = 0;
                 PS1TailsFn61();
@@ -12095,7 +12178,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1HPZBRIDGEDRAW: case FUNC_PS1TURRETPLATFORM:
             case FUNC_PS1BELTPLATFORM: case FUNC_PS1HFLIPPER: case FUNC_PS1EARTHQUAKE: case FUNC_PS1SPIKES:
             case FUNC_PS1CLEDGE: case FUNC_PS1STEAMPISTON: case FUNC_PS1PLAYERSTATE10:
-            case FUNC_PS1PLAYERSTATE12: case FUNC_PS1MPZSETUP: case FUNC_PS1MONITOR: case FUNC_PS1INVISIBLEBLOCK:
+            case FUNC_PS1PLAYERSTATE12: case FUNC_PS1MPZSETUP: case FUNC_PS1INVISIBLEBLOCK:
             case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
             case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
             case FUNC_PS1HORIZONTALDOOR:
