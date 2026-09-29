@@ -48,6 +48,8 @@ tools/boot_test.sh [OUT] [F1] [F2]            # headless boot over GDB: loads, f
 tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, land (g_ps1PadTestMask) + dumps (guards and
                                               # audio counters as files: OUT_guards.bin / OUT_audio.bin)
 GAME=1 tools/zone_sweep.sh OUT Zone01:0 ...   # per FOLDER:PLAYER a BOOT= build + logic test, one line each (restores make)
+make BOOT=X SAMPLER=1 && tools/pc_profile.sh OUT [START END]   # CPU profile by PC sampling (root counter 0 IRQ records
+                                              # EPC, ps1/pc_sampler.cpp): share per function; not for make dist
 GAME=1 tools/export_builder.sh ../Sonic-1-PS1-ISO-Builder   # the Sonic 1 builder (local; publish only with the user's OK)
 tools/load_profile.sh [OUT] [STOP]            # BOOT= build: load-time profile, stages switched by GDB (SCHEDULE=,
                                               # PRE='set var g_ps1FsFastLoad = 0' / g_ps1ScriptImageOn = 0 for A/B)

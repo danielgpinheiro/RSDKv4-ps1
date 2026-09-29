@@ -36,6 +36,9 @@ psyqo::GPU *g_ps1GPU           = nullptr;
 psyqo::AdvancedPad *g_ps1Pad   = nullptr;
 psyqo::CDRomDevice *g_ps1CDRom = nullptr;
 void PS1IrqGuardInstall(); // ps1/irq_guard.cpp
+#if PS1_PC_SAMPLER
+void PS1PcSamplerInstall(); // ps1/pc_sampler.cpp (make SAMPLER=1)
+#endif
 void PS1McPrepare();       // ps1/memcard.cpp
 void PS1SaveTestService(); // RSDKv4/Userdata.cpp (GDB test hook)
 void PS1RenderBeginFrame(psyqo::GPU &gpu); // ps1/render.cpp
@@ -85,6 +88,9 @@ class RSDKv4PS1App final : public psyqo::Application {
         m_cdrom.resetBlocking(gpu());
         g_ps1CDRom = &m_cdrom;
         PS1IrqGuardInstall(); // re-raises CD / DMA IRQ edges lost to psyqo's I_STAT read-modify-write (docs/31)
+#if PS1_PC_SAMPLER
+        PS1PcSamplerInstall();
+#endif
         m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;
         PS1ProfTicksInit(); // per-object-type CPU profile (Object.cpp g_ps1TypeTicks)
