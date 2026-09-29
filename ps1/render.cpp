@@ -1003,6 +1003,9 @@ void ClearScreen(byte index)
 
 // upstream: draw subs are game logic too; only their Draw* calls produce primitives.
 extern uint32_t g_ps1TypeDrawTicks[OBJECT_COUNT], g_ps1TypeDrawCalls[OBJECT_COUNT]; // Object.cpp profile
+#if PS1_GAME == 1
+bool PS1S1TopSub(int ptr); // Script.cpp
+#endif
 void DrawObjectList(int layer)
 {
     PS1FrameStart(false);
@@ -1012,6 +1015,22 @@ void DrawObjectList(int layer)
     for (int i = 0; i < size; ++i) {
         objectEntityPos = drawListEntries[layer].entityRefs[i];
         int type        = objectEntityList[objectEntityPos].type;
+#if PS1_GAME == 1
+        // Sonic 1 (docs/37 phase 7): a draw sub that is one native opcode runs without ProcessScript (Script.cpp
+        // PS1S1TopSub); the per-type draw ticks only in PROFILE=1 builds (two counter reads a sub).
+        if (type) {
+#if PS1_PROFILE
+            uint32_t tt = PS1ProfTicks();
+#endif
+            int ptr = objectScriptList[type].eventDraw.scriptCodePtr;
+            if (scriptCode[ptr] > 0 && !PS1S1TopSub(ptr))
+                ProcessScript(ptr, objectScriptList[type].eventDraw.jumpTablePtr, EVENT_DRAW);
+#if PS1_PROFILE
+            g_ps1TypeDrawTicks[type] += (PS1ProfTicks() - tt) & 0xFFFF;
+            g_ps1TypeDrawCalls[type]++;
+#endif
+        }
+#else
         if (type) {
             uint32_t tt = PS1ProfTicks();
             if (scriptCode[objectScriptList[type].eventDraw.scriptCodePtr] > 0)
@@ -1019,6 +1038,7 @@ void DrawObjectList(int layer)
             g_ps1TypeDrawTicks[type] += (PS1ProfTicks() - tt) & 0xFFFF;
             g_ps1TypeDrawCalls[type]++;
         }
+#endif
     }
     g_ps1ChainSkipPrims = false;
     g_ps1ProfObjDrawHbl = g_ps1ProfObjDrawHbl + PS1HblanksSince(t0);
@@ -1902,7 +1922,17 @@ static void PS1DrawSprite(int XPos, int YPos, int width, int height, int sprX, i
 void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
 {
     uint32_t h = g_ps1DrawHash;
+#if PS1_GAME == 1 // the same hash, unrolled (the loop kept the seven arguments in a stack array)
+    h = h * 31 + (uint32_t)XPos;
+    h = h * 31 + (uint32_t)YPos;
+    h = h * 31 + (uint32_t)width;
+    h = h * 31 + (uint32_t)height;
+    h = h * 31 + (uint32_t)sprX;
+    h = h * 31 + (uint32_t)sprY;
+    h = h * 31 + (uint32_t)sheetID;
+#else
     for (int a : { XPos, YPos, width, height, sprX, sprY, sheetID }) h = h * 31 + (uint32_t)a;
+#endif
     g_ps1DrawHash  = h;
     g_ps1DrawCount = g_ps1DrawCount + 1;
     PS1DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
@@ -2021,7 +2051,7 @@ static void PS1AffinePieceDraw(const PS1AffinePiece &a, int XPos, int YPos)
     PS1ChainPieceQuad(a.p, xs, ys, a.u0, a.u1, a.v0, a.v1);
 }
 
-static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
+__attribute__((always_inline)) static inline void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                                 int scale, int sheetID)
 {
     if (width <= 0 || height <= 0 || scale == 0 || !s_frameOpen || PS1ObjectsHidden())

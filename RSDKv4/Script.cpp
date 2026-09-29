@@ -4052,6 +4052,25 @@ static void PS1CallNative2(int op0, int op1, int op2)
         }
     }
 }
+#if PS1_GAME == 1
+// TouchCollision(me, l, t, r, b, o, C_BOX x4) for Sonic 1's natives, whose own box is always given (constants): the
+// same test and result without GetHitbox(me) (read by upstream, never used when the values are explicit) or the call;
+// with the debug hitboxes on, the real one (it records them).
+static inline void PS1TouchS1(Entity *me, int l, int t, int r, int b, Entity *o)
+{
+#if !RETRO_USE_ORIGINAL_CODE
+    if (showHitboxes) {
+        TouchCollision(me, l, t, r, b, o, C_BOX, C_BOX, C_BOX, C_BOX);
+        return;
+    }
+#endif
+    AnimationFile *a = objectScriptList[o->type].animFile;
+    Hitbox *h        = &hitboxList[a->hitboxListOffset + animFrames[animationList[a->aniListOffset + o->animation].frameListOffset + o->frame].hitboxID];
+    int mx = me->xpos >> 16, my = me->ypos >> 16, ox = o->xpos >> 16, oy = o->ypos >> 16;
+    scriptEng.checkResult = h->right[0] + ox > l + mx && h->left[0] + ox < r + mx && h->bottom[0] + oy > t + my && h->top[0] + oy < b + my;
+}
+#endif
+
 // Sonic 1's Ring update sub (GlobalCode object "Ring", docs/37 phase 2b): Sonic 2's (PS1RingUpdate) without the
 // 2P counters, with Sonic 1's global numbering and its achievements (200 rings; 30 rings in a row while rolling).
 static void PS1RingUpdateS1()
@@ -4071,7 +4090,7 @@ static void PS1RingUpdateS1()
         cr   = PS1_OBJ(ap[6]).state == 25;
         t[0] |= cr;
         if (t[0] == 0) {
-            TouchCollision(&PS1_OBJ(self), -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            PS1TouchS1(&PS1_OBJ(self), -8, -8, 8, 8, &PS1_OBJ(ap[6]));
             if (cr == 1) {
                 me.type = 12;
                 PS1_OBJ(0).values[0]++;
@@ -4122,7 +4141,7 @@ static void PS1RingUpdateS1()
             else {
                 if (PS1_OBJ(self).state == 0) {
                     if (PS1_OBJ(ap[6]).values[37] == 4) {
-                        TouchCollision(&PS1_OBJ(self), -64, -64, 64, 64, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                        PS1TouchS1(&PS1_OBJ(self), -64, -64, 64, 64, &PS1_OBJ(ap[6]));
                         if (cr == 1) {
                             PS1_OBJ(self).state     = 1;
                             PS1_OBJ(self).values[1] = ap[6];
@@ -5962,30 +5981,16 @@ static void PS1SSRotPos()
     int *t     = scriptEng.temp;
     Entity &me = objectEntityList[objectEntityPos];
     Entity &p  = PS1_OBJ(0);
-    t[2]       = me.xpos;
-    t[2] -= p.xpos;
-    t[2] >>= 8;
-    t[3] = me.ypos;
-    t[3] -= p.ypos;
-    t[3] >>= 8;
-    t[4] = Sin512(scriptCode[0]);
-    t[4] *= t[3];
-    t[5] = Cos512(scriptCode[0]);
-    t[5] *= t[2];
-    t[0] = t[4];
-    t[0] += t[5];
-    t[0] >>= 1;
-    t[0] += p.xpos;
-    t[4] = Cos512(scriptCode[0]);
-    t[4] *= t[3];
-    t[5] = Sin512(scriptCode[0]);
-    t[5] *= t[2];
-    t[1] = t[4];
-    t[1] -= t[5];
-    t[1] >>= 1;
-    t[1] += p.ypos;
-    me.rotation = 512;
-    me.rotation -= scriptCode[0];
+    // the script's 24 statements with LOCAL[0] and its sine / cosine read once; the temps end as the script leaves them
+    int ang = scriptCode[0], sn = Sin512(ang), cs = Cos512(ang);
+    int dx = (me.xpos - p.xpos) >> 8, dy = (me.ypos - p.ypos) >> 8;
+    t[2] = dx;
+    t[3] = dy;
+    t[0] = ((sn * dy + cs * dx) >> 1) + p.xpos;
+    t[4] = cs * dy;
+    t[5] = sn * dx;
+    t[1] = ((t[4] - t[5]) >> 1) + p.ypos;
+    me.rotation = 512 - ang;
 }
 #endif
 
@@ -5993,6 +5998,49 @@ static void PS1SSRotPos()
 // Sonic 1's special stage, function 10 (docs/37 phase 7): a maze block against the player (entity 0), called by the
 // blocks' update subs from their player loop -- the solid box (bits of the player's value 11) or the touch box that
 // pushes the player out along the faster axis. One statement per instruction; SSBLOCKCOLLIDE_FN_SIG_S1.
+// The block's two tests against the player when they cannot hit (~70 blocks a frame, most far from the player):
+// BoxCollision2(me, -12, -12, 12, 12, o, C_BOX x4) misses in every one of its four sensor steps when the player's
+// hitbox lies wholly beyond the block's box (to the left / right / above / below; with the box offsets' signs and a
+// player hitbox around its origin at least 4 px wide, each step's test needs the boxes to reach each other), and
+// TouchCollision's -10..10 box is inside it. What BoxCollision2 leaves then: checkResult 0 and the sensors of its last
+// step (the steps' writes worked through for both of its branches: floor / roof / walls when xDif <= yDif, walls /
+// floor / roof otherwise). Anything else, and the debug hitboxes, take the real calls.
+static bool PS1SSFarBlock(Entity *me, Entity *o)
+{
+#if !RETRO_USE_ORIGINAL_CODE
+    if (showHitboxes)
+        return false;
+#endif
+    AnimationFile *a = objectScriptList[o->type].animFile;
+    Hitbox *h        = &hitboxList[a->hitboxListOffset + animFrames[animationList[a->aniListOffset + o->animation].frameListOffset + o->frame].hitboxID];
+    int oL = h->left[0], oT = h->top[0], oR = h->right[0], oB = h->bottom[0];
+    if (oL > 0 || oR < 0 || oT > 0 || oB < 0 || oR - oL < 4)
+        return false;
+    int thisLeft = (-12 + (me->xpos >> 16)) << 16, thisRight = (12 + (me->xpos >> 16)) << 16;
+    int thisTop = (-12 + (me->ypos >> 16)) << 16, thisBottom = (12 + (me->ypos >> 16)) << 16;
+    oL <<= 16, oT <<= 16, oR <<= 16, oB <<= 16;
+    int rx = o->xpos >> 16 << 16, ry = o->ypos >> 16 << 16;
+    if (!(rx + oR < thisLeft || rx + oL > thisRight || ry + oB < thisTop || ry + oT > thisBottom))
+        return false;
+    int xDif = me->xpos <= rx ? rx - thisRight : thisLeft - rx;
+    int yDif = me->ypos <= ry ? ry - thisBottom : thisTop - ry;
+    sensors[0].collided = false;
+    sensors[1].collided = false;
+    sensors[2].collided = false;
+    if (xDif <= yDif) { // ... right wall last
+        sensors[0].xpos = rx + oL;
+        sensors[0].ypos = ry + oT + 0x20000;
+    }
+    else { // ... roof last
+        sensors[0].xpos = rx + oL + 0x20000;
+        sensors[0].ypos = ry + oT;
+    }
+    sensors[1].xpos       = rx + oR - 0x20000;
+    sensors[1].ypos       = ry + oB - 0x20000;
+    sensors[2].xpos       = rx + oR - 0x20000;
+    scriptEng.checkResult = 0;
+    return true;
+}
 static int PS1CollisionTop(Entity &e); // below (VAR_OBJECTCOLLISIONTOP's getter)
 static void PS1SSBlockCollide()
 {
@@ -6005,12 +6053,14 @@ static void PS1SSBlockCollide()
         else
             v |= 1 << bit;
     };
+    if (PS1SSFarBlock(&PS1_OBJ(self), &PS1_OBJ(0)))
+        return; // both tests miss: cr = 0, sensors as BoxCollision2 leaves them
     BoxCollision2(&PS1_OBJ(self), -12, -12, 12, 12, &PS1_OBJ(0), 65536, 65536, 65536, 65536);
     if (cr != 0) {
         setBit(PS1_OBJ(0).values[11], cr, 1);
     }
     else {
-        TouchCollision(&PS1_OBJ(self), -10, -10, 10, 10, &PS1_OBJ(0), 65536, 65536, 65536, 65536);
+        PS1TouchS1(&PS1_OBJ(self), -10, -10, 10, 10, &PS1_OBJ(0));
         if (cr == 1) {
             Entity &p = PS1_OBJ(0);
             t[0]      = p.xvel;
@@ -6103,7 +6153,7 @@ static void PS1SSRingUpdate()
     TypeGroupList &players = objectTypeGroupList[256];
     for (int loop = 0; loop < players.listSize; ++loop) { // ForEachActive 256, ARRAYPOS6
         ap[6] = players.entityRefs[loop];
-        TouchCollision(&PS1_OBJ(self), -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        PS1TouchS1(&PS1_OBJ(self), -8, -8, 8, 8, &PS1_OBJ(ap[6]));
         if (cr == 1) {
             PS1_OBJ(self).type = 19;
             Entity &p = PS1_OBJ(ap[6]);
@@ -6320,7 +6370,7 @@ static void PS1SSObjUpdate(int kind)
                     int k = me().propertyValue;
                     if (k >= 1 && k <= 5) {
                         const int16_t *b = box[k - 1];
-                        TouchCollision(&PS1_OBJ(self), b[0], b[1], b[2], b[3], &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                        PS1TouchS1(&PS1_OBJ(self), b[0], b[1], b[2], b[3], &PS1_OBJ(ap[6]));
                         if (cr == 1) {
                             me().propertyValue = 0;
                             me().inkEffect     = 0;
@@ -6456,7 +6506,7 @@ static void PS1SSObjUpdate(int kind)
             for (int loop = 0; loop < players.listSize; ++loop) {
                 ap[6] = players.entityRefs[loop];
                 PS1SSBlockCollide();
-                TouchCollision(&PS1_OBJ(self), -14, -14, 14, 14, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                PS1TouchS1(&PS1_OBJ(self), -14, -14, 14, 14, &PS1_OBJ(ap[6]));
                 if (cr == 1) {
                     if (me().state == 0)
                         PlaySfx(41, 0);
@@ -9529,7 +9579,7 @@ static void PS1SpecialRingUpdate()
 static bool PS1S1FastSub(int p)
 {
     int op = PS1_RAW(p);
-    if (op < FUNC_PS1SSROTPOS || op > FUNC_PS1SSOBJUPDATE)
+    if (op < FUNC_PS1SSROTPOS || op > FUNC_PS1S1ZONEOBJ)
         return false;
     int n = s_ps1OpSize[op];
     for (int i = 0; i < n; ++i)
@@ -9547,10 +9597,22 @@ static bool PS1S1FastSub(int p)
         case FUNC_PS1SSANIMDRAW: PS1SSAnimDraw(scriptEng.operands[0]); break;
         case FUNC_PS1SSGEMDRAW: PS1SSGemDraw(); break;
         case FUNC_PS1SSOBJUPDATE: PS1SSObjUpdate(scriptEng.operands[0]); break;
+        case FUNC_PS1S1ZONEOBJ: PS1S1ZoneObj(scriptEng.operands[0]); break;
         default: return false; // functions' natives (`op return`): never a sub
     }
     scriptText[0] = '\0'; // End
     return true;
+}
+// The same before ProcessScript is entered (ProcessObjects / DrawObjectList, docs/37 phase 7): the stacks reset as
+// ProcessScript resets them for a top-level run, then the fast path; false = run ProcessScript as before.
+bool PS1S1TopSub(int p)
+{
+    if (s_ps1CallNested)
+        return false;
+    jumpTableStackPos = 0;
+    functionStackPos  = 0;
+    foreachStackPos   = 0;
+    return PS1S1FastSub(p);
 }
 #endif
 
