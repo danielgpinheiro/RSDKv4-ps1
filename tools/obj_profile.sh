@@ -46,7 +46,7 @@ import os, struct, sys
 sys.path.insert(0, 'tools/atlas')
 import object_sheets as o
 stage, out = sys.argv[1], sys.argv[2]
-D = '../Sonic2_Extracted/Data'
+D = '../Sonic%s_Extracted/Data' % os.environ.get('GAME', '2')
 g, _, sn = o.stage_config(D, stage)
 names = ['blank'] + (o.game_config(D)[0] if g else []) + sn
 TPH = 33868800 / 8 / 15734

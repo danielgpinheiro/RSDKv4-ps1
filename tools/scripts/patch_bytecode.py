@@ -2977,9 +2977,9 @@ PLAYERFN53_SIG = [
 ]
 
 
-def patch_player_physics(bcdir):
-    """The player physics functions (PLAYERFN*_SIG) -> PS1PlayerFn<N> / return, all or none: PS1PlayerFn6 calls
-    PS1PlayerFn51 directly, so every signature is checked before any function is rewritten."""
+def patch_player_physics(bcdir, game_sigs=None):
+    """The player physics functions (PLAYERFN*_SIG, or game_sigs {n: signature}) -> PS1PlayerFn<N> / return, all or
+    none: PS1PlayerFn6 calls PS1PlayerFn51 directly, so every signature is checked before any function is rewritten."""
     names, vars_ = bs.tables(3)
     fn = [n for n, _ in names]
     ret = fn.index('return')
@@ -2988,7 +2988,7 @@ def patch_player_physics(bcdir):
     code, p = bs.blocks(raw, 0)
     rest = raw[p:]
     starts = [s for s, _ in bs.load(path)[4]]
-    sigs = [(n, globals()['PLAYERFN%d_SIG' % n]) for n in (2, 3, 4, 5, 6, 51, 52, 53)]
+    sigs = [(n, (game_sigs or {}).get(n) or globals()['PLAYERFN%d_SIG' % n]) for n in (2, 3, 4, 5, 6, 51, 52, 53)]
     found, already = [], 0
     for n, sig in sigs:
         op = fn.index('PS1PlayerFn%d' % n)
@@ -3724,12 +3724,14 @@ def patch_function_group(bcdir, group, requires=(), what='functions'):
     return '%s native: functions %s' % (what, ' '.join(str(f) for _, f, _, _ in found))
 
 
-def patch_tails_ai(bcdir):
+def patch_tails_ai(bcdir, game_sigs=None, fn6_sig=None):
+    """Tails's CPU (TAILSFN*_SIG, or game_sigs {n: signature}; fn6_sig: the jump PS1TailsFn62 calls directly)."""
     why = returns_balanced(bcdir)
     if why:
         sys.exit('ERROR patch_bytecode: PS1TailsFn67 cannot run its variable call: %s' % why)
-    return patch_function_group(bcdir, [('PS1TailsFn%d' % n, globals()['TAILSFN%d_SIG' % n]) for n in (61, 62, 66, 67)],
-                                requires=[('PS1PlayerFn6', PLAYERFN6_SIG)], what="Tails's CPU")
+    return patch_function_group(bcdir, [('PS1TailsFn%d' % n, (game_sigs or {}).get(n) or globals()['TAILSFN%d_SIG' % n])
+                                        for n in (61, 62, 66, 67)],
+                                requires=[('PS1PlayerFn6', fn6_sig or PLAYERFN6_SIG)], what="Tails's CPU")
 
 
 # Metropolis MPZ Setup update sub (with its jump-table entries), transcribed by PS1MPZSetup (calls function 46).
@@ -5417,13 +5419,177 @@ def patch_oscillate(bcdir):
         f, c['state'], c['params'], c['bits'], c['n'])
 
 
+def substituted(sig, subs):
+    """A Sonic 2 signature with whole lines replaced (Sonic 1's numbering, docs/37); every replacement must apply."""
+    out = [subs.get(l, l) for l in sig]
+    missing = [l for l in subs if l not in sig]
+    assert not missing, missing
+    return out
+
+
+# Sonic 1's player physics (docs/37 phase 2b): the same functions as Sonic 2's (PS1PlayerFn* natives, PS1_ANI_JUMPING /
+# PS1_ST_*): the jumping animation is G[64], the air / rolling / rolling-jump states 11 / 13 / 14, function 51 is 52.
+PLAYERFN_SIGS_S1 = {
+    4: substituted(PLAYERFN4_SIG, {'IfEqual 12 OBJECTANIMATION GLOBAL[1,0,67]': 'IfEqual 12 OBJECTANIMATION GLOBAL[1,0,64]'}),
+    6: substituted(PLAYERFN6_SIG, {'IfNotEqual 2 OBJECTANIMATION GLOBAL[1,0,67]': 'IfNotEqual 2 OBJECTANIMATION GLOBAL[1,0,64]',
+                                   'Equal OBJECTANIMATION GLOBAL[1,0,67]': 'Equal OBJECTANIMATION GLOBAL[1,0,64]',
+                                   'CallFunction 51': 'CallFunction 52', 'IfEqual 6 OBJECTSTATE 14': 'IfEqual 6 OBJECTSTATE 13',
+                                   'Equal OBJECTSTATE 15': 'Equal OBJECTSTATE 14', 'Equal OBJECTSTATE 12': 'Equal OBJECTSTATE 11'}),
+}
+
+# Sonic 1's HUD function (GlobalCode 72, PS1HUDDraw with PS1_G_SCORE / PS1_G_LIVES): the score is G[21], the lives G[23].
+HUD_FN_SIG_S1 = substituted(HUD_FN_SIG, {'DrawNumbers 0 104 13 GLOBAL[1,0,22] 6 8 0': 'DrawNumbers 0 104 13 GLOBAL[1,0,21] 6 8 0',
+                                          'DrawNumbers 24 56 220 GLOBAL[1,0,25] 2 8 0': 'DrawNumbers 24 56 220 GLOBAL[1,0,23] 2 8 0'})
+
+# Sonic 1's Tails CPU (GlobalCode 62, 63, 67, 68; RSDKv4/Script.cpp PS1N / PS1_TAILS_LOCAL): function 61's locals and
+# tables 1064 lower, and Sonic 1's state / function / animation numbers.
+S1_NUMBERS = {'16': '15', '17': '16', '19': '18', '27': '26', '28': '27', '29': '28', '34': '35', '61': '62', '63': '64',
+              '65': '66', '68': '69'}
+
+
+def tails_s1(sig):
+    import re
+    out = []
+    for l in sig:
+        l = re.sub(r'\b202(1\d|2\d|3\d)\b', lambda m: str(int(m.group(0)) - 1064), l)
+        w = l.split()
+        if w[0] in ('IfEqual', 'IfNotEqual', 'CheckEqual', 'CheckNotEqual') and w[-2].startswith('OBJECTSTATE') or \
+                w[0] == 'Equal' and w[1] in ('OBJECTSTATE', 'OBJECTVALUE44') or w[0] == 'CallFunction':
+            w[-1] = S1_NUMBERS.get(w[-1], w[-1])
+        l = ' '.join(w).replace('GLOBAL[1,0,74]', 'GLOBAL[1,0,71]')
+        out.append(l)
+    return out
+
+
+TAILSFN_SIGS_S1 = {n: tails_s1(globals()['TAILSFN%d_SIG' % n]) for n in (61, 62, 66, 67)}
+
+
+# Sonic 1's Ring update sub (GlobalCode object "Ring"), transcribed by PS1RingUpdateS1 (RSDKv4/Script.cpp): Sonic 2's
+# without the 2P counters, with its achievements (CallNativeFunction2) and its globals.
+RING_SIG_S1 = [
+    'ForEachActive 0 256 ARRAYPOS6',
+    'CheckEqual OBJECTSTATE[1,0,0] 26',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTSTATE[1,1,6] 26',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTSTATE[1,1,6] 25',
+    'Or TEMP0 CHECKRESULT',
+    'IfEqual 2 TEMP0 0',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 4 CHECKRESULT 1',
+    'Equal OBJECTTYPE 12',
+    'Inc OBJECTVALUE0[1,0,0]',
+    'IfGreater 6 OBJECTVALUE0[1,0,0] 999',
+    'Equal OBJECTVALUE0[1,0,0] 999',
+    'endif',
+    'IfGreaterOrEqual 8 OBJECTVALUE0[1,0,0] GLOBAL[1,0,20]',
+    'IfNotEqual 10 GLOBAL[1,0,0] 2',
+    'Inc GLOBAL[1,0,23]',
+    'PlaySfx 24 0',
+    'PauseMusic',
+    'ResetObjectEntity 25 38 2 0 0',
+    'Equal OBJECTPRIORITY[1,0,25] 1',
+    'endif',
+    'IfEqual 12 STAGEDEBUGMODE 0',
+    'IfGreaterOrEqual 14 OBJECTVALUE0[1,0,0] 200',
+    'CallNativeFunction2 GLOBAL[1,0,99] 4 100',
+    'endif',
+    'endif',
+    'Add GLOBAL[1,0,20] 100',
+    'IfGreater 16 GLOBAL[1,0,20] 300',
+    'Equal GLOBAL[1,0,20] 1000',
+    'endif',
+    'endif',
+    'IfEqual 18 OBJECTPROPERTYVALUE 1',
+    'IfEqual 20 STAGEDEBUGMODE 0',
+    'IfEqual 22 GLOBAL[1,0,5] 0',
+    'IfEqual 24 ARRAYPOS6 0',
+    'IfEqual 26 OBJECTANIMATION[1,0,0] GLOBAL[1,0,64]',
+    'Inc GLOBAL[1,0,104]',
+    'IfEqual 28 GLOBAL[1,0,104] 30',
+    'CallNativeFunction2 GLOBAL[1,0,99] 0 100',
+    'Equal GLOBAL[1,0,104] 0',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 30 GLOBAL[1,0,19] 0',
+    'PlaySfx 1 0',
+    'SetSfxAttributes 1 -1 -100',
+    'Equal GLOBAL[1,0,19] 1',
+    'else',
+    'PlaySfx 2 0',
+    'SetSfxAttributes 2 -1 100',
+    'Equal GLOBAL[1,0,19] 0',
+    'endif',
+    'else',
+    'IfEqual 32 OBJECTSTATE 0',
+    'IfEqual 34 OBJECTVALUE37[1,1,6] 4',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -64 -64 64 64 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 36 CHECKRESULT 1',
+    'Equal OBJECTSTATE 1',
+    'Equal OBJECTVALUE1 ARRAYPOS6',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'next',
+    'IfEqual 38 OBJECTSTATE 1',
+    'Equal ARRAYPOS0 OBJECTVALUE1',
+    'IfNotEqual 40 OBJECTVALUE37[1,1,0] 4',
+    'Equal OBJECTTYPE 11',
+    'Equal OBJECTANIMATIONSPEED 128',
+    'Equal OBJECTALPHA 256',
+    'else',
+    'Equal ARRAYPOS0 OBJECTVALUE1',
+    'IfGreater 42 OBJECTXPOS OBJECTXPOS[1,1,0]',
+    'IfGreater 44 OBJECTXVEL 0',
+    'Sub OBJECTXVEL 49152',
+    'else',
+    'Sub OBJECTXVEL 12288',
+    'endif',
+    'else',
+    'IfLower 46 OBJECTXVEL 0',
+    'Add OBJECTXVEL 49152',
+    'else',
+    'Add OBJECTXVEL 12288',
+    'endif',
+    'endif',
+    'IfGreater 48 OBJECTYPOS OBJECTYPOS[1,1,0]',
+    'IfGreater 50 OBJECTYVEL 0',
+    'Sub OBJECTYVEL 49152',
+    'else',
+    'Sub OBJECTYVEL 12288',
+    'endif',
+    'else',
+    'IfLower 52 OBJECTYVEL 0',
+    'Add OBJECTYVEL 49152',
+    'else',
+    'Add OBJECTYVEL 12288',
+    'endif',
+    'endif',
+    'Add OBJECTXPOS OBJECTXVEL',
+    'Add OBJECTYPOS OBJECTYVEL',
+    'endif',
+    'endif',
+    'End',
+]
+
 def s1_patches():
-    """Sonic 1 (docs/37): its own list. Of Sonic 2's natives only the oscillators and Green Hill's Bridge draw match
-    Sonic 1's scripts word for word; its own natives are added here as they are written (phase 2b)."""
+    """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
+    for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
+    written (phase 2b)."""
     return (('oscillate', patch_oscillate),
             ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
             ('entitylayout', lambda d: patch_entity_layout(d, ENTITY_BOUND_SITES_S1)),
-            ('clearall', lambda d: patch_clear_all(d, CLEARALL_SITES_S1)))
+            ('clearall', lambda d: patch_clear_all(d, CLEARALL_SITES_S1)),
+            ('playerphys', lambda d: patch_player_physics(d, PLAYERFN_SIGS_S1)),
+            ('hud', lambda d: patch_global_function(d, HUD_FN_SIG_S1, 'PS1HUDDraw')),
+            ('tailsai', lambda d: patch_tails_ai(d, TAILSFN_SIGS_S1, PLAYERFN_SIGS_S1[6])),
+            ('ring', lambda d: patch_global_sub(d, 'Ring', 0, RING_SIG_S1, 'PS1Ring')))
 
 
 def main():

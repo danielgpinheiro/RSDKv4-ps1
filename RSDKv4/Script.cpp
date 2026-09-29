@@ -4010,6 +4010,143 @@ static void PS1RingUpdate()
         }
     }
 }
+#if PS1_GAME == 1
+// CallNativeFunction2 op0 op1 op2 (FUNC_CALLNATIVEFUNCTION2's body, operands as locals: nothing reads them back).
+static void PS1CallNative2(int op0, int op1, int op2)
+{
+    if (op0 >= 0 && op0 < NATIIVEFUNCTION_COUNT) {
+        if (StrLength(scriptText)) {
+            void (*func)(int *, char *) = (void (*)(int *, char *))nativeFunction[op0];
+            if (func)
+                func(&op2, scriptText);
+        }
+        else {
+            void (*func)(int *, int *) = (void (*)(int *, int *))nativeFunction[op0];
+            if (func)
+                func(&op1, &op2);
+        }
+    }
+}
+// Sonic 1's Ring update sub (GlobalCode object "Ring", docs/37 phase 2b): Sonic 2's (PS1RingUpdate) without the
+// 2P counters, with Sonic 1's global numbering and its achievements (200 rings; 30 rings in a row while rolling).
+static void PS1RingUpdateS1()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr = scriptEng.checkResult;
+    int *G  = globalVariables;
+    int self = objectEntityPos;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) { // ForEachActive 256, ARRAYPOS6
+        ap[6]    = players.entityRefs[loop];
+        Entity &me = PS1_OBJ(self);
+        cr   = PS1_OBJ(0).state == 26; // CheckEqual OBJECTSTATE[0], 26
+        t[0] = cr;
+        cr   = PS1_OBJ(ap[6]).state == 26;
+        t[0] = cr;
+        cr   = PS1_OBJ(ap[6]).state == 25;
+        t[0] |= cr;
+        if (t[0] == 0) {
+            TouchCollision(&PS1_OBJ(self), -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            if (cr == 1) {
+                me.type = 12;
+                PS1_OBJ(0).values[0]++;
+                if (PS1_OBJ(0).values[0] > 999)
+                    PS1_OBJ(0).values[0] = 999;
+                if (PS1_OBJ(0).values[0] >= G[20]) {
+                    if (G[0] != 2) {
+                        G[23]++;
+                        PlaySfx(24, 0);
+                        PauseSound();
+                        PS1ResetObjectEntity(25, 38, 2, 0, 0);
+                        PS1_OBJ(25).priority = 1;
+                    }
+                    if (debugMode == 0) {
+                        if (PS1_OBJ(0).values[0] >= 200)
+                            PS1CallNative2(G[99], 4, 100);
+                    }
+                    G[20] += 100;
+                    if (G[20] > 300)
+                        G[20] = 1000;
+                }
+                if (me.propertyValue == 1) {
+                    if (debugMode == 0) {
+                        if (G[5] == 0) {
+                            if (ap[6] == 0) {
+                                if (PS1_OBJ(0).animation == G[64]) {
+                                    G[104]++;
+                                    if (G[104] == 30) {
+                                        PS1CallNative2(G[99], 0, 100);
+                                        G[104] = 0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (G[19] == 0) {
+                    PlaySfx(1, 0);
+                    SetSfxAttributes(1, -1, -100);
+                    G[19] = 1;
+                }
+                else {
+                    PlaySfx(2, 0);
+                    SetSfxAttributes(2, -1, 100);
+                    G[19] = 0;
+                }
+            }
+            else {
+                if (PS1_OBJ(self).state == 0) {
+                    if (PS1_OBJ(ap[6]).values[37] == 4) {
+                        TouchCollision(&PS1_OBJ(self), -64, -64, 64, 64, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                        if (cr == 1) {
+                            PS1_OBJ(self).state     = 1;
+                            PS1_OBJ(self).values[1] = ap[6];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Entity &me = PS1_OBJ(self);
+    if (me.state == 1) {
+        ap[0] = me.values[1];
+        if (PS1_OBJ(ap[0]).values[37] != 4) {
+            me.type           = 11;
+            me.animationSpeed = 128;
+            me.alpha          = 256;
+        }
+        else {
+            ap[0] = me.values[1];
+            if (me.xpos > PS1_OBJ(ap[0]).xpos) {
+                if (me.xvel > 0)
+                    me.xvel -= 49152;
+                else
+                    me.xvel -= 12288;
+            }
+            else {
+                if (me.xvel < 0)
+                    me.xvel += 49152;
+                else
+                    me.xvel += 12288;
+            }
+            if (me.ypos > PS1_OBJ(ap[0]).ypos) {
+                if (me.yvel > 0)
+                    me.yvel -= 49152;
+                else
+                    me.yvel -= 12288;
+            }
+            else {
+                if (me.yvel < 0)
+                    me.yvel += 49152;
+                else
+                    me.yvel += 12288;
+            }
+            me.xpos += me.xvel;
+            me.ypos += me.yvel;
+        }
+    }
+}
+#endif
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
 // Sonic 2's Lose Ring update sub (GlobalCode object "Lose Ring": the rings scattered when the player is hit, up to
@@ -4899,7 +5036,15 @@ static void PS1DrawNumbers(int base, int x, int y, int value, int digits, int sp
 
 // Sonic 2's HUD drawing (GlobalCode function 72, called by the HUD's draw sub every frame in every zone; ~25 VM
 // instructions + DrawNumbers), natively: one statement per script instruction, in order. The function's body is
-// patched to `PS1HUDDraw / return` only when it matches HUD_FN_SIG.
+// patched to `PS1HUDDraw / return` only when it matches HUD_FN_SIG. Sonic 1's is the same function with its own
+// globals for the score and the lives (docs/37 phase 2b, HUD_FN_SIG_S1).
+#if PS1_GAME == 1
+#define PS1_G_SCORE 21
+#define PS1_G_LIVES 23
+#else
+#define PS1_G_SCORE 22
+#define PS1_G_LIVES 25
+#endif
 static void PS1HUDDraw()
 {
     int *t     = scriptEng.temp;
@@ -4915,7 +5060,7 @@ static void PS1HUDDraw()
         if (me.values[1] > 7)
             PS1DrawSpriteScreenXY(12, 17, 45);
     }
-    PS1DrawNumbers(0, 104, 13, G[22], 6, 8, 0);
+    PS1DrawNumbers(0, 104, 13, G[PS1_G_SCORE], 6, 8, 0);
     if (G[0] < 2) {
         PS1DrawSpriteScreenXY(14, 67, 29);
     }
@@ -4953,7 +5098,7 @@ static void PS1HUDDraw()
     t[0] += 6;
     PS1DrawSpriteScreenXY(t[0], 33, 213);
     PS1DrawSpriteScreenXY(20, 38, 222);
-    PS1DrawNumbers(24, 56, 220, G[25], 2, 8, 0);
+    PS1DrawNumbers(24, 56, 220, G[PS1_G_LIVES], 2, 8, 0);
 }
 
 // VAR_OBJECTOUTOFBOUNDS's getter (the !RETRO_REV00 branch), for natives.
@@ -6027,6 +6172,20 @@ static int PS1CollisionTop(Entity &e) // VAR_OBJECTCOLLISIONTOP's getter
     int h = animFrames[animationList[animFile->aniListOffset + e.animation].frameListOffset + e.frame].hitboxID;
     return hitboxList[animFile->hitboxListOffset + h].top[0];
 }
+// The player scripts Sonic 1 and Sonic 2 share (docs/37 phase 2b): Sonic 1's GlobalCode has the same physics functions
+// but numbers a few things differently (its animation globals are 3 lower, its player states from 11 on one lower); the
+// natives name those numbers. Player states are GlobalCode function numbers (CallFunction OBJECTSTATE).
+#if PS1_GAME == 1
+#define PS1_ANI_JUMPING   64 // G[] index of the jumping (rolling ball) animation
+#define PS1_ST_AIR        11 // in the air
+#define PS1_ST_ROLL       13 // rolling
+#define PS1_ST_ROLLJUMP   14 // jumped while rolling
+#else
+#define PS1_ANI_JUMPING   67
+#define PS1_ST_AIR        12
+#define PS1_ST_ROLL       14
+#define PS1_ST_ROLLJUMP   15
+#endif
 static void PS1PlayerFn51() // walking animation speed from the ground speed (value 5)
 {
     Entity &me = objectEntityList[objectEntityPos];
@@ -6156,7 +6315,7 @@ static void PS1PlayerFn4() // air movement: gravity, jump release, rotation
             me.rotation = 0;
     }
     me.collisionMode = 0;
-    if (me.animation == G[67])
+    if (me.animation == G[PS1_ANI_JUMPING])
         me.animationSpeed = v[5];
 }
 static void PS1PlayerFn6() // the jump (roof check first)
@@ -6177,7 +6336,7 @@ static void PS1PlayerFn6() // the jump (roof check first)
         me.xpos = t[6];
         me.ypos = t[7];
         t[0]    = PS1CollisionBottom(me);
-        if (me.animation != G[67]) {
+        if (me.animation != G[PS1_ANI_JUMPING]) {
             me.ypos = ((me.ypos >> 16) - v[30]) << 16; // Sub OBJECTIYPOS OBJECTVALUE30 (write-back)
             t[0] += v[30];
         }
@@ -6202,15 +6361,15 @@ static void PS1PlayerFn6() // the jump (roof check first)
         me.yvel >>= 8;
         me.speed          = me.xvel;
         me.scrollTracking = 1;
-        me.animation      = G[67];
+        me.animation      = G[PS1_ANI_JUMPING];
         me.angle          = 0;
         me.collisionMode  = 0;
         v[1]              = 1;
-        PS1PlayerFn51(); // CallFunction 51
-        if (me.state == 14)
-            me.state = 15;
+        PS1PlayerFn51(); // CallFunction 51 (Sonic 1: 52)
+        if (me.state == PS1_ST_ROLL)
+            me.state = PS1_ST_ROLLJUMP;
         else
-            me.state = 12;
+            me.state = PS1_ST_AIR;
         PlaySfx(0, 0);
         v[34] = 1;
         v[35] = 1;
@@ -6719,6 +6878,34 @@ static void PS1PlayerState12() // in the air
     }
 }
 
+// Sonic 2's numbers in the player / Tails scripts both games share -> the running game's (docs/37 phase 2b): Sonic 1's
+// GlobalCode has one global object less before the player states (states 26-29 one lower), one function less before
+// 11-30 and one more before 31-69, and its animation globals are 3 lower. Only the numbers these natives use; each is
+// checked by the Sonic 1 signatures (tools/scripts/patch_bytecode.py TAILSFN*_SIG_S1). Sonic 2: the number itself.
+#if PS1_GAME == 1
+static constexpr int PS1N(int n)
+{
+    switch (n) {
+        case 16: return 15;
+        case 17: return 16;
+        case 19: return 18;
+        case 27: return 26;
+        case 28: return 27;
+        case 29: return 28;
+        case 34: return 35;
+        case 63: return 64;
+        case 65: return 66;
+        case 68: return 69;
+        case 74: return 71; // G[]: an animation global
+        default: return n;
+    }
+}
+#define PS1_TAILS_LOCAL 19146 // function 61's script locals and tables (Sonic 2: 20210)
+#else
+#define PS1N(n) (n)
+#define PS1_TAILS_LOCAL 20210
+#endif
+
 // Tails's CPU (GlobalCode functions 61, 62, 66, 67: every frame for the second player in Sonic & Tails), natively: one
 // statement per script instruction, in order, on the running entity (Tails; player 1 is slot 0). 61 delays player
 // 1's inputs through six 16-bit shift registers (script locals) and records his positions in two 16-entry script
@@ -6746,62 +6933,62 @@ static void PS1TailsFn61()
         PS1ScriptWrite(pos, L(pos) & 65535);
     };
     auto late = [&]() { // the position recorded one frame back
-        t[0] = L(20217);
+        t[0] = L(PS1_TAILS_LOCAL + 7);
         t[0]--;
         if (t[0] < 0)
             t[0] += 16;
-        get(20218, t[0], me.values[46]);
-        get(20235, t[0], me.values[47]);
+        get(PS1_TAILS_LOCAL + 8, t[0], me.values[46]);
+        get(PS1_TAILS_LOCAL + 25, t[0], me.values[47]);
     };
     if (me.controlMode > -1) {
-        shift(20210, p.up);
-        shift(20211, p.down);
-        shift(20212, p.left);
-        shift(20213, p.right);
-        shift(20214, p.jumpPress);
-        shift(20215, p.jumpHold);
-        if (p.state == 34) {
-            for (int pos = 20211; pos <= 20215; ++pos)
+        shift(PS1_TAILS_LOCAL + 0, p.up);
+        shift(PS1_TAILS_LOCAL + 1, p.down);
+        shift(PS1_TAILS_LOCAL + 2, p.left);
+        shift(PS1_TAILS_LOCAL + 3, p.right);
+        shift(PS1_TAILS_LOCAL + 4, p.jumpPress);
+        shift(PS1_TAILS_LOCAL + 5, p.jumpHold);
+        if (p.state == PS1N(34)) {
+            for (int pos = PS1_TAILS_LOCAL + 1; pos <= PS1_TAILS_LOCAL + 5; ++pos)
                 PS1ScriptWrite(pos, L(pos) << 15);
         }
-        t[0] = L(20210);
+        t[0] = L(PS1_TAILS_LOCAL + 0);
         t[0] >>= 15;
         me.up = t[0];
-        t[0]  = L(20211);
+        t[0]  = L(PS1_TAILS_LOCAL + 1);
         t[0] >>= 15;
         me.down = t[0];
-        t[0]    = L(20212);
+        t[0]    = L(PS1_TAILS_LOCAL + 2);
         t[0] >>= 15;
         me.left = t[0];
-        t[0]    = L(20213);
+        t[0]    = L(PS1_TAILS_LOCAL + 3);
         t[0] >>= 15;
         me.right = t[0];
-        t[0]     = L(20214);
+        t[0]     = L(PS1_TAILS_LOCAL + 4);
         t[0] >>= 15;
         me.jumpPress = t[0];
-        t[0]         = L(20215);
+        t[0]         = L(PS1_TAILS_LOCAL + 5);
         t[0] >>= 15;
         me.jumpHold = t[0];
     }
     else {
-        for (int pos = 20210; pos <= 20215; ++pos)
+        for (int pos = PS1_TAILS_LOCAL + 0; pos <= PS1_TAILS_LOCAL + 5; ++pos)
             PS1ScriptWrite(pos, 0);
     }
-    if (p.state != 28) {
+    if (p.state != PS1N(28)) {
         if (p.type != 7) {
-            set(20218, L(20217), p.xpos);
-            set(20235, L(20217), p.ypos);
-            PS1ScriptWrite(20217, L(20217) + 1);
-            PS1ScriptWrite(20217, L(20217) & 15);
-            PS1ScriptWrite(20216, L(20216) + 1);
-            PS1ScriptWrite(20216, L(20216) & 15);
+            set(PS1_TAILS_LOCAL + 8, L(PS1_TAILS_LOCAL + 7), p.xpos);
+            set(PS1_TAILS_LOCAL + 25, L(PS1_TAILS_LOCAL + 7), p.ypos);
+            PS1ScriptWrite(PS1_TAILS_LOCAL + 7, L(PS1_TAILS_LOCAL + 7) + 1);
+            PS1ScriptWrite(PS1_TAILS_LOCAL + 7, L(PS1_TAILS_LOCAL + 7) & 15);
+            PS1ScriptWrite(PS1_TAILS_LOCAL + 6, L(PS1_TAILS_LOCAL + 6) + 1);
+            PS1ScriptWrite(PS1_TAILS_LOCAL + 6, L(PS1_TAILS_LOCAL + 6) & 15);
             cr   = p.gravity == 1;
             t[0] = cr;
             cr   = p.values[42] == 0;
             t[0] &= cr;
             if (t[0] == 0) {
-                get(20218, L(20216), me.values[46]);
-                get(20235, L(20216), me.values[47]);
+                get(PS1_TAILS_LOCAL + 8, L(PS1_TAILS_LOCAL + 6), me.values[46]);
+                get(PS1_TAILS_LOCAL + 25, L(PS1_TAILS_LOCAL + 6), me.values[47]);
             }
             else {
                 me.values[46] = p.xpos;
@@ -6820,7 +7007,7 @@ static void PS1TailsFn62()
 {
     int *t = scriptEng.temp;
     int *G = globalVariables;
-    PS1TailsFn61(); // CallFunction 61
+    PS1TailsFn61(); // CallFunction 61 (Sonic 1: 62)
     Entity &me = objectEntityList[objectEntityPos];
     Entity &p  = PS1_OBJ(0);
     int *v     = me.values;
@@ -6847,7 +7034,7 @@ static void PS1TailsFn62()
             }
         }
     }
-    if (p.state == 34)
+    if (p.state == PS1N(34))
         return;
     t[0] = v[46];
     t[1] = p.gravity;
@@ -6891,10 +7078,10 @@ static void PS1TailsFn62()
             }
         }
     }
-    if (me.animation == G[74]) {
+    if (me.animation == G[PS1N(74)]) {
         v[45]++;
         if (p.direction == me.direction) {
-            if (p.animation == G[74])
+            if (p.animation == G[PS1N(74)])
                 v[45] = 0;
         }
         if (v[45] >= 30) {
@@ -6923,7 +7110,7 @@ static void PS1TailsFn62()
     if (me.controlLock > 0) {
         if (me.speed < 32768) {
             if (me.speed > -32768)
-                v[44] = 63;
+                v[44] = PS1N(63);
         }
     }
 }
@@ -6934,8 +7121,8 @@ static void PS1TailsFn66()
     Entity &me = objectEntityList[objectEntityPos];
     Entity &p  = PS1_OBJ(0);
     int *v     = me.values;
-    auto park  = [&]() { // state 65 (flying back in), motion and interactions off
-        me.state              = 65;
+    auto park  = [&]() { // state 65 (Sonic 1: 66; flying back in), motion and interactions off
+        me.state              = PS1N(65);
         me.xvel               = 0;
         me.yvel               = 0;
         me.speed              = 0;
@@ -6950,7 +7137,7 @@ static void PS1TailsFn66()
         v[43] = 0;
     if (v[43] > 239) {
         v[43]    = 0;
-        me.state = 65;
+        me.state = PS1N(65);
         me.xpos  = p.xpos;
         me.ypos  = yScrollOffset;
         me.ypos -= 128;
@@ -6965,13 +7152,13 @@ static void PS1TailsFn66()
         v[3]                  = 0;
         v[4]                  = 0;
     }
-    cr   = p.state == 28;
+    cr   = p.state == PS1N(28);
     t[0] = cr;
     cr   = p.type == 7;
     t[0] |= cr;
-    cr = me.state != 27;
+    cr = me.state != PS1N(27);
     t[0] &= cr;
-    cr = me.state != 28;
+    cr = me.state != PS1N(28);
     t[0] &= cr;
     if (t[0] == 1) {
         v[43] = 0;
@@ -6982,14 +7169,14 @@ static void PS1TailsFn67()
 {
     int *t  = scriptEng.temp;
     auto E  = []() -> Entity & { return objectEntityList[objectEntityPos]; };
-    if (E().state == 28)
-        E().values[44] = 68;
-    if (E().state == 29)
-        E().values[44] = 68;
+    if (E().state == PS1N(28))
+        E().values[44] = PS1N(68);
+    if (E().state == PS1N(29))
+        E().values[44] = PS1N(68);
     PS1CallScriptFunction(E().values[44], 0); // CallFunction OBJECTVALUE44 (the AI mode)
     Entity &me = E();
     int *v     = me.values;
-    if (me.state != 27) {
+    if (me.state != PS1N(27)) {
         if (v[8] > 0) {
             v[8]--;
             t[0] = (v[8] & (1 << 2)) >> 2;
@@ -7000,7 +7187,7 @@ static void PS1TailsFn67()
         }
     }
     if (v[7] > 0) {
-        if (me.state != 27) {
+        if (me.state != PS1N(27)) {
             if (v[7] > 2000) {
                 v[7] = 120;
                 v[8] = 3;
@@ -7012,15 +7199,15 @@ static void PS1TailsFn67()
             me.visible = 1;
         }
     }
-    if (me.state != 16) {
-        if (me.state != 17) {
+    if (me.state != PS1N(16)) {
+        if (me.state != PS1N(17)) {
             if (me.lookPosY > 0)
                 me.lookPosY -= 2;
             if (me.lookPosY < 0)
                 me.lookPosY += 2;
         }
     }
-    if (me.state != 19) {
+    if (me.state != PS1N(19)) {
         if (v[26] != 0) {
             StopSfx(19);
             StopSfx(20);
@@ -10633,17 +10820,72 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             }
 #else
+            // Sonic 1 (docs/37 phase 2b): the natives it shares with Sonic 2, with its own numbers (PS1_ANI_JUMPING,
+            // PS1_G_SCORE...)
+            case FUNC_PS1HUDDRAW:
+                opcodeSize = 0;
+                PS1HUDDraw();
+                break;
+            case FUNC_PS1RING: // Sonic 1's own Ring update (RING_SIG_S1)
+                opcodeSize = 0;
+                PS1RingUpdateS1();
+                break;
+            case FUNC_PS1TAILSFN61:
+                opcodeSize = 0;
+                PS1TailsFn61();
+                break;
+            case FUNC_PS1TAILSFN62:
+                opcodeSize = 0;
+                PS1TailsFn62();
+                break;
+            case FUNC_PS1TAILSFN66:
+                opcodeSize = 0;
+                PS1TailsFn66();
+                break;
+            case FUNC_PS1TAILSFN67:
+                opcodeSize = 0;
+                PS1TailsFn67();
+                break;
+            case FUNC_PS1PLAYERFN2:
+                opcodeSize = 0;
+                PS1PlayerFn2();
+                break;
+            case FUNC_PS1PLAYERFN3:
+                opcodeSize = 0;
+                PS1PlayerFn3();
+                break;
+            case FUNC_PS1PLAYERFN4:
+                opcodeSize = 0;
+                PS1PlayerFn4();
+                break;
+            case FUNC_PS1PLAYERFN5:
+                opcodeSize = 0;
+                PS1PlayerFn5();
+                break;
+            case FUNC_PS1PLAYERFN6:
+                opcodeSize = 0;
+                PS1PlayerFn6();
+                break;
+            case FUNC_PS1PLAYERFN51:
+                opcodeSize = 0;
+                PS1PlayerFn51();
+                break;
+            case FUNC_PS1PLAYERFN52:
+                opcodeSize = 0;
+                PS1PlayerFn52();
+                break;
+            case FUNC_PS1PLAYERFN53:
+                opcodeSize = 0;
+                PS1PlayerFn53();
+                break;
             // another game's native opcode (tools/scripts/patch_bytecode.py patches each game's own): stop the sub,
             // counted like a bad opcode
-            case FUNC_PS1RING: case FUNC_PS1LOSERING: case FUNC_PS1BUTTONBRIDGE: case FUNC_PS1PLANESWITCHV:
+            case FUNC_PS1LOSERING: case FUNC_PS1BUTTONBRIDGE: case FUNC_PS1PLANESWITCHV:
             case FUNC_PS1PLANESWITCHH: case FUNC_PS1ROTATEPLATFORM: case FUNC_PS1ROTATEPLATFORMDRAW: case FUNC_PS1HPZBRIDGE:
-            case FUNC_PS1HPZBRIDGEDRAW: case FUNC_PS1STAGESETUP: case FUNC_PS1HUDDRAW: case FUNC_PS1TURRETPLATFORM:
+            case FUNC_PS1HPZBRIDGEDRAW: case FUNC_PS1STAGESETUP: case FUNC_PS1TURRETPLATFORM:
             case FUNC_PS1BELTPLATFORM: case FUNC_PS1HFLIPPER: case FUNC_PS1EARTHQUAKE: case FUNC_PS1SPIKES:
-            case FUNC_PS1PLAYERINPUT: case FUNC_PS1CLEDGE: case FUNC_PS1STEAMPISTON: case FUNC_PS1PLAYERFN2:
-            case FUNC_PS1PLAYERFN3: case FUNC_PS1PLAYERFN4: case FUNC_PS1PLAYERFN5: case FUNC_PS1PLAYERFN6:
-            case FUNC_PS1PLAYERFN51: case FUNC_PS1PLAYERFN52: case FUNC_PS1PLAYERFN53: case FUNC_PS1PLAYERSTATE10:
-            case FUNC_PS1PLAYERSTATE12: case FUNC_PS1TAILSFN61: case FUNC_PS1TAILSFN62: case FUNC_PS1TAILSFN66:
-            case FUNC_PS1TAILSFN67: case FUNC_PS1MPZSETUP: case FUNC_PS1MONITOR: case FUNC_PS1INVISIBLEBLOCK:
+            case FUNC_PS1PLAYERINPUT: case FUNC_PS1CLEDGE: case FUNC_PS1STEAMPISTON: case FUNC_PS1PLAYERSTATE10:
+            case FUNC_PS1PLAYERSTATE12: case FUNC_PS1MPZSETUP: case FUNC_PS1MONITOR: case FUNC_PS1INVISIBLEBLOCK:
             case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
             case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
             case FUNC_PS1HORIZONTALDOOR:
