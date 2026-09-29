@@ -21,6 +21,8 @@ INJECT_S0=${INJECT_S0:-}
 # INJECT_AT=frame + INJECT="gdb commands": a second injection at that frame (e.g. onto an object once it has moved).
 # PRE="gdb commands": before the game runs (e.g. 'set var g_ps1FsFastLoad = 0': a .data switch, crt0 keeps it).
 INJECT_AT=${INJECT_AT:-0}; INJECT=${INJECT:-}
+# AT_END="gdb commands": run at frame S3 after the dumps (e.g. print a test build's branch counters).
+AT_END=${AT_END:-}
 if [ "${HOLD_RIGHT:-0}" = 1 ]; then M1=0x08; M2=0x08; fi
 . tools/redux_env.sh
 cat > "$OUT.gdb" <<GDBEOF
@@ -66,6 +68,7 @@ if g_ps1PerfFrames == $S3
   printf "STATE scriptCodePos=%d jumpPos=%d big=%u scriptFrames=%d aniFrames=%d anims=%d | heap total=%u headroom=%u | 3D maxVertex=%d maxFace=%d\n", scriptCodePos, jumpTablePos, g_ps1ScriptBigCount, scriptFrameCount, animFrameCount, animationCount, g_ps1HeapTotal, g_ps1HeapHeadroom, g_ps1Scene3DMaxVertex, g_ps1Scene3DMaxFace
   printf "GUARDS scriptOverflow=%u badPtr=%u divZero=%u badOpcode=%u entityOOR=%u rowsClamped=%u lineScrollClamped=%u textMenuClamped=%u aniOverflow=%u pause=%u copyTile=%u scene3D=%u nested=%u saveRAMClamped=%u\n", g_ps1ScriptOverflow, g_ps1ScriptBadPtr, g_ps1ScriptDivZero, g_ps1ScriptBadOpcode, g_ps1EntityOutOfRange, g_ps1LayerRowsClamped, g_ps1LineScrollClamped, g_ps1TextMenuClamped, g_ps1AnimFrameOverflow, g_ps1PauseRequests, g_ps1Copy16x16Tile, g_ps1Scene3DOverflow, g_ps1ScriptNestedCalls, g_ps1SaveRAMClamped
   printf "OOR last index=%d max=%d from slot=%d type=%d\n", g_ps1EntityOORIndex, g_ps1EntityOORMax, g_ps1EntityOORFrom, g_ps1EntityOORType
+  $AT_END
   dump binary value ${OUT}_guards.bin g_ps1ScriptOverflow
   append binary value ${OUT}_guards.bin g_ps1ScriptBadPtr
   append binary value ${OUT}_guards.bin g_ps1ScriptDivZero

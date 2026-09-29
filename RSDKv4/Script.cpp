@@ -805,6 +805,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SSGemDraw", 0),
     FunctionInfo("PS1SSObjUpdate", 1),
     FunctionInfo("PS1S1ZoneObj", 1),
+    FunctionInfo("PS1S1Spring", 1),
 #endif
 #endif
 };
@@ -1367,6 +1368,7 @@ enum ScrFunc {
     FUNC_PS1SSGEMDRAW,
     FUNC_PS1SSOBJUPDATE,
     FUNC_PS1S1ZONEOBJ,
+    FUNC_PS1S1SPRING,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -8713,6 +8715,189 @@ static void PS1MonitorUpdateS1()
 }
 #endif
 
+#if PS1_GAME == 1
+// Sonic 1's Red Spring / Yellow Spring update subs (GlobalCode, every zone), natively: one statement per script
+// instruction, in order (SPRING_SIGS_S1; the operand says which: 0 red, 1 yellow, whose differences are marked). Per
+// player (group 256, ARRAYPOS6), by the spring's direction (property value 0 up, 1 right, 2 left, 3 down): the solid
+// (or platform) box, then the launch when the spring's face touches the player.
+static void PS1S1Spring(int yellow)
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    int *G     = globalVariables;
+    int self   = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        auto upLaunch = [&]() { // case 0's launch (both of its branches)
+            p.values[10] = G[59];
+            if (p.animation == G[60])
+                p.values[10] = G[60];
+            if (p.animation == G[62])
+                p.values[10] = G[62];
+            me.values[0]     = 1;
+            p.state          = 11;
+            p.tileCollisions = 1;
+            p.gravity        = 1;
+            p.speed          = p.xvel;
+            if (yellow) {
+                p.yvel = -655360;
+                p.yvel += me.values[2];
+            }
+            else
+                p.yvel = -1048576;
+            p.animation = 11;
+            p.values[1] = 0;
+            PlaySfx(11, 0);
+        };
+        switch (me.propertyValue) {
+            case 0: // up
+                t[0] = me.values[1];
+                if (p.gravity == 1)
+                    t[0] = 1;
+                if (p.collisionMode > 0) {
+                    if (p.yvel < 0)
+                        t[0] = 1;
+                }
+                if (t[0] == 0) {
+                    BoxCollision(&PS1_OBJ(self), -14, -8, 14, 8, &PS1_OBJ(ap[6]), C_BOX, C_BOX, C_BOX, C_BOX);
+                    PS1TouchS1(&PS1_OBJ(self), -14, -10, 14, -6, &PS1_OBJ(ap[6]));
+                    if (cr == 1)
+                        upLaunch();
+                }
+                else {
+                    if (p.yvel >= 0) {
+                        PlatformCollision(&PS1_OBJ(self), -14, -8, 14, 8, &PS1_OBJ(ap[6]), C_BOX, C_BOX, C_BOX, C_BOX);
+                        PS1TouchS1(&PS1_OBJ(self), -14, -10, 14, -6, &PS1_OBJ(ap[6]));
+                        if (cr == 1)
+                            upLaunch();
+                    }
+                }
+                break;
+            case 1: // right
+                BoxCollision(&PS1_OBJ(self), -8, -14, 8, 14, &PS1_OBJ(ap[6]), C_BOX, C_BOX, C_BOX, C_BOX);
+                if (p.gravity == 0) {
+                    PS1TouchS1(&PS1_OBJ(self), 6, -14, yellow ? 10 : 11, 14, &PS1_OBJ(ap[6]));
+                    if (cr == 1) {
+                        me.values[0]     = 1;
+                        p.tileCollisions = 1;
+                        if (!yellow)
+                            p.angle = 0;
+                        p.speed         = yellow ? 655360 : 1048576;
+                        p.collisionMode = 0;
+                        p.pushing       = 0;
+                        p.direction     = 0;
+                        p.controlLock   = yellow ? 15 : 12;
+                        PlaySfx(11, 0);
+                        if (p.state != 13) {
+                            p.state     = 10;
+                            p.animation = G[60];
+                        }
+                    }
+                }
+                else {
+                    if (me.values[7] == 1) {
+                        PS1TouchS1(&PS1_OBJ(self), 6, -4, 11, 4, &PS1_OBJ(ap[6]));
+                        if (cr == 1) {
+                            me.values[0]     = 1;
+                            p.tileCollisions = 1;
+                            if (!yellow)
+                                p.angle = 0;
+                            p.speed         = yellow ? 655360 : 1048576;
+                            p.yvel          = 0;
+                            p.collisionMode = 0;
+                            p.pushing       = 0;
+                            p.direction     = 0;
+                            p.controlLock   = yellow ? 15 : 12;
+                            PlaySfx(11, 0);
+                            if (p.state != 14) {
+                                p.animation = 11;
+                                if (p.animation != G[64])
+                                    p.animation = G[60];
+                                me.animationSpeed = me.speed; // the spring's own (as the script)
+                                p.animationSpeed *= 80;
+                                p.animationSpeed /= 393216;
+                            }
+                        }
+                    }
+                }
+                break;
+            case 2: // left
+                BoxCollision(&PS1_OBJ(self), -8, -14, 8, 14, &PS1_OBJ(ap[6]), C_BOX, C_BOX, C_BOX, C_BOX);
+                if (p.gravity == 0) {
+                    PS1TouchS1(&PS1_OBJ(self), -10, -14, -6, 14, &PS1_OBJ(ap[6]));
+                    if (cr == 1) {
+                        me.values[0]     = 1;
+                        p.tileCollisions = 1;
+                        p.speed          = yellow ? -655360 : -1048576;
+                        p.collisionMode  = 0;
+                        p.pushing        = 0;
+                        p.direction      = 1;
+                        p.controlLock    = 15;
+                        PlaySfx(11, 0);
+                        if (p.state != 13) {
+                            p.state     = 10;
+                            p.animation = G[60];
+                        }
+                    }
+                }
+                else {
+                    if (me.values[7] == 1) {
+                        PS1TouchS1(&PS1_OBJ(self), -10, -14, -6, 14, &PS1_OBJ(ap[6]));
+                        if (cr == 1) {
+                            me.values[0]     = 1;
+                            p.tileCollisions = 1;
+                            p.speed          = yellow ? -655360 : -1048576;
+                            p.yvel           = 0;
+                            p.collisionMode  = 0;
+                            p.pushing        = 0;
+                            p.direction      = 1;
+                            p.controlLock    = 15;
+                            PlaySfx(11, 0);
+                            if (p.state != 14) {
+                                p.animation = 11;
+                                if (p.animation != G[64])
+                                    p.animation = G[60];
+                                me.animationSpeed = me.speed;
+                                p.animationSpeed  = -p.animationSpeed;
+                                p.animationSpeed *= 80;
+                                p.animationSpeed /= 393216;
+                            }
+                        }
+                    }
+                }
+                break;
+            case 3: // down
+                BoxCollision(&PS1_OBJ(self), -14, -8, 14, 8, &PS1_OBJ(ap[6]), C_BOX, C_BOX, C_BOX, C_BOX);
+                if (yellow || p.yvel <= 0) { // the yellow one has no IfLowerOrEqual
+                    PS1TouchS1(&PS1_OBJ(self), -14, 6, 14, 10, &PS1_OBJ(ap[6]));
+                    if (cr == 1) {
+                        if (yellow)
+                            me.values[0] = 1;
+                        if (p.collisionMode == 2) {
+                            p.speed = -p.speed;
+                            p.xvel  = -p.xvel;
+                        }
+                        if (!yellow)
+                            me.values[0] = 1;
+                        p.state          = 11;
+                        p.tileCollisions = 1;
+                        p.gravity        = 1;
+                        p.speed          = p.xvel;
+                        p.yvel           = yellow ? 655360 : 1048576;
+                        p.values[1]      = 0;
+                        PlaySfx(11, 0);
+                    }
+                }
+                break;
+            default: break;
+        }
+    }
+}
+#endif
+
 // Sonic 2's Invisible Block (GlobalCode object "Invisible Block"; update 81 VM instructions), natively: one statement
 // per script instruction, in order (the temps keep growing across the player loop, as in the script). Solid (state 0:
 // crushing a player against it long enough runs function 50, the death, in the VM from inside the loop), right wall
@@ -9658,7 +9843,7 @@ static void PS1SpecialRingUpdate()
 static bool PS1S1FastSub(int p)
 {
     int op = PS1_RAW(p);
-    if (op < FUNC_PS1SSROTPOS || op > FUNC_PS1S1ZONEOBJ)
+    if (op < FUNC_PS1SSROTPOS || op > FUNC_PS1S1SPRING)
         return false;
     int n = s_ps1OpSize[op];
     for (int i = 0; i < n; ++i)
@@ -9677,6 +9862,7 @@ static bool PS1S1FastSub(int p)
         case FUNC_PS1SSGEMDRAW: PS1SSGemDraw(); break;
         case FUNC_PS1SSOBJUPDATE: PS1SSObjUpdate(scriptEng.operands[0]); break;
         case FUNC_PS1S1ZONEOBJ: PS1S1ZoneObj(scriptEng.operands[0]); break;
+        case FUNC_PS1S1SPRING: PS1S1Spring(scriptEng.operands[0]); break;
         default: return false; // functions' natives (`op return`): never a sub
     }
     scriptText[0] = '\0'; // End
@@ -12122,6 +12308,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1MONITOR: // Sonic 1's own Monitor update (MONITOR_SIG_S1)
                 opcodeSize = 0;
                 PS1MonitorUpdateS1();
+                break;
+            case FUNC_PS1S1SPRING: // Sonic 1's Red / Yellow Spring update subs (SPRING_SIGS_S1): which one
+                opcodeSize = 0;
+                PS1S1Spring(scriptEng.operands[0]);
                 break;
             case FUNC_PS1TAILSFN61:
                 opcodeSize = 0;
