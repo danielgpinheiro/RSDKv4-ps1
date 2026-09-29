@@ -1968,7 +1968,7 @@ struct PS1AffineEntry {
     PS1AffinePiece pc[4];
 };
 static PS1AffineEntry s_affine[32];
-volatile uint32_t g_ps1AffineHits = 0, g_ps1AffineMisses = 0; // GDB
+volatile uint32_t g_ps1AffineHits = 0, g_ps1AffineMisses = 0, g_ps1AffineCulled = 0; // GDB
 volatile uint8_t g_ps1AffineCache = 1; // initialised data: GDB sets 0 for the uncached A/B (same build)
 
 static void PS1AffinePieceMake(PS1AffinePiece &a, const PS1Piece &p, bool fx, int pivotX, int pivotY, int cs, int sn, bool right)
@@ -2031,11 +2031,27 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         rotation += 0x200;
     if (rotation != 0)
         rotation = 0x200 - rotation;
+    // Wholly off screen: every piece corner is (dx, dy) from (XPos, YPos) with |dx|, |dy| <= R (|cos|, |sin| <= |scale|,
+    // the piece corners inside the frame, the shift's rounding), so when that square is off screen and within the GPU
+    // limits every piece below would be culled without counting anything: skip the key, the cache and the lookups
+    // (Sonic 1 has no on-demand pictures, so no lookup side effect is lost; PS1DrawSprite's cull, above).
+    if (g_ps1LimitFix) {
+        int ax = pivotX < 0 ? -pivotX : pivotX, bx = width - pivotX, ay = pivotY < 0 ? -pivotY : pivotY, by = height - pivotY;
+        bx = bx < 0 ? -bx : bx, by = by < 0 ? -by : by;
+        int R = (((ax > bx ? ax : bx) + (ay > by ? ay : by)) * (scale < 0 ? -scale : scale) >> 9) + 1;
+        if ((XPos + R <= 0 || YPos + R <= 0 || XPos - R >= SCREEN_XSIZE || YPos - R >= SCREEN_YSIZE)
+            && !PS1BeyondGpuLimits(XPos - R, YPos - R, XPos + R, YPos + R)) {
+            g_ps1AffineCulled = g_ps1AffineCulled + 1;
+            return;
+        }
+    }
     const int key[10] = { direction, pivotX, pivotY, sprX, sprY, width, height, rotation, scale, sheetID };
     uint32_t h = 0;
     for (int k = 0; k < 10; ++k) h = h * 31 + (uint32_t)key[k];
     PS1AffineEntry &e = s_affine[(h ^ (h >> 5) ^ (h >> 10)) & 31];
-    if (e.n && g_ps1AffineCache && e.gen == g_ps1SurfaceGen && e.atlas == g_ps1AtlasLoads && !memcmp(e.key, key, sizeof(key))) {
+    bool same = e.n && g_ps1AffineCache && e.gen == g_ps1SurfaceGen && e.atlas == g_ps1AtlasLoads;
+    for (int k = 0; k < 10 && same; ++k) same = e.key[k] == key[k]; // not memcmp: the libc one compares bytes (~450 instructions)
+    if (same) {
         g_ps1AffineHits = g_ps1AffineHits + 1;
         for (int i = 0; i < e.n; ++i) PS1AffinePieceDraw(e.pc[i], XPos, YPos);
         return;
