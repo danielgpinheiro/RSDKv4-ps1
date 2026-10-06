@@ -10,14 +10,14 @@
 
 #include <stddef.h>
 
+/* psyqo allocator (psyqo_malloc / psyqo_free / psyqo_realloc / psyqo_heap_end): its own header, as upstream nugget
+   turned them into inline wrappers of common/libc/alloc.h (docs/32 9d) */
+#include "psyqo/alloc.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* psyqo allocator (declared in psyqo/src/alloc.c) */
-void *psyqo_malloc(size_t size);
-void  psyqo_free(void *ptr);
-void *psyqo_realloc(void *ptr, size_t size);
 
 void *malloc(size_t size);
 void *calloc(size_t nmemb, size_t size);
