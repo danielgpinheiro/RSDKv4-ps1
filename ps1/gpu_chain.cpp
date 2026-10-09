@@ -596,6 +596,29 @@ void PS1ChainSprite(const psyqo::Prim::Sprite &s) {
     s_sbatch->primitives[s_sbatch->count++] = s;
 }
 
+// PS1ChainSprite of an opaque, unmodulated sprite (colour 0x80) from its words (ps1/render.cpp's sprite cache).
+void PS1ChainSpriteWords(uint32_t xy, uint32_t tex, uint32_t wh) {
+    static uint32_t cmd = 0;
+    if (!cmd) {
+        psyqo::Prim::Sprite s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
+        memcpy(&cmd, &s, 4);
+    }
+    if (g_ps1ChainSkipPrims)
+        return;
+    runHook();
+    if (!s_sbatch || s_sbatch->count >= PS1_SPRITE_BATCH) {
+        flushBatch();
+        s_sbatch = allocRaw<SpriteBatch>();
+        if (!s_sbatch)
+            return;
+        new (s_sbatch) SpriteBatch();
+        s_sbatch->count = 0;
+    }
+    static_assert(sizeof(psyqo::Prim::Sprite) == 16, "sprite words");
+    uint32_t *w = reinterpret_cast<uint32_t *>(&s_sbatch->primitives[s_sbatch->count++]);
+    w[0] = cmd, w[1] = xy, w[2] = tex, w[3] = wh;
+}
+
 void PS1ChainRect(const psyqo::Prim::Rectangle &r) {
     if (!g_ps1ChainSkipPrims)
         chainSimple(r);

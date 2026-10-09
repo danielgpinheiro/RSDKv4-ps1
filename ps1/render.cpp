@@ -513,9 +513,21 @@ struct PS1ClusterCacheEntry {
 static PS1ClusterCacheEntry s_clusterCache[64];
 static const PS1AtlasCluster *s_faceCluster = nullptr; // PS1TexturedFace's last cluster (cleared with the cache)
 static uint16_t s_faceTPage = 0, s_faceClut = 0;
+// One-piece sprite frames with their GPU words (PS1DrawSprite's fast path, docs/30 / docs/37 "Mania lessons pass"):
+// keyed on (surface, frame rect), the piece's texture word (u | v << 8 | CLUT << 16) and texture page as
+// PS1ChainPieceSpriteRows builds them. Cleared with the cluster cache (atlas / surface list changes).
+struct PS1SpriteCacheEntry {
+    int16_t sheetID, sprX, sprY, w, h; // sheetID -1: empty
+    uint16_t tpage;
+    uint32_t tex;
+};
+static PS1SpriteCacheEntry s_spriteCache[64];
+volatile uint32_t g_ps1SpriteCacheHits = 0, g_ps1SpriteCacheFills = 0; // GDB
+volatile uint8_t g_ps1SpriteCacheOn     = 1; // GDB: 0 = every sprite through the lookups (the same-build A/B)
 static void PS1ClearClusterCache()
 {
     memset(s_clusterCache, 0xFF, sizeof(s_clusterCache));
+    memset(s_spriteCache, 0xFF, sizeof(s_spriteCache));
     s_faceCluster = nullptr;
 }
 
@@ -695,6 +707,36 @@ static void PS1ChainPieceSprite(const PS1Piece &p, int x, int y)
 // Textured quad: corners A (u0, v0), B (u1, v0), C (u0, v1), D (u1, v1). UVs are texel edges; they
 // may run backwards (mirroring). A UV byte can't hold -1 or 256: those edges are pulled in by one texel
 // (rare: pieces at a page edge), which drops/duplicates at most one texel column or row.
+#if PS1_GAME == 1
+// The quad PS1ChainPieceQuad chains (ink: the current one; plain: opaque, unmodulated), set A's CLUT.
+static psyqo::Prim::TexturedQuad PS1PieceQuad(const PS1Piece &p, const int16_t *xs, const int16_t *ys, int u0, int u1, int v0, int v1,
+                                              bool ink = true)
+{
+    auto clampUV  = [](int t) { return (uint8_t)(t < 0 ? 0 : t > 255 ? 255 : t); };
+    uint8_t mod   = ink ? s_inkMod : 0x80;
+    psyqo::Prim::TexturedQuad q(psyqo::Color{ { .r = mod, .g = mod, .b = mod } });
+    q.pointA    = psyqo::Vertex{ { .x = xs[0], .y = ys[0] } };
+    q.pointB    = psyqo::Vertex{ { .x = xs[1], .y = ys[1] } };
+    q.pointC    = psyqo::Vertex{ { .x = xs[2], .y = ys[2] } };
+    q.pointD    = psyqo::Vertex{ { .x = xs[3], .y = ys[3] } };
+    q.uvA       = psyqo::PrimPieces::UVCoords{ clampUV(u0), clampUV(v0) };
+    q.uvB       = psyqo::PrimPieces::UVCoords{ clampUV(u1), clampUV(v0) };
+    q.uvC       = psyqo::PrimPieces::UVCoordsPadded{ clampUV(u0), clampUV(v1), 0 };
+    q.uvD       = psyqo::PrimPieces::UVCoordsPadded{ clampUV(u1), clampUV(v1), 0 };
+    q.clutIndex = PS1ClusterClut(p.c);
+    q.tpage     = PS1ClusterTPage(p.c);
+    if (ink && s_ink != PS1_INK_OPAQUE) {
+        PS1ApplyInk(q.tpage);
+        q.setSemiTrans();
+    }
+    return q;
+}
+static void PS1ChainPieceQuad(const PS1Piece &p, const int16_t *xs, const int16_t *ys, int u0, int u1, int v0, int v1)
+{
+    psyqo::Prim::TexturedQuad q = PS1PieceQuad(p, xs, ys, u0, u1, v0, v1);
+    if (s_ink != PS1_INK_OPAQUE)
+        g_ps1InkPieces = g_ps1InkPieces + 1;
+#else
 static void PS1ChainPieceQuad(const PS1Piece &p, const int16_t *xs, const int16_t *ys, int u0, int u1, int v0, int v1)
 {
     auto clampUV = [](int t) { return (uint8_t)(t < 0 ? 0 : t > 255 ? 255 : t); };
@@ -714,6 +756,7 @@ static void PS1ChainPieceQuad(const PS1Piece &p, const int16_t *xs, const int16_
         q.setSemiTrans();
         g_ps1InkPieces = g_ps1InkPieces + 1;
     }
+#endif
     g_ps1DrawQuads = g_ps1DrawQuads + 1;
     int y0 = s_splitY;
     if (y0) { // bank split: set B below the line, both halves under a drawing area when the quad crosses it
@@ -2047,7 +2090,42 @@ static void PS1DrawSprite(int XPos, int YPos, int width, int height, int sprX, i
 {
     if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden() || PS1SpriteOffScreen(XPos, YPos, width, height))
         return;
-    PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) { PS1ChainPieceSprite(p, XPos + p.ox, YPos + p.oy); });
+    // the cache: opaque, unmodulated, one CLUT set (no bank split), a frame of one resident piece
+    const bool plain = s_ink == PS1_INK_OPAQUE && s_inkMod == 0x80 && !s_splitY && g_ps1SpriteCacheOn && PS1SurfaceSheet(sheetID) >= 0;
+    PS1SpriteCacheEntry *e = nullptr;
+    if (plain) {
+        uint32_t h = (uint32_t)sheetID * 31 + (uint32_t)sprX * 7 + (uint32_t)sprY * 13 + (uint32_t)width * 3 + (uint32_t)height;
+        e          = &s_spriteCache[(h ^ (h >> 6)) & 63];
+        if (e->sheetID == sheetID && e->sprX == sprX && e->sprY == sprY && e->w == width && e->h == height) {
+            psyqo::PrimPieces::TPageAttr attr;
+            memcpy(&attr, &e->tpage, 2);
+            PS1ChainTPage(attr);
+            PS1ChainSpriteWords((uint32_t)(uint16_t)XPos | (uint32_t)(uint16_t)YPos << 16, e->tex,
+                                (uint32_t)(uint16_t)width | (uint32_t)(uint16_t)height << 16);
+            g_ps1DrawSprites    = g_ps1DrawSprites + 1;
+            g_ps1SpriteCacheHits = g_ps1SpriteCacheHits + 1;
+            return;
+        }
+    }
+    int pieces = 0;
+    const PS1AtlasCluster *one = nullptr;
+    int16_t u = 0, v = 0;
+    uint32_t misses = g_ps1AtlasDrawMiss;
+    PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
+        PS1ChainPieceSprite(p, XPos + p.ox, YPos + p.oy);
+        if (!pieces++ && p.ox == 0 && p.oy == 0 && p.w == width && p.h == height)
+            one = p.c, u = p.u, v = p.v;
+    });
+    if (e && pieces == 1 && one && !one->picture && g_ps1AtlasDrawMiss == misses
+        && (int16_t)width == width && (int16_t)height == height && (int16_t)sprX == sprX && (int16_t)sprY == sprY) {
+        psyqo::PrimPieces::TPageAttr attr = PS1ClusterTPage(one); // PS1ChainPieceSpriteRows' words for this piece
+        psyqo::PrimPieces::TexInfo ti{ (uint8_t)u, (uint8_t)v, PS1ClusterClut(one, false) };
+        static_assert(sizeof(ti) == 4 && sizeof(attr) == 2, "sprite words");
+        memcpy(&e->tpage, &attr, 2);
+        memcpy(&e->tex, &ti, 4);
+        e->sheetID = (int16_t)sheetID, e->sprX = (int16_t)sprX, e->sprY = (int16_t)sprY, e->w = (int16_t)width, e->h = (int16_t)height;
+        g_ps1SpriteCacheFills = g_ps1SpriteCacheFills + 1;
+    }
 }
 
 // The engine's DrawSprite calls are hashed (g_ps1DrawHash, as phase 2's headless renderer did); the renderer's
@@ -2123,6 +2201,7 @@ struct PS1AffinePiece {
     int dx[4], dy[4];
     int xmin, xmax, ymin, ymax;
     int u0, u1, v0, v1;
+    uint32_t qw[9]; // the opaque quad's GPU words (PS1ChainPieceQuad's) with the corner positions left 0
 };
 struct PS1AffineEntry {
     int key[10];
@@ -2158,6 +2237,10 @@ static void PS1AffinePieceMake(PS1AffinePiece &a, const PS1Piece &p, bool fx, in
     }
     else
         --a.u1, --a.v1;
+    static const int16_t zero[4] = { 0, 0, 0, 0 };
+    psyqo::Prim::TexturedQuad q = PS1PieceQuad(p, zero, zero, a.u0, a.u1, a.v0, a.v1, false);
+    static_assert(sizeof(q) == sizeof(a.qw), "quad words");
+    memcpy(a.qw, &q, sizeof(q));
 }
 
 static void PS1AffinePieceDraw(const PS1AffinePiece &a, int XPos, int YPos)
@@ -2177,6 +2260,15 @@ static void PS1AffinePieceDraw(const PS1AffinePiece &a, int XPos, int YPos)
     }
     if (beyond && g_ps1LimitFix) { // zoomed past the GPU limits: cut to the screen
         PS1ChainPieceQuadClipped(a.p, qx, qy, a.u0, a.u1, a.v0, a.v1);
+        return;
+    }
+    if (s_ink == PS1_INK_OPAQUE && s_inkMod == 0x80 && !s_splitY) { // PS1ChainPieceQuad's words, positions filled in
+        if (uint32_t *w = PS1ChainRawBegin(9)) {
+            memcpy(w, a.qw, sizeof(a.qw));
+            for (int k = 0; k < 4; ++k) w[1 + 2 * k] = (uint32_t)(uint16_t)qx[k] | (uint32_t)(uint16_t)qy[k] << 16;
+            PS1ChainRawEnd();
+            g_ps1DrawQuads = g_ps1DrawQuads + 1;
+        }
         return;
     }
     int16_t xs[4] = { (int16_t)qx[0], (int16_t)qx[1], (int16_t)qx[2], (int16_t)qx[3] };

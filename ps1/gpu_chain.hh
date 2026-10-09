@@ -91,6 +91,7 @@ bool PS1ChainCaptureEnd(uint32_t **first, uint32_t **last, uint32_t *countWord);
 uint32_t *PS1ChainOTBegin(int n);
 #endif
 void PS1ChainSprite(const psyqo::Prim::Sprite &s);
+void PS1ChainSpriteWords(uint32_t xy, uint32_t tex, uint32_t wh); // opaque sprite, colour 0x80, from its words
 void PS1ChainQuad(const psyqo::Prim::TexturedQuad &q);         // note: quads carry their own texpage
 void PS1ChainRect(const psyqo::Prim::Rectangle &r);            // untextured; semi-trans uses the current texpage mode
 
