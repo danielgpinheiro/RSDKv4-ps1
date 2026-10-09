@@ -55,8 +55,21 @@ int main(void) {
     dump("int cos512LookupTable[0x200]", cos512, 0x200);
     dump("int sin256LookupTable[0x100]", sin256, 0x100);
     dump("int cos256LookupTable[0x100]", cos256, 0x100);
-    printf("byte arcTan256LookupTable[0x100 * 0x100] = {");
-    for (int i = 0; i < 0x10000; ++i) printf("%s%d", i == 0 ? "\n    " : i % 32 ? "," : ",\n    ", atanT[i]);
+    // The atan table as its triangle x <= y (docs/30 "Mania lessons pass": -32,640 B of RAM in every stage). The other
+    // half follows from truncation: T[x][y] = 63 - T[y][x] for x > y (atan2(y, x) + atan2(x, y) = 64 units, both
+    // truncated), except the y = 0 column (exact angles: 0 and 64). Checked here for every entry; the build stops
+    // otherwise. Index of T[a][b], a <= b: b * (b + 1) / 2 + a (RSDKv4/Math.cpp PS1ArcTan256).
+    for (int x = 0; x < 0x100; ++x)
+        for (int y = 0; y < 0x100; ++y) {
+            int t = x <= y ? atanT[(x << 8) + y] : y == 0 ? 0 : 63 - atanT[(y << 8) + x];
+            if (t != atanT[(x << 8) + y]) {
+                fprintf(stderr, "gen_trig: atan triangle rule fails at %d,%d\n", x, y);
+                return 1;
+            }
+        }
+    printf("const byte arcTan256Triangle[0x100 * 0x101 / 2] = {");
+    for (int b = 0, n = 0; b < 0x100; ++b)
+        for (int a = 0; a <= b; ++a, ++n) printf("%s%d", n == 0 ? "\n    " : n % 32 ? "," : ",\n    ", atanT[(a << 8) + b]);
     printf("\n};\n");
     return 0;
 }
