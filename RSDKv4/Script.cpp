@@ -812,6 +812,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SpecialBGDraw", 0),
     FunctionInfo("PS1RingSparkle", 0),
     FunctionInfo("PS1HPZSetup", 0),
+    FunctionInfo("PS1SpecialPlayer", 0),
 #endif
 };
 
@@ -1377,6 +1378,7 @@ enum ScrFunc {
     FUNC_PS1SPECIALBGDRAW, // Sonic 2, after Sonic 1's
     FUNC_PS1RINGSPARKLE,
     FUNC_PS1HPZSETUP,
+    FUNC_PS1SPECIALPLAYER,
 #endif
     FUNC_MAX_CNT
 };
@@ -10020,6 +10022,49 @@ __attribute__((optimize("Os"))) static void PS1HPZSetupUpdate()
         G[104] = scriptEng.operands[0];
     }
 }
+// The special stage's Player Object update sub (each player, every frame: its control function and state, the pipe
+// lean while it's the active player of a 2-player game, the pipe position, the animation, the faces), natively: one
+// statement per script instruction, in order. The three CallFunctions (value 18, the state, function 8) run in the VM
+// (PS1CallScriptFunction): the first two are variable, so the patcher checks that every function in the stage can run
+// nested (callable_from_native). Patched in only when the sub and its jump-table entries match SPPLAYER_SIG.
+__attribute__((optimize("Os"))) static void PS1SpecialPlayerUpdate()
+{
+    int *t = scriptEng.temp, *G = globalVariables;
+    const int self = objectEntityPos;
+    PS1CallScriptFunction(PS1_OBJ(self).values[18], 0);
+    PS1CallScriptFunction(PS1_OBJ(self).state, 0);
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    if (G[13] == 1) {
+        t[0] = self;
+        t[0] -= 2;
+        t[0] ^= G[108];
+        t[0] ^= scriptCode[7457];
+        if (t[0] == 0) {
+            if (v[2] < 4096)
+                v[2] += 64;
+        }
+        else {
+            if (v[2] > 1024)
+                v[2] -= 64;
+        }
+    }
+    v[14] = v[2];
+    v[14] <<= 8;
+    v[14] += PS1_OBJ(0).values[13];
+    v[14] += 786432;
+    me.animationTimer += me.animationSpeed;
+    if (me.animationTimer >= 240) {
+        me.animationTimer -= 240;
+        me.frame++;
+        me.frame &= 7;
+        me.frame += me.animation;
+        me.frame += v[4];
+    }
+    PS1CallScriptFunction(8, 0);
+    PS1_OBJ(self).values[17]++;
+    PS1_OBJ(self).values[17] %= 28;
+}
 // The Halfpipe's update sub (Special), natively: one statement per script instruction, in order; its segment build
 // (function 0) runs natively too (PS1HalfpipeSegment). Advances the pipe (value1 += speed; a new segment each 64) and
 // interpolates the camera / pipe tables between segments. Patched in only when the sub and its jump-table entries match
@@ -12831,6 +12876,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 PS1HPZSetupUpdate();
                 break;
+            case FUNC_PS1SPECIALPLAYER: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1SpecialPlayerUpdate();
+                break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
                 // one statement per script instruction, in order; patched in only when it matches HDOOR_SIG exactly.
@@ -13012,6 +13061,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
             case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
             case FUNC_PS1HORIZONTALDOOR: case FUNC_PS1SPECIALBGDRAW: case FUNC_PS1RINGSPARKLE: case FUNC_PS1HPZSETUP:
+            case FUNC_PS1SPECIALPLAYER:
                 opcodeSize           = 0;
                 g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
                 running              = false;

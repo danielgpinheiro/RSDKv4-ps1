@@ -37,6 +37,8 @@ natively, leaving the same temps and table / local writes behind.
   -> PS1RingSparkle / End when SPBG_DRAW_SIG / SPARKLE_SIG match, jump-table entries included (docs/30 "Mania lessons
   pass"; their opcodes come after Sonic 1's, so Sonic 1's numbers and patched files stay the same).
 - Hidden Palace's HPZ Setup update sub -> PS1HPZSetup / End when HPZSETUP_SIG matches, jump-table entries included.
+- The special stage's Player Object update sub -> PS1SpecialPlayer / End when SPPLAYER_SIG matches and every function of
+  the stage can run from a native (its two CallFunctions are variable).
 
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected stops the
 build. Already patched files are recognised and left alone.
@@ -5572,6 +5574,48 @@ HPZSETUP_SIG = [
     'JT 153 IfEqual @156 @157',
 ]
 
+# The special stage's Player Object update sub (jump-table lines included): PS1SpecialPlayer.
+SPPLAYER_SIG = [
+    'CallFunction OBJECTVALUE18',
+    'CallFunction OBJECTSTATE',
+    'IfEqual 0 GLOBAL[1,0,13] 1',
+    'Equal TEMP0 OBJECTENTITYPOS',
+    'Sub TEMP0 2',
+    'Xor TEMP0 GLOBAL[1,0,108]',
+    'Xor TEMP0 LOCAL[1,0,7457]',
+    'IfEqual 2 TEMP0 0',
+    'IfLower 4 OBJECTVALUE2 4096',
+    'Add OBJECTVALUE2 64',
+    'endif',
+    'else',
+    'IfGreater 6 OBJECTVALUE2 1024',
+    'Sub OBJECTVALUE2 64',
+    'endif',
+    'endif',
+    'endif',
+    'Equal OBJECTVALUE14 OBJECTVALUE2',
+    'ShL OBJECTVALUE14 8',
+    'Add OBJECTVALUE14 OBJECTVALUE13[1,0,0]',
+    'Add OBJECTVALUE14 786432',
+    'Add OBJECTANIMATIONTIMER OBJECTANIMATIONSPEED',
+    'IfGreaterOrEqual 8 OBJECTANIMATIONTIMER 240',
+    'Sub OBJECTANIMATIONTIMER 240',
+    'Inc OBJECTFRAME',
+    'And OBJECTFRAME 7',
+    'Add OBJECTFRAME OBJECTANIMATION',
+    'Add OBJECTFRAME OBJECTVALUE4',
+    'endif',
+    'CallFunction 8',
+    'Inc OBJECTVALUE17',
+    'Mod OBJECTVALUE17 28',
+    'End',
+    'JT 2 IfEqual @16 @17',
+    'JT 7 IfEqual @12 @16',
+    'JT 8 IfLower @10 @11',
+    'JT 12 IfGreater @14 @15',
+    'JT 22 IfGreaterOrEqual @28 @29',
+]
+
 SPSETUP_UPDATE_SIG = [
     'Inc GLOBAL[1,0,18]',
     'IfEqual 0 GLOBAL[1,0,18] 4',
@@ -5640,6 +5684,21 @@ def patch_stage_function(bcdir, folder, f, sig, op_name):
     open(path, 'wb').write(encode(own) + rest)
     assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
     return '%s native (%s function %d, %d instructions)' % (op_name, folder, f, len(sig))
+
+
+def patch_special_player(bcdir):
+    """The special stage's Player Object update sub -> PS1SpecialPlayer / End (SPPLAYER_SIG). Its CallFunctions of value
+    18 and of the state are variable: every function of the stage file must be callable from a native
+    (callable_from_native), so whichever runs, the nested ProcessScript ends where the script would."""
+    path = os.path.join(bcdir, 'Special.bin')
+    if not os.path.exists(path):
+        return 'no Special.bin'
+    nfns = len(bs.full_code(path)[4])
+    for f in range(nfns):
+        why = callable_from_native(path, [f])
+        if why:
+            raise SystemExit('special player: function %d is not callable from a native (%s)' % (f, why))
+    return patch_stage_sub(bcdir, 'Player Object', 0, SPPLAYER_SIG, 'PS1SpecialPlayer', with_jumps=True)
 
 
 def patch_halfpipe(bcdir):
@@ -7783,7 +7842,8 @@ def main():
                      ('sparkle', lambda d: patch_stage_sub(d, 'Ring Sparkle', 0, SPARKLE_SIG, 'PS1RingSparkle',
                                                            with_jumps=True)),
                      ('hpzsetup', lambda d: patch_stage_sub(d, 'HPZ Setup', 0, HPZSETUP_SIG, 'PS1HPZSetup',
-                                                            with_jumps=True))):
+                                                            with_jumps=True)),
+                     ('spplayer', patch_special_player)):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 
