@@ -814,6 +814,8 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1HPZSetup", 0),
     FunctionInfo("PS1SpecialPlayer", 0),
     FunctionInfo("PS1ARZWater", 0),
+    FunctionInfo("PS1CPZWater", 0),
+    FunctionInfo("PS1HPZWater", 0),
 #endif
 };
 
@@ -1381,6 +1383,8 @@ enum ScrFunc {
     FUNC_PS1HPZSETUP,
     FUNC_PS1SPECIALPLAYER,
     FUNC_PS1ARZWATER,
+    FUNC_PS1CPZWATER,
+    FUNC_PS1HPZWATER,
 #endif
     FUNC_MAX_CNT
 };
@@ -10067,16 +10071,23 @@ __attribute__((optimize("Os"))) static void PS1SpecialPlayerUpdate()
     PS1_OBJ(self).values[17]++;
     PS1_OBJ(self).values[17] %= 28;
 }
-// Aquatic Ruin's Water update sub (every frame: the water level from its motion function, then per player -- ARRAYPOS6
-// up to ARRAYPOS7 -- entering / leaving the water, the drowning countdown with its sounds, music and bubbles, the
-// splash), natively: one statement per script instruction, in order (t = temps, cr = check result, ap = array
-// positions, G = globals; P = the player in ARRAYPOS6, B = the entity ARRAYPOS6 past the water, N = the temp object in
-// ARRAYPOS8). Its CallFunctions run in the VM (PS1CallScriptFunction): 41, 37, 105, 106, 107 and value 3 (the motion
-// function its startup puts in a per-act table: 103 / 104, which the patcher checks; any other value is counted, and
-// called as the VM would). Patched in only when the sub and its jump-table entries match ARZWATER_SIG.
+// The Water object's update sub (every frame: the water level, then per player -- ARRAYPOS6 up to ARRAYPOS7 --
+// entering / leaving the water, the drowning countdown with its sounds, music and bubbles, the splash), natively: one
+// statement per script instruction, in order (t = temps, cr = check result, ap = array positions, G = globals; P = the
+// player in ARRAYPOS6, B = the entity ARRAYPOS6 past the water, N = the temp object in ARRAYPOS8). Three stages' copies,
+// Z: 0 Aquatic Ruin (ARZWATER_SIG), 1 Chemical Plant (CPZWATER_SIG), 2 Hidden Palace (HPZWATER_SIG); each patched in
+// only when its sub and jump-table entries match. They differ in the level's motion (0 / 1: value 3 = the motion
+// function the startup puts in a per-act table, 103 / 104, which the patcher checks; any other value is counted and
+// called as the VM would. 2: a stage local picks a moving level or the stage's water level), the level's sine wobble
+// (1, 2), the splash object, value 18 at a splash (1, 2), the stage locals, the countdown functions and the bubbles.
+// Their CallFunctions run in the VM (PS1CallScriptFunction): 41, 37 and the countdown's three.
 volatile uint32_t g_ps1WaterUnverified = 0; // value 3 named a function the patcher didn't check (GDB; expected 0)
-__attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
+template <int Z> __attribute__((optimize("Os"))) static void PS1WaterUpdate()
 {
+    constexpr int SPLASH = Z == 0 ? 72 : Z == 1 ? 74 : 47; // the splash object's type
+    constexpr int BUBBLE = Z == 2 ? 44 : 42;              // the drowning bubbles' type
+    constexpr int FN     = Z == 2 ? 107 : 105;            // the countdown's functions FN, FN + 1, FN + 2
+    constexpr int LOCAL4 = Z == 1 ? 63680 : 63679;        // the stage local set to 4 after a bubble burst
     int *t = scriptEng.temp, *ap = scriptEng.arrayPosition, *G = globalVariables;
     int &cr        = scriptEng.checkResult;
     const int self = objectEntityPos;
@@ -10088,20 +10099,56 @@ __attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
     t[1] = PS1_OBJ(0).ypos;
     t[1] >>= 16;
     ap[0] = self;
-    {
+    if constexpr (Z != 2) {
         int fn = PS1_OBJ(self).values[3]; // the startup's table: 103 (act 1) / 104 (act 2), both checked by the patcher
         if (fn != 103 && fn != 104)
             g_ps1WaterUnverified = g_ps1WaterUnverified + 1;
         PS1CallScriptFunction(fn, 0);
     }
     Entity &me = PS1_OBJ(self);
-    if (me.ypos < G[48])
-        me.ypos += 65536;
-    if (me.ypos > G[48])
-        me.ypos -= 65536;
-    waterLevel = me.ypos;
-    t[7]       = waterLevel;
-    waterLevel >>= 16;
+    if constexpr (Z == 0) {
+        if (me.ypos < G[48])
+            me.ypos += 65536;
+        if (me.ypos > G[48])
+            me.ypos -= 65536;
+        waterLevel = me.ypos;
+        t[7]       = waterLevel;
+        waterLevel >>= 16;
+    }
+    else if constexpr (Z == 1) {
+        if (me.ypos < G[48])
+            me.ypos += 65536;
+        if (me.ypos > G[48])
+            me.ypos -= 65536;
+        t[0] = G[17];
+        t[0] <<= 1;
+        waterLevel = Sin512(t[0]);
+        waterLevel <<= 10;
+        waterLevel += me.ypos;
+        t[7] = waterLevel;
+        waterLevel >>= 16;
+    }
+    else {
+        if (scriptCode[63680] == 0) {
+            if (me.ypos < G[48])
+                me.ypos += 131072;
+            if (me.ypos > G[48])
+                me.ypos -= 131072;
+            t[0] = G[17];
+            t[0] <<= 1;
+            waterLevel = Sin512(t[0]);
+            waterLevel <<= 10;
+            waterLevel += me.ypos;
+            t[7] = waterLevel;
+            waterLevel >>= 16;
+        }
+        else {
+            me.ypos = waterLevel;
+            me.ypos <<= 16;
+            G[48] = me.ypos;
+            t[7]  = me.ypos;
+        }
+    }
     ap[6] = 0;
     while (ap[6] < ap[7]) {
         if (P.values[25] == 14336) {
@@ -10109,8 +10156,10 @@ __attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
             t[0] = cr;
             cr   = P.state != 28;
             t[0] &= cr;
-            cr = P.state != 1;
-            t[0] &= cr;
+            if constexpr (Z != 2) {
+                cr = P.state != 1;
+                t[0] &= cr;
+            }
             cr = P.ypos > t[7];
             t[0] &= cr;
             if (t[0] == 1) {
@@ -10125,10 +10174,17 @@ __attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
                 P.xvel >>= 1;
                 P.speed >>= 1;
                 PS1CallScriptFunction(41, 0);
+                if constexpr (Z == 1) {
+                    if (ap[6] == 0 && scriptCode[63681] != 1)
+                        PS1ScriptWrite(63681, 1);
+                }
                 if (P.yvel != 0) {
-                    PS1CreateTempObject(72, 0, P.xpos, t[7]);
+                    PS1CreateTempObject(SPLASH, 0, P.xpos, t[7]);
                     N.drawOrder = 4;
-                    PlaySfx(44, 0);
+                    if constexpr (Z != 0)
+                        P.values[18] = 4;
+                    if (Z != 2 || P.state != 1)
+                        PlaySfx(44, 0);
                 }
                 B.values[1] = 52;
                 P.values[3] = 0;
@@ -10164,20 +10220,20 @@ __attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
                     ap[0]        = ap[6];
                     ap[0] += ap[7];
                     PS1CallScriptFunction(37, 0);
-                    if (scriptCode[63679] != 4)
-                        PS1ScriptWrite(63679, 4);
+                    if (scriptCode[LOCAL4] != 4)
+                        PS1ScriptWrite(LOCAL4, 4);
                 }
             }
             if (P.values[37] != 2) {
                 if (P.values[3] == 0) {
                     P.values[4] = 0;
-                    PS1CallScriptFunction(107, 0);
+                    PS1CallScriptFunction(FN + 2, 0);
                 }
                 // the countdown: (sound / music / number) at these frame counts, then drowning, then the bubbles
                 static const short at[10] = { 360, 660, 960, 1080, 1200, 1320, 1440, 1560, 1680, 1800 };
                 int k = P.values[4];
                 if (k >= 0 && k <= 9) {
-                    PS1CallScriptFunction(105, 0);
+                    PS1CallScriptFunction(FN, 0);
                     P.values[3]++;
                     if (P.values[3] == at[k]) {
                         if (k <= 2) {
@@ -10191,7 +10247,7 @@ __attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
                                 PlayMusic(6, 0);
                             }
                             t[0] = k - 3;
-                            PS1CallScriptFunction(106, 0);
+                            PS1CallScriptFunction(FN + 1, 0);
                             P.values[4]++;
                         }
                         else if (P.state != 28) {
@@ -10224,7 +10280,7 @@ __attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
                         else {
                             t[1] = rand() % 2;
                             t[1] += 2;
-                            PS1CreateTempObject(42, t[1], P.xpos, P.ypos);
+                            PS1CreateTempObject(BUBBLE, t[1], P.xpos, P.ypos);
                             N.drawOrder = 5;
                             N.yvel      = -34816;
                             N.ypos -= 393216;
@@ -10243,7 +10299,7 @@ __attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
                         B.values[1] = 6;
                         t[1]        = rand() % 2;
                         t[1] += 2;
-                        PS1CreateTempObject(42, t[1], P.xpos, P.ypos);
+                        PS1CreateTempObject(BUBBLE, t[1], P.xpos, P.ypos);
                         N.drawOrder = 5;
                         N.yvel      = -34816;
                         N.ypos -= 393216;
@@ -10273,13 +10329,16 @@ __attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
                         t[0] = me.ypos;
                         t[0] -= P.ypos;
                         if (t[0] < 15728640) {
-                            PS1CreateTempObject(72, 0, P.xpos, t[7]);
+                            PS1CreateTempObject(SPLASH, 0, P.xpos, t[7]);
                             N.drawOrder = 4;
-                            PlaySfx(44, 0);
+                            if constexpr (Z != 0)
+                                P.values[18] = 4;
+                            if (Z != 2 || P.state != 1)
+                                PlaySfx(44, 0);
                         }
                     }
                     P.values[3] = 0;
-                    PS1CallScriptFunction(107, 0);
+                    PS1CallScriptFunction(FN + 2, 0);
                 }
             }
         }
@@ -13110,7 +13169,15 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             case FUNC_PS1ARZWATER: // a whole sub: End follows
                 opcodeSize = 0;
-                PS1ARZWaterUpdate();
+                PS1WaterUpdate<0>();
+                break;
+            case FUNC_PS1CPZWATER: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1WaterUpdate<1>();
+                break;
+            case FUNC_PS1HPZWATER: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1WaterUpdate<2>();
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
@@ -13293,7 +13360,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
             case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
             case FUNC_PS1HORIZONTALDOOR: case FUNC_PS1SPECIALBGDRAW: case FUNC_PS1RINGSPARKLE: case FUNC_PS1HPZSETUP:
-            case FUNC_PS1SPECIALPLAYER: case FUNC_PS1ARZWATER:
+            case FUNC_PS1SPECIALPLAYER: case FUNC_PS1ARZWATER: case FUNC_PS1CPZWATER: case FUNC_PS1HPZWATER:
                 opcodeSize           = 0;
                 g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
                 running              = false;
