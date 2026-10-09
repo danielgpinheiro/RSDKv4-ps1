@@ -31,6 +31,11 @@ volatile uint32_t g_ps1HeapTotal           = 0; // bytes between bss end and the
 volatile uint32_t g_ps1HeapHeadroom        = 0; // bytes never reached by the heap high-water mark
 volatile uint32_t g_ps1InitDone            = 0; // Engine.Init() returned
 static uint32_t s_ps1PerfLastCount         = 0;
+// Measuring window (tools/perf_scene.sh, docs/30 "Mania lessons pass"): GDB sets From / To (frame numbers as
+// g_ps1PerfFrames counts them; .data, so a run sets them before the game starts); frames in [From, To) are summed.
+volatile uint32_t g_ps1PerfWinFrom = 0xFFFFFFFFu, g_ps1PerfWinTo = 0;
+volatile uint32_t g_ps1PerfWinFrames = 0, g_ps1PerfWinHbl = 0, g_ps1PerfWinMaxHbl = 0; // frames, CPU hblanks sum / worst
+volatile uint32_t g_ps1PerfWinVbl = 0, g_ps1PerfWinMaxVbl = 0, g_ps1PerfWinOver = 0;   // vblanks sum / worst, CPU > 262
 
 psyqo::GPU *g_ps1GPU           = nullptr;
 psyqo::AdvancedPad *g_ps1Pad   = nullptr;
@@ -52,6 +57,19 @@ __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
         uint32_t d               = now - s_ps1PerfLastCount;
         g_ps1PerfVsyncs          = g_ps1PerfVsyncs + d;
         g_ps1PerfLastFrameVsyncs = d;
+        uint32_t f = g_ps1PerfFrames;
+        if (f >= g_ps1PerfWinFrom && f < g_ps1PerfWinTo) {
+            uint32_t h          = g_ps1PerfLastHbl;
+            g_ps1PerfWinFrames  = g_ps1PerfWinFrames + 1;
+            g_ps1PerfWinHbl     = g_ps1PerfWinHbl + h;
+            g_ps1PerfWinVbl     = g_ps1PerfWinVbl + d;
+            if (h > g_ps1PerfWinMaxHbl)
+                g_ps1PerfWinMaxHbl = h;
+            if (d > g_ps1PerfWinMaxVbl)
+                g_ps1PerfWinMaxVbl = d;
+            if (h > 262)
+                g_ps1PerfWinOver = g_ps1PerfWinOver + 1;
+        }
     }
     s_ps1PerfLastCount = now;
     g_ps1PerfFrames    = g_ps1PerfFrames + 1;

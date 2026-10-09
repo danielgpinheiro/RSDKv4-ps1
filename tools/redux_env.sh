@@ -1,23 +1,29 @@
 # The PCSX-Redux instance the test harness drives (sourced by every emulator script, from the repo root).
-# GAME=2 (default, Sonic 2): the shared install (~/.config/pcsx-redux, GDB 3333, web 8080), started only when no
-#   PCSX-Redux runs at all (other sessions use it: never touch theirs).
-# GAME=1 (Sonic 1, docs/37 choice 4): its own instance, portable settings in ../pcsx-redux-s1/pcsx.json, GDB 3336,
-#   web 8086: it runs next to other sessions' emulators without touching them; started only when ours isn't running.
-# REDUX_PORT / REDUX_WEB / REDUX_PORTABLE override the choice. Scripts kill only the PID they started.
-PCSX=${PCSX:-/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux}
+# User 2026-10-09: the 16 MB PCSX-Redux copy (../pcsx-redux-16mb/redux16mb) in STOCK mode only (-2mb, 1 MB VRAM: never
+# -8mb / -16mb / -2mbvram), each game on its own portable instance next to other sessions' emulators:
+#   GAME=2 (Sonic 2): portable settings in ../pcsx-redux-s2perf, GDB 3342, web 8102
+#   GAME=1 (Sonic 1): portable settings in ../pcsx-redux-s1perf, GDB 3343, web 8103
+# (the shared install, GDB 3333, is the Mania session's; the Sonic CD session uses 3338 / 8088.) OpenBIOS, fastboot.
+# REDUX_PORT / REDUX_WEB / REDUX_PORTABLE / PCSX override the choice. Scripts kill only the PID they started.
+PS1_ROOT=$(cd .. && pwd)
+PCSX=${PCSX:-$PS1_ROOT/pcsx-redux-16mb/redux16mb}
 if [ "${GAME:-2}" = 1 ]; then
-    REDUX_PORTABLE=${REDUX_PORTABLE:-$(cd .. && pwd)/pcsx-redux-s1}
-    REDUX_PORT=${REDUX_PORT:-3336}
-    REDUX_WEB=${REDUX_WEB:-8086}
+    REDUX_PORTABLE=${REDUX_PORTABLE:-$PS1_ROOT/pcsx-redux-s1perf}
+    REDUX_PORT=${REDUX_PORT:-3343}
+    REDUX_WEB=${REDUX_WEB:-8103}
 else
-    REDUX_PORT=${REDUX_PORT:-3333}
-    REDUX_WEB=${REDUX_WEB:-8080}
+    REDUX_PORTABLE=${REDUX_PORTABLE:-$PS1_ROOT/pcsx-redux-s2perf}
+    REDUX_PORT=${REDUX_PORT:-3342}
+    REDUX_WEB=${REDUX_WEB:-8102}
 fi
 export REDUX_PORT REDUX_WEB
-REDUX_ARGS="-gdb-port $REDUX_PORT -webserver-port $REDUX_WEB"
+REDUX_ARGS="-2mb -bios $PS1_ROOT/pcsx-redux-16mb/openbios.bin -gdb-port $REDUX_PORT -webserver -webserver-port $REDUX_WEB"
 if [ -n "${REDUX_PORTABLE:-}" ]; then
     mkdir -p "$REDUX_PORTABLE"
     [ -f "$REDUX_PORTABLE/pcsx.json" ] || echo '{}' > "$REDUX_PORTABLE/pcsx.json"
+    # Audio off for every test run (user 2026-10-09): SPU.Mute in the instance's own settings (the game's SPU state is
+    # unchanged: only the host output is muted)
+    /usr/bin/python3 -c "import json,sys;p=sys.argv[1];d=json.load(open(p));d.setdefault('SPU',{})['Mute']=True;json.dump(d,open(p,'w'),indent=4)" "$REDUX_PORTABLE/pcsx.json"
     REDUX_ARGS="$REDUX_ARGS -portable $REDUX_PORTABLE"
     # Freshly formatted cards for every run (docs/37): a run that saves (the menus, a finished act) must not change the
     # next run's game through the card (Sonic 1's scripts read the spin dash option from the save). HARNESS_CARDS=0: the
