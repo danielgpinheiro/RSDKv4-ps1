@@ -811,6 +811,7 @@ const FunctionInfo functions[] = {
     // Sonic 2 natives added after Sonic 1's (docs/30 "Mania lessons pass", 2026-10-09): Sonic 1's numbers stay
     FunctionInfo("PS1SpecialBGDraw", 0),
     FunctionInfo("PS1RingSparkle", 0),
+    FunctionInfo("PS1HPZSetup", 0),
 #endif
 };
 
@@ -1375,6 +1376,7 @@ enum ScrFunc {
     FUNC_PS1S1LZSETUP,
     FUNC_PS1SPECIALBGDRAW, // Sonic 2, after Sonic 1's
     FUNC_PS1RINGSPARKLE,
+    FUNC_PS1HPZSETUP,
 #endif
     FUNC_MAX_CNT
 };
@@ -8903,9 +8905,8 @@ static void PS1S1Spring(int yellow)
 }
 #endif
 
-#if PS1_GAME == 1
-// FUNC_GET16X16TILEINFO's body for Sonic 1's natives: `type` of the 16x16 tile at pixel (x, y) of the FG layer; `old` =
-// the output variable's value, kept for a type the VM doesn't handle.
+// FUNC_GET16X16TILEINFO's body for the natives (both games): `type` of the 16x16 tile at pixel (x, y) of the FG layer;
+// `old` = the output variable's value, kept for a type the VM doesn't handle.
 static int PS1TileInfoS1(int x, int y, int type, int old)
 {
     int cx = x >> 7, cy = y >> 7;
@@ -8925,6 +8926,7 @@ static int PS1TileInfoS1(int x, int y, int type, int old)
         default: return old;
     }
 }
+#if PS1_GAME == 1
 
 // Labyrinth's LZ Setup subs (stage object; LZSETUP_SIGS_S1, the operand says which), one statement per instruction:
 // 0 update: the underwater ripple and the two palette cycles (every 3 frames; the waterfall's from its table), then per
@@ -9877,6 +9879,145 @@ __attribute__((optimize("Os"))) static void PS1RingSparkleUpdate()
             me.type  = 0;
             me.frame = 0;
         }
+    }
+}
+// Hidden Palace's HPZ Setup update sub (every frame: the water level by act / position, the BG deformation and palette
+// cycles, three animated tile groups from their tables, the waterfall palette timer, the players' slide check on angle-B
+// 1 tiles and its sound, the one-off achievement call), natively: one statement per script instruction, in order (t =
+// temps, ap = array positions, G = globals, v = this entity's values; LOCAL writes through PS1ScriptWrite as the VM's
+// write-back, a same-value write-back left out: it changes nothing). The table / local positions are the stage's code
+// positions the signature pins. Patched in only when the sub and its jump-table entries match HPZSETUP_SIG.
+__attribute__((optimize("Os"))) static void PS1HPZSetupUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition, *G = globalVariables;
+    Entity &me = PS1_OBJ(objectEntityPos);
+    int *v     = me.values;
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    if (actID == 1) {
+        if (PS1_OBJ(0).xpos > 243269632)
+            G[48] = 101974016;
+        else
+            G[48] = 122421248;
+    }
+    v[0]++;
+    if (v[0] == 2)
+        stageLayouts[0].deformationOffsetW++;
+    if (v[0] == 4) {
+        stageLayouts[0].deformationOffsetW++;
+        stageLayouts[1].deformationOffsetW++;
+        v[0] = 0;
+    }
+    v[1]++;
+    if (v[1] == 5) {
+        v[1] = 0;
+        RotatePalette(0, 185, 188, 1);
+    }
+    // three animated tile groups: (frame timer, table index, destination tiles per table row)
+    static const short dst[3][10] = { { 738, 739, 744, 745, 750, 751, 752, 759, 760, 761 },
+                                      { 740, 741, 746, 747, 753, 754, 755, 762, 763, 764 },
+                                      { 742, 743, 748, 749, 756, 757, 758, 765, 766, 767 } };
+    for (int g = 0; g < 3; ++g) {
+        int &timer = v[2 + 2 * g], &frame = v[3 + 2 * g];
+        const short *d = dst[g];
+        if (timer < 2) {
+            get(63683, frame, t[0]);
+            Copy16x16Tile(d[0], t[0]);
+            t[0]++;
+            Copy16x16Tile(d[1], t[0]);
+            get(63692, frame, t[0]);
+            Copy16x16Tile(d[2], t[0]);
+            t[0]++;
+            Copy16x16Tile(d[3], t[0]);
+            get(63701, frame, t[0]);
+            Copy16x16Tile(d[4], t[0]);
+            t[0]++;
+            Copy16x16Tile(d[5], t[0]);
+            t[0]++;
+            Copy16x16Tile(d[6], t[0]);
+            get(63710, frame, t[0]);
+            Copy16x16Tile(d[7], t[0]);
+            t[0]++;
+            Copy16x16Tile(d[8], t[0]);
+            t[0]++;
+            Copy16x16Tile(d[9], t[0]);
+            frame++;
+            get(63683, frame, timer);
+            frame++;
+            frame &= 7;
+        }
+        else
+            timer--;
+    }
+    if (scriptCode[63679] > 0)
+        PS1ScriptWrite(63679, scriptCode[63679] - 1);
+    t[0] = v[8];
+    t[0] /= 6;
+    {
+        int x = scriptCode[63681];
+        get(63719, t[0], x);
+        if (x != scriptCode[63681])
+            PS1ScriptWrite(63681, x);
+    }
+    v[8]++;
+    v[8] %= 84;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6] = players.entityRefs[loop];
+        t[1]  = PS1_OBJ(ap[6]).xpos;
+        t[1] >>= 16;
+        t[2] = PS1_OBJ(ap[6]).ypos;
+        t[2] >>= 16;
+        t[2] += PS1CollisionBottom(PS1_OBJ(ap[6]));
+        t[2]--;
+        if (PS1_OBJ(ap[6]).gravity == 0) {
+            t[0] = PS1TileInfoS1(t[1], t[2], TILEINFO_ANGLEB, t[0]);
+            if (t[0] == 1) {
+                PS1_OBJ(ap[6]).state     = 33;
+                PS1_OBJ(ap[6]).direction = 0;
+            }
+        }
+    }
+    if (PS1_OBJ(0).state == 33) {
+        if (v[16] == 0) {
+            if (v[17] == 0) {
+                PlaySfx(50, 0);
+                StopSfx(51);
+                v[17] = 1;
+            }
+            else {
+                StopSfx(50);
+                PlaySfx(51, 0);
+            }
+        }
+        v[16]++;
+        v[16] &= 63;
+    }
+    else {
+        if (v[16] != 0) {
+            v[16]++;
+            v[16] &= 63;
+        }
+        else {
+            v[16] = 0;
+            v[17] = 0;
+        }
+    }
+    if (scriptCode[63682] == 0 && debugMode == 0 && G[3] == 0 && PS1_OBJ(30).type == 8) {
+        PS1ScriptWrite(63682, 1);
+        // CallNativeFunction2 GLOBAL[1,0,104] 7 100, as the VM runs it (then its write-back of operand 0)
+        scriptEng.operands[0] = G[104];
+        scriptEng.operands[1] = 7;
+        scriptEng.operands[2] = 100;
+        scriptText[0]         = '\0';
+        if (scriptEng.operands[0] >= 0 && scriptEng.operands[0] < NATIIVEFUNCTION_COUNT) {
+            void (*func)(int *, int *) = (void (*)(int *, int *))nativeFunction[scriptEng.operands[0]];
+            if (func)
+                func(&scriptEng.operands[1], &scriptEng.operands[2]);
+        }
+        G[104] = scriptEng.operands[0];
     }
 }
 // The Halfpipe's update sub (Special), natively: one statement per script instruction, in order; its segment build
@@ -12686,6 +12827,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 PS1RingSparkleUpdate();
                 break;
+            case FUNC_PS1HPZSETUP: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1HPZSetupUpdate();
+                break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
                 // one statement per script instruction, in order; patched in only when it matches HDOOR_SIG exactly.
@@ -12866,7 +13011,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1PLAYERSTATE12: case FUNC_PS1MPZSETUP: case FUNC_PS1INVISIBLEBLOCK:
             case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
             case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
-            case FUNC_PS1HORIZONTALDOOR: case FUNC_PS1SPECIALBGDRAW: case FUNC_PS1RINGSPARKLE:
+            case FUNC_PS1HORIZONTALDOOR: case FUNC_PS1SPECIALBGDRAW: case FUNC_PS1RINGSPARKLE: case FUNC_PS1HPZSETUP:
                 opcodeSize           = 0;
                 g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
                 running              = false;
