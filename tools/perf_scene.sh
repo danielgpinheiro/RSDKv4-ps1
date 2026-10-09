@@ -4,7 +4,8 @@
 # 420 to 432, then Right to the end -- and the window counters (RSDKv4/main.cpp g_ps1PerfWin*) sum frames [FROM, TO):
 # CPU hblanks a frame (avg / worst; 262 = one NTSC frame), vblanks a frame (avg / worst: 1.00 = 60 fps), frames whose
 # CPU time is over 262. The counters go to OUT_win.bin (6 u32; GDB printf lines get lost) and one line to stdout.
-# Usage: [EMU=redux|ds] [PRE='gdb commands'] tools/perf_scene.sh OUT [FROM=300] [TO=900]
+# Usage: [EMU=redux|ds] [PRE='gdb commands'] [JUMP=0] tools/perf_scene.sh OUT [FROM=300] [TO=900]
+#   JUMP=0: Right only, no jump (Sonic 1's special stage: the jump ends it early; window 300-1500 there).
 #   EMU=redux (default): the stock-mode redux16mb instance of tools/redux_env.sh, EXE given with -exe.
 #   EMU=ds: DuckStation (tools/emu_ds.sh) booted from a snapshot of build/game.cue + rsdkv4.elf in OUT_ds/; only when no
 #   other session runs it (exit 2 otherwise). PRE runs before the game starts: on DuckStation that is before the EXE is
@@ -12,6 +13,7 @@
 cd "$(dirname "$0")/.."
 OUT=$1; FROM=${2:-300}; TO=${3:-900}
 EMU=${EMU:-redux}
+JM=0x18; [ "${JUMP:-1}" = 0 ] && JM=0x08
 ELF=rsdkv4.elf
 if [ "$EMU" = ds ]; then
     . tools/emu_ds.sh
@@ -39,7 +41,7 @@ set var g_ps1PadTestMask = 0x08
 break PS1PerfTick if g_ps1PerfFrames == 420
 continue
 delete
-set var g_ps1PadTestMask = 0x18
+set var g_ps1PadTestMask = $JM
 break PS1PerfTick if g_ps1PerfFrames == 432
 continue
 delete
