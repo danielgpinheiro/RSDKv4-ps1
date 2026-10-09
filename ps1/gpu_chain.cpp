@@ -89,6 +89,38 @@ SpriteBatch *s_sbatch = nullptr; // open sprite batch (not yet chained); at most
 uint16_t s_lastTPage = 0xFFFF;  // raw TPageAttr of the last chained TPage (0xFFFF = unknown)
 bool s_tpageValid    = false;
 
+#if PS1_GAME != 1
+// Capture (PS1ChainCaptureBegin/End, Sonic 2's 3D ordering table): while on, every fragment this file chains goes to a
+// private sub-list instead of psyqo's chain, so one 3D face's primitives (whatever the renderer emits for it) can be
+// linked into its depth bucket as a unit, in their emission order.
+bool s_capOn          = false;
+uintptr_t *s_capFirst = nullptr, *s_capLast = nullptr;
+uint32_t s_capCount   = 0;
+void capLink(uintptr_t *first, uintptr_t *last, size_t count) {
+    if (!s_capFirst)
+        s_capFirst = first;
+    else
+        *s_capLast = s_capCount | (reinterpret_cast<uintptr_t>(first) & 0xffffff);
+    s_capLast  = last;
+    s_capCount = (uint32_t)count << 24;
+}
+template <typename F> inline void chainFrag(F &f) {
+    if (s_capOn)
+        capLink(&f.head, &f.head, f.getActualFragmentSize());
+    else
+        s_gpu->chain(f);
+}
+template <typename F1, typename F2> inline void chainList(F1 *a, F2 *b) {
+    if (s_capOn)
+        capLink(&a->head, &b->head, b->getActualFragmentSize());
+    else
+        s_gpu->chain(a, b);
+}
+#else
+template <typename F> inline void chainFrag(F &f) { s_gpu->chain(f); }
+template <typename F1, typename F2> inline void chainList(F1 *a, F2 *b) { s_gpu->chain(a, b); }
+#endif
+
 VarFragment *allocVar(unsigned n) {
     if (!s_cur || s_cur + 2 + n > s_end) {
         PS1ChainOverflowHook();
@@ -115,12 +147,12 @@ T *allocRaw() {
 void flushBatch() {
     if (s_batch) {
         if (s_batch->count)
-            s_gpu->chain(*s_batch);
+            chainFrag(*s_batch);
         s_batch = nullptr;
     }
     if (s_sbatch) {
         if (s_sbatch->count)
-            s_gpu->chain(*s_sbatch);
+            chainFrag(*s_sbatch);
         s_sbatch = nullptr;
     }
 }
@@ -133,7 +165,7 @@ void chainSimple(const Prim &prim) {
     if (!frag)
         return;
     new (frag) psyqo::Fragments::SimpleFragment<Prim>(prim);
-    s_gpu->chain(*frag);
+    chainFrag(*frag);
 }
 
 } // namespace
@@ -209,7 +241,7 @@ psyqo::Prim::FastFill *PS1ChainClear(uint8_t r, uint8_t g, uint8_t b) {
         return nullptr;
     new (frag) psyqo::Fragments::SimpleFragment<psyqo::Prim::FastFill>();
     s_gpu->getNextClear(frag->primitive, psyqo::Color{{.r = r, .g = g, .b = b}});
-    s_gpu->chain(*frag);
+    chainFrag(*frag);
     return &frag->primitive;
 }
 
@@ -225,7 +257,7 @@ void PS1ChainUploadRow(const uint16_t *data, int count, int16_t x, int16_t y) {
         fr->upload.region = psyqo::Rect{{(int16_t)(x + off), y}, {(int16_t)n, 1}};
         memcpy(fr->data, data + off, n * sizeof(uint16_t));
         fr->words = (unsigned)(sizeof(psyqo::Prim::VRAMUpload) / 4 + n / 2); // n is even
-        s_gpu->chain(*fr);
+        chainFrag(*fr);
     }
 }
 
@@ -241,7 +273,7 @@ int PS1ChainReserveRow(int count, int16_t x, int16_t y, uint16_t **chunkData, ui
         new (&fr->upload) psyqo::Prim::VRAMUpload();
         fr->upload.region = psyqo::Rect{{(int16_t)(x + off), y}, {(int16_t)n, 1}};
         fr->words         = (unsigned)(sizeof(psyqo::Prim::VRAMUpload) / 4 + n / 2); // n is even
-        s_gpu->chain(*fr);
+        chainFrag(*fr);
         chunkData[chunks] = fr->data;
         chunkLen[chunks]  = (uint16_t)n;
         ++chunks;
@@ -358,7 +390,7 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
             w[2] = *tex++;
             w += 3;
         }
-        s_gpu->chain(*f);
+        chainFrag(*f);
         n -= k;
     }
 }
@@ -387,7 +419,7 @@ void PS1ChainSpriteRawN(const uint32_t *words, int n) {
             w += 4;
             words += 3;
         }
-        s_gpu->chain(*f);
+        chainFrag(*f);
         n -= k;
     }
 }
@@ -404,7 +436,7 @@ uint32_t *PS1ChainRawBegin(int words) {
 
 void PS1ChainRawEnd() {
     if (s_rawFrag)
-        s_gpu->chain(*s_rawFrag);
+        chainFrag(*s_rawFrag);
     s_rawFrag    = nullptr;
     s_tpageValid = false;
 }
@@ -441,7 +473,7 @@ void PS1ChainBulkEnd(int used) {
     uint32_t *h = s_bulk;
     for (int k = 0; k < used - 1; ++k, h += stride) // DMA linked-list headers: size << 24 | next packet address
         *h = size | (reinterpret_cast<uintptr_t>(h + stride) & 0xffffff);
-    s_gpu->chain(reinterpret_cast<BulkFrag *>(s_bulk), reinterpret_cast<BulkFrag *>(h));
+    chainList(reinterpret_cast<BulkFrag *>(s_bulk), reinterpret_cast<BulkFrag *>(h));
     s_cur        = s_bulk + used * stride;
     s_bulk       = nullptr;
     s_tpageValid = false;
@@ -459,7 +491,7 @@ void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n) {
         if (!f)
             return;
         memcpy(f->data, words, wpp * k * 4);
-        s_gpu->chain(*f);
+        chainFrag(*f);
         words += wpp * k;
         n -= k;
     }
@@ -511,7 +543,7 @@ int PS1ChainReplay(uint32_t *from, uint32_t *to) {
             if (!f)
                 break;
             memcpy(f->data, p + 1, n * 4);
-            s_gpu->chain(*f);
+            chainFrag(*f);
             words += n + 1;
         }
         p = next;
@@ -581,7 +613,7 @@ int PS1ChainReplayLines(uint32_t *from, uint32_t *to, int y0, int y1) {
             if (!f)
                 break;
             memcpy(f->data, p + 1, n * 4);
-            s_gpu->chain(*f);
+            chainFrag(*f);
             words += n + 1;
             g_ps1ReplayKept = g_ps1ReplayKept + 1;
         }
@@ -637,3 +669,56 @@ void PS1ChainMaskControl(bool forceSet, bool test) {
 
 void PS1ChainSetHook(void (*fn)()) { s_hook = fn; }
 void PS1ChainRunHook() { runHook(); }
+
+#if PS1_GAME != 1
+// Sonic 2's 3D ordering table (RSDKv4/Scene3D.cpp PS1Draw3DSceneOT, docs/30 "Mania lessons pass"; Driver 2's model,
+// docs/38 2.3): see gpu_chain.hh.
+namespace {
+struct OTTag {
+    uintptr_t head;
+    size_t getActualFragmentSize() const { return 0; }
+};
+} // namespace
+
+void PS1ChainCaptureBegin() {
+    runHook();
+    flushBatch();
+    s_capOn      = true;
+    s_capFirst   = s_capLast = nullptr;
+    s_capCount   = 0;
+    s_tpageValid = false;
+}
+
+bool PS1ChainCaptureEnd(uint32_t **first, uint32_t **last, uint32_t *countWord) {
+    flushBatch();
+    s_capOn      = false;
+    s_tpageValid = false;
+    *first       = reinterpret_cast<uint32_t *>(s_capFirst);
+    *last        = reinterpret_cast<uint32_t *>(s_capLast);
+    *countWord   = s_capCount;
+    return s_capFirst != nullptr;
+}
+
+uint32_t *PS1ChainOTBegin(int n) {
+    runHook();
+    flushBatch();
+    if (!s_cur || n <= 0 || s_cur + n > s_end) {
+        PS1ChainOverflowHook();
+        return nullptr;
+    }
+    uint32_t *ot = s_cur;
+    s_cur += n;
+    uint32_t a = (reinterpret_cast<uintptr_t>(ot) + 4) & 0xffffff, *p = ot, *e = ot + n - 1; // empty tags in order
+    for (; p + 4 <= e; p += 4, a += 16) p[0] = a, p[1] = a + 4, p[2] = a + 8, p[3] = a + 12;
+    for (; p < e; ++p, a += 4) *p = a;
+    s_gpu->chain(reinterpret_cast<OTTag *>(ot), reinterpret_cast<OTTag *>(ot + n - 1));
+    s_tpageValid = false;
+    return ot;
+}
+
+void PS1ChainBulkKeep(int used) {
+    if (s_bulk && used > 0)
+        s_cur = s_bulk + used * ((uint32_t)s_bulkWpp + 1);
+    s_bulk = nullptr;
+}
+#endif

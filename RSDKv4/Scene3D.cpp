@@ -489,8 +489,11 @@ void PS1TransformProject3D(int count)
     const uint32_t lim = 1u << 20;
     uint32_t cpu       = 0;
     int v              = 0;
+    // the arrays' pointers in locals: the stores below could alias the globals, so GCC reloaded both every triple
+    const Vertex *const vb = vertexBuffer;
+    PS1ProjEntry *const pj = g_ps1Proj;
     for (; v + 3 <= count; v += 3) {
-        const Vertex *p = &vertexBuffer[v];
+        const Vertex *p = &vb[v];
         int dx0 = p[0].x - ox, dy0 = p[0].y - oy, dz0 = p[0].z - oz, dx1 = p[1].x - ox, dy1 = p[1].y - oy, dz1 = p[1].z - oz;
         int dx2 = p[2].x - ox, dy2 = p[2].y - oy, dz2 = p[2].z - oz;
         uint32_t o = (uint32_t)(dx0 + lim) | (uint32_t)(dy0 + lim) | (uint32_t)(dz0 + lim) | (uint32_t)(dx1 + lim)
@@ -533,7 +536,7 @@ void PS1TransformProject3D(int count)
             }
             continue;
         }
-        PS1ProjEntry *t = &g_ps1Proj[v];
+        PS1ProjEntry *t = &pj[v];
         t[0].u    = readRaw<Register::SXY0, Safe>();
         t[1].u    = readRaw<Register::SXY1, Safe>();
         t[2].u    = readRaw<Register::SXY2, Safe>();
@@ -882,13 +885,209 @@ static inline void PS1ProjectedVertex(int i, int *x, int *y)
 int PS1FadedFaces(int i, int count); // above: a run of faded faces, returns where it stopped
 void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended); // ps1/render.cpp
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+static uint32_t s_ps1FadedHbl = 0, s_ps1GeneralN = 0; // this Draw3DScene: faded runs' hblanks, general-path faces
+static void PS1Draw3DList(int spriteSheetID, int count);
 void Draw3DScene(int spriteSheetID)
 {
-#if RETRO_PLATFORM == RETRO_PS1
     uint32_t t0        = PS1Hblanks();
     g_ps1Prof3DProject = 0; // the projection is part of the transform now (PS1TransformProject3D)
-    uint32_t fadedHbl = 0, generalN = 0;
+    s_ps1FadedHbl = s_ps1GeneralN = 0;
     for (int k = 0; k < 8; ++k) g_ps1Prof3DGenTicks[k] = g_ps1Prof3DGenCount[k] = 0;
+    PS1Draw3DList(spriteSheetID, faceCount);
+    g_ps1Prof3DDraw     = PS1HblanksSince(t0);
+    g_ps1Prof3DFaded    = s_ps1FadedHbl;
+    g_ps1Prof3DGeneral  = g_ps1Prof3DDraw - s_ps1FadedHbl;
+    g_ps1Prof3DGeneralN = s_ps1GeneralN;
+}
+// Draw3DScene's loop over the first `count` entries of g_ps1DrawOrder (PS1Draw3DSceneOT runs it on one entry at a time)
+static void PS1Draw3DList(int spriteSheetID, int count)
+#if PS1_GAME != 1
+    ;
+// Sort3DDrawList + Draw3DScene as an ordering table (docs/30 "Mania lessons pass", 2026-10-09; Driver 2's model, docs/38
+// 2.3, as Mania's UFO stages, docs/32 9f): one pass over the faces in list order computes each face's depth (the sort's
+// formula) and its primitives -- the faded fast path writes its flat quad into the arena unlinked, any other face is
+// drawn by Draw3DScene's own code on a one-entry draw order while the chain captures what it emits -- and a second pass
+// links every face, from the last to the first, as the new head of bucket (hi - depth) >> shift: the coarse sort's key,
+// with its shift from the same depth range. The GPU walks the buckets from 0 (the farthest) and each bucket in list
+// order: the order PS1SortDrawList3DCoarse gives, without its counting, prefix and scatter passes or the draw order's
+// indirection. g_ps1Draw3DOT = 0 (GDB) draws through the sort again (the same-build A/B: identical pictures).
+volatile uint32_t g_ps1Draw3DOT      = 1;
+volatile uint32_t g_ps1OTBuckets     = 0; // last frame: buckets in the table
+volatile uint32_t g_ps1OTCaptured    = 0; // last frame: faces drawn by the general path (captured sub-lists)
+volatile uint32_t g_ps1OTFailed      = 0; // frames whose table didn't fit the arena (total; primitives dropped)
+struct PS1OTRec {
+    int depth;
+    uint32_t *first; // the face's first node (bit 0: a captured sub-list, its last node in g_ps1Scene3DScratch), or null
+};
+static_assert(sizeof(PS1OTRec) == sizeof(DrawListEntry3D), "PS1OTRec reuses drawList3D");
+void PS1Draw3DSceneOT(int spriteSheetID)
+{
+    uint32_t t0        = PS1Hblanks();
+    g_ps1Prof3DProject = 0;
+    s_ps1FadedHbl = s_ps1GeneralN = 0;
+    for (int k = 0; k < 8; ++k) g_ps1Prof3DGenTicks[k] = g_ps1Prof3DGenCount[k] = 0;
+    const int count = faceCount;
+    PS1OTRec *rec   = reinterpret_cast<PS1OTRec *>(drawList3D);
+    DrawListEntry3D *subLast = g_ps1Scene3DScratch; // a captured face: .faceID = its last node, .depth = that node's size word
+    const bool draw = PS1Draw3DOpen();
+    uint32_t *run   = nullptr;
+    int cap = 0, used = 0;
+    uint32_t cacheColor = 0, cacheCmd = 0;
+    int cacheAlpha = -1;
+    uint32_t fast = 0, culled = 0, drawn = 0, captured = 0;
+    const uint32_t fog = fogColor, fogRB = ((fog >> 19) & 0x1F) | ((fog >> 3) & 0x1F) << 16, fogG = (fog >> 11) & 0x1F;
+    const int fogMax = fogStrength, xMax = SCREEN_XSIZE, yMax = SCREEN_YSIZE;
+    int lo = 0, hi = 0;
+    const Face *const fb        = faceBuffer; // locals: the record / chain stores could alias the globals
+    const PS1ProjEntry *const pj = g_ps1Proj;
+    for (int i = 0; i < count; ++i) {
+        const Face &f = fb[i];
+        const PS1ProjEntry &A = pj[f.a], &B = pj[f.b], &C = pj[f.c], &D = pj[f.d];
+        const int depth = (D.v + C.v + B.v + A.v) >> 2; // Sort3DDrawList's
+        if (!i)
+            lo = hi = depth;
+        lo            = depth < lo ? depth : lo;
+        hi            = depth > hi ? depth : hi;
+        rec[i].depth  = depth;
+        rec[i].first  = nullptr;
+        if (f.flag == FACE_FLAG_FADED) {
+            uint32_t pa = A.u, pb = B.u, pc = C.u, pd = D.u;
+            if (!(((pa + 1024) | (pb + 1024) | (pc + 1024) | (pd + 1024)) & 0xF800)) { // PS1FadedFaces' fast path, per face
+                ++fast;
+                int fogStr = (depth - 0x8000) >> 8;
+                if (fogStr < 0)
+                    fogStr = 0;
+                if (fogStr > fogMax)
+                    fogStr = fogMax;
+                int alpha = 0xFF - fogStr;
+                if (!draw || alpha < 1)
+                    continue;
+                if (alpha > 0xFF)
+                    alpha = 0xFF;
+                int x0 = (int16_t)(pa & 0xFFFF), x1 = (int16_t)(pb & 0xFFFF), x2 = (int16_t)(pc & 0xFFFF), x3 = (int16_t)(pd & 0xFFFF);
+                int y0 = (int16_t)(pa >> 16), y1 = (int16_t)(pb >> 16), y2 = (int16_t)(pc >> 16), y3 = (int16_t)(pd >> 16);
+                if ((x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) || (x0 > xMax && x1 > xMax && x2 > xMax && x3 > xMax)
+                    || (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) || (y0 > yMax && y1 > yMax && y2 > yMax && y3 > yMax)
+                    || (x0 == x1 && x1 == x2 && x2 == x3) || (y0 == y1 && y1 == y2 && y2 == y3)) {
+                    ++culled;
+                    continue;
+                }
+                uint32_t w1 = pb, w2 = pa, w3 = pc, w4 = pd; // strip order: as PS1FadedFaces
+                int s1 = PS1Side(pa, pc, pb), s3 = PS1Side2(pd);
+                if (!((s1 < 0 && s3 > 0) || (s1 > 0 && s3 < 0))) {
+                    int t0s = PS1Side(pb, pc, pa), t3 = PS1Side2(pd);
+                    w1 = pa, w2 = pb, w3 = pc, w4 = pd;
+                    if (!((t0s < 0 && t3 > 0) || (t0s > 0 && t3 < 0))) {
+                        int u1 = PS1Side(pa, pd, pb), u2 = PS1Side2(pc);
+                        if ((u1 < 0 && u2 > 0) || (u1 > 0 && u2 < 0))
+                            w1 = pb, w2 = pa, w3 = pd, w4 = pc;
+                    }
+                }
+                if (f.color != cacheColor || alpha != cacheAlpha) {
+                    uint32_t c = f.color, ia = 0xFF - alpha, a = alpha;
+                    uint32_t cRB = ((c >> 19) & 0x1F) | ((c >> 3) & 0x1F) << 16, cG = (c >> 11) & 0x1F;
+                    uint32_t rb = ((fogRB * ia) >> 8 & 0x001F001Fu) + ((cRB * a) >> 8 & 0x001F001Fu);
+                    uint32_t g  = (fogG * ia >> 8) + (cG * a >> 8);
+                    cacheColor = f.color, cacheAlpha = alpha;
+                    cacheCmd   = 0x28000000u | rb << 3 | g << 11;
+                }
+                if (used == cap) {
+                    if (run) {
+                        PS1ChainBulkKeep(used);
+                        PS1FadeRecordRun(run, used, 6);
+                    }
+                    run = PS1ChainBulkBegin(128, 5);
+                    cap = run ? 128 : 0, used = 0;
+                    if (!run)
+                        continue;
+                }
+                uint32_t *w  = run + used * 6;
+                w[0]         = cacheCmd;
+                w[1]         = w1;
+                w[2]         = w2;
+                w[3]         = w3;
+                w[4]         = w4;
+                rec[i].first = w - 1; // its DMA header, written by the second pass
+                ++used;
+                ++drawn;
+                continue;
+            }
+        }
+        // any other face: Draw3DScene's general path on a one-entry draw order, captured (after closing the open run:
+        // what the capture allocates goes after it in the arena)
+        if (run) {
+            PS1ChainBulkKeep(used);
+            PS1FadeRecordRun(run, used, 6);
+            run = nullptr, cap = used = 0;
+        }
+        DrawListEntry3D one;
+        one.faceID     = i;
+        one.depth      = depth;
+        g_ps1DrawOrder = &one;
+        PS1ChainCaptureBegin();
+        PS1Draw3DList(spriteSheetID, 1);
+        uint32_t *first, *last, size;
+        if (PS1ChainCaptureEnd(&first, &last, &size)) {
+            rec[i].first       = reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(first) | 1);
+            subLast[i].faceID  = (int)reinterpret_cast<uintptr_t>(last);
+            subLast[i].depth   = (int)size;
+            ++captured;
+        }
+    }
+    if (run) {
+        PS1ChainBulkKeep(used);
+        PS1FadeRecordRun(run, used, 6);
+    }
+    g_ps1DrawOrder = drawList3D;
+    uint32_t t1    = PS1Hblanks();
+    if (count) {
+        unsigned range = (unsigned)hi - (unsigned)lo;
+        int shift      = 0;
+        while ((range >> shift) >= 1024) ++shift;
+        const int buckets = (int)(range >> shift) + 1;
+        uint32_t *ot      = PS1ChainOTBegin(buckets);
+        g_ps1OTBuckets    = buckets;
+        if (!ot)
+            g_ps1OTFailed = g_ps1OTFailed + 1;
+        else
+            for (int i = count - 1; i >= 0; --i) {
+                uint32_t *p = rec[i].first;
+                if (!p)
+                    continue;
+                uint32_t *slot = &ot[((unsigned)hi - (unsigned)rec[i].depth) >> shift];
+                uint32_t link  = *slot; // an empty tag's size is 0: the word is the next node's address
+                if (reinterpret_cast<uintptr_t>(p) & 1) {
+                    p = reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(p) & ~(uintptr_t)1);
+                    *reinterpret_cast<uint32_t *>(subLast[i].faceID) = (uint32_t)subLast[i].depth | link;
+                }
+                else
+                    *p = (5u << 24) | link; // a faded quad: 5 words
+                *slot = reinterpret_cast<uintptr_t>(p) & 0xffffff;
+            }
+    }
+    g_ps1Faces          = g_ps1Faces + drawn;
+    g_ps1FadedFast      = g_ps1FadedFast + fast;
+    g_ps1FadedCulled    = g_ps1FadedCulled + culled;
+    g_ps1OTCaptured     = captured;
+    g_ps1Prof3DSort     = PS1HblanksSince(t1); // the second pass (linking)
+    g_ps1Prof3DFaces    = count;
+    g_ps1Prof3DDraw     = PS1HblanksSince(t0);
+    g_ps1Prof3DFaded    = s_ps1FadedHbl;
+    g_ps1Prof3DGeneral  = g_ps1Prof3DDraw - s_ps1FadedHbl;
+    g_ps1Prof3DGeneralN = s_ps1GeneralN;
+}
+static void PS1Draw3DList(int spriteSheetID, int count)
+#endif
+#else
+void Draw3DScene(int spriteSheetID)
+#endif
+{
+#if RETRO_PLATFORM == RETRO_PS1
+// upstream's T.z > 0 without the exact transform (docs/30 "Mania lessons pass"): g_ps1Proj[v].v is the exact z for a
+// vertex left to the CPU (PS1CpuVertexT), and SZ * 32 >= 8192 for one the GTE projected, whose exact z is within ~840 of
+// it (units of 32, a 4.12 matrix of entries < 8: the truncations' worst case) and so > 0 as well: the same decision.
+#define PS1_ZPOS(idx) (g_ps1Proj[idx].v > 0)
 #define PS1_PROJECT_QUAD()                                                                                                                  \
     PS1ProjectedVertex(face->a, &quad[0].x, &quad[0].y);                                                                                  \
     PS1ProjectedVertex(face->b, &quad[1].x, &quad[1].y);                                                                                  \
@@ -896,7 +1095,11 @@ void Draw3DScene(int spriteSheetID)
     PS1ProjectedVertex(face->d, &quad[3].x, &quad[3].y);
 #endif
     Vertex quad[4];
+#if RETRO_PLATFORM == RETRO_PS1
+    for (int i = 0; i < count; ++i) {
+#else
     for (int i = 0; i < faceCount; ++i) {
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
         Face *face = &faceBuffer[g_ps1DrawOrder[i].faceID];
 #else
@@ -905,15 +1108,15 @@ void Draw3DScene(int spriteSheetID)
 #if RETRO_PLATFORM == RETRO_PS1
         if (face->flag == FACE_FLAG_FADED) { // the fast path: the run of faded faces whose corners the GTE projected
             uint32_t tf = PS1Hblanks();
-            int next    = PS1FadedFaces(i, faceCount);
-            fadedHbl += PS1HblanksSince(tf);
+            int next    = PS1FadedFaces(i, count);
+            s_ps1FadedHbl += PS1HblanksSince(tf);
             if (next != i) {
                 i = next - 1;
                 continue;
             }
         }
         // the general path: upstream's code; its vertexBufferT reads get the exact transform (PS1ExactT)
-        ++generalN;
+        ++s_ps1GeneralN;
 #if PS1_PROFILE
         uint32_t gt0 = PS1ProfTicks();
         int gflag    = face->flag & 7;
@@ -924,7 +1127,11 @@ void Draw3DScene(int spriteSheetID)
         switch (face->flag) {
             default: break;
             case FACE_FLAG_TEXTURED_3D:
+#if RETRO_PLATFORM == RETRO_PS1
+                if (PS1_ZPOS(face->a) && PS1_ZPOS(face->b) && PS1_ZPOS(face->c) && PS1_ZPOS(face->d)) {
+#else
                 if (vertexBufferT[face->a].z > 0 && vertexBufferT[face->b].z > 0 && vertexBufferT[face->c].z > 0 && vertexBufferT[face->d].z > 0) {
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
                     PS1_PROJECT_QUAD()
 #else
@@ -971,7 +1178,11 @@ void Draw3DScene(int spriteSheetID)
                 }
                 break;
             case FACE_FLAG_COLORED_3D:
+#if RETRO_PLATFORM == RETRO_PS1
+                if (PS1_ZPOS(face->a) && PS1_ZPOS(face->b) && PS1_ZPOS(face->c) && PS1_ZPOS(face->d)) {
+#else
                 if (vertexBufferT[face->a].z > 0 && vertexBufferT[face->b].z > 0 && vertexBufferT[face->c].z > 0 && vertexBufferT[face->d].z > 0) {
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
                     PS1_PROJECT_QUAD()
 #else
@@ -1002,7 +1213,11 @@ void Draw3DScene(int spriteSheetID)
                 }
                 break;
             case FACE_FLAG_FADED:
+#if RETRO_PLATFORM == RETRO_PS1
+                if (PS1_ZPOS(face->a) && PS1_ZPOS(face->b) && PS1_ZPOS(face->c) && PS1_ZPOS(face->d)) {
+#else
                 if (vertexBufferT[face->a].z > 0 && vertexBufferT[face->b].z > 0 && vertexBufferT[face->c].z > 0 && vertexBufferT[face->d].z > 0) {
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
                     PS1_PROJECT_QUAD()
 #else
@@ -1137,10 +1352,7 @@ void Draw3DScene(int spriteSheetID)
     }
 #if RETRO_PLATFORM == RETRO_PS1
 #undef PS1_PROJECT_QUAD
-    g_ps1Prof3DDraw     = PS1HblanksSince(t0);
-    g_ps1Prof3DFaded    = fadedHbl;
-    g_ps1Prof3DGeneral  = g_ps1Prof3DDraw - fadedHbl;
-    g_ps1Prof3DGeneralN = generalN;
+#undef PS1_ZPOS
 #endif
 }
 

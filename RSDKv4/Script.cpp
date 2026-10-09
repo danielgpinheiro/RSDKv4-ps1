@@ -11876,9 +11876,20 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 uint32_t t0 = PS1Hblanks();
                 TransformVertexBuffer();
                 uint32_t t1 = PS1Hblanks();
+#if PS1_GAME != 1
+                uint32_t t2 = t1;
+                if (g_ps1Draw3DOT && !g_ps1Sort3DExact) // the sort folded into an ordering table (Scene3D.cpp)
+                    PS1Draw3DSceneOT(scriptInfo->spriteSheetID);
+                else {
+                    Sort3DDrawList();
+                    t2 = PS1Hblanks();
+                    Draw3DScene(scriptInfo->spriteSheetID);
+                }
+#else
                 Sort3DDrawList();
                 uint32_t t2 = PS1Hblanks();
                 Draw3DScene(scriptInfo->spriteSheetID);
+#endif
                 g_ps1Prof3DTransformHbl = (uint16_t)(t1 - t0);
                 g_ps1Prof3DSortHbl      = (uint16_t)(t2 - t1);
                 g_ps1Prof3DDrawHbl      = PS1HblanksSince(t2);
