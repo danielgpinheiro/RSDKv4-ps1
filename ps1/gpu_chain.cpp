@@ -368,6 +368,31 @@ void PS1ChainSprite16Raw(uint32_t xy, uint32_t tex) {
     w[2]        = tex;
 }
 
+// A run of nodes written back to back (DMA header, then the node's words) and linked into the chain with one chain()
+// call (docs/30 "Mania lessons pass": psyqo's chain() per <= 14-word fragment was ~5 % of a busy zone's frame). The
+// nodes hold the same words in the same order as one VarFragment each did; only the arena layout (no size word) and
+// the number of chain() calls change. s_runLast = the last node's word count (psyqo writes the end of the list).
+namespace {
+unsigned s_runLast = 0;
+struct RunFrag {
+    uintptr_t head;
+    size_t getActualFragmentSize() const { return (size_t)s_runLast; }
+};
+// Room for `nodes` nodes holding `words` words in all, or nullptr (the callers then take their per-fragment path, which
+// drops what doesn't fit exactly as before).
+inline uint32_t *runBegin(int nodes, int words) {
+    if (!s_cur || s_cur + nodes + words > s_end)
+        return nullptr;
+    return s_cur;
+}
+// Links nodes [first, end) whose headers hold their sizes in bits 24-31 (the last one's link is written by psyqo).
+inline void runEnd(uint32_t *first, uint32_t *last, uint32_t *end, unsigned lastWords) {
+    s_cur     = end;
+    s_runLast = lastWords;
+    chainList(reinterpret_cast<RunFrag *>(first), reinterpret_cast<RunFrag *>(last));
+}
+} // namespace
+
 void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
     static uint32_t cmd = 0;
     if (!cmd) {
@@ -378,6 +403,25 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
         return;
     runHook();
     flushBatch();
+    if (uint32_t *h = runBegin((n + PS1_TILE_BATCH - 1) / PS1_TILE_BATCH, 3 * n)) {
+        uint32_t *first = h, *last = h;
+        unsigned lastWords = 0;
+        while (n > 0) {
+            int k       = n < PS1_TILE_BATCH ? n : PS1_TILE_BATCH;
+            uint32_t *w = h + 1;
+            for (int i = 0; i < k; ++i, w += 3) {
+                w[0] = cmd;
+                w[1] = *xy++;
+                w[2] = *tex++;
+            }
+            last = h, lastWords = 3 * k;
+            *h   = (lastWords << 24) | (reinterpret_cast<uintptr_t>(w) & 0xffffff);
+            h    = w;
+            n -= k;
+        }
+        runEnd(first, last, h, lastWords);
+        return;
+    }
     while (n > 0) {
         int k = n < PS1_TILE_BATCH ? n : PS1_TILE_BATCH;
         VarFragment *f = allocVar(3 * k);
@@ -405,6 +449,26 @@ void PS1ChainSpriteRawN(const uint32_t *words, int n) {
         return;
     runHook();
     flushBatch();
+    if (uint32_t *h = runBegin((n + PS1_SPRITE_BATCH - 1) / PS1_SPRITE_BATCH, 4 * n)) {
+        uint32_t *first = h, *last = h;
+        unsigned lastWords = 0;
+        while (n > 0) {
+            int k       = n < PS1_SPRITE_BATCH ? n : PS1_SPRITE_BATCH;
+            uint32_t *w = h + 1;
+            for (int i = 0; i < k; ++i, w += 4, words += 3) {
+                w[0] = cmd;
+                w[1] = words[0];
+                w[2] = words[1];
+                w[3] = words[2];
+            }
+            last = h, lastWords = 4 * k;
+            *h   = (lastWords << 24) | (reinterpret_cast<uintptr_t>(w) & 0xffffff);
+            h    = w;
+            n -= k;
+        }
+        runEnd(first, last, h, lastWords);
+        return;
+    }
     while (n > 0) {
         int k = n < PS1_SPRITE_BATCH ? n : PS1_SPRITE_BATCH;
         VarFragment *f = allocVar(4 * k);
@@ -485,6 +549,25 @@ void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n) {
     runHook();
     flushBatch();
     int per = PS1_CHAIN_MAX_WORDS / wpp;
+    if (uint32_t *h = runBegin((n + per - 1) / per, wpp * n)) {
+        uint32_t *first = h, *last = h;
+        unsigned lastWords = 0;
+        while (n > 0) {
+            int k       = n < per ? n : per;
+            uint32_t *w = h + 1;
+            unsigned nw = (unsigned)(wpp * k);
+            for (unsigned i = 0; i < nw; ++i) w[i] = words[i];
+            words += nw;
+            w += nw;
+            last = h, lastWords = nw;
+            *h   = (lastWords << 24) | (reinterpret_cast<uintptr_t>(w) & 0xffffff);
+            h    = w;
+            n -= k;
+        }
+        runEnd(first, last, h, lastWords);
+        s_tpageValid = false;
+        return;
+    }
     while (n > 0) {
         int k = n < per ? n : per;
         VarFragment *f = allocVar(wpp * k);
