@@ -10,18 +10,8 @@ cd "$(dirname "$0")/.."
 OUT=$1; START=${2:-300}; END=${3:-420}
 . tools/redux_env.sh
 cp rsdkv4.elf "$OUT.elf"
-CHASE_STEPS=
-if [ "${CHASE:-0}" = 1 ]; then
-    MASK=8; FROM=240
-    [ "$START" -lt 420 ] && CHASE_STEPS="break PS1PerfTick if g_ps1PerfFrames == 420
-continue
-set var g_ps1PadTestMask = 0x18
-delete
-break PS1PerfTick if g_ps1PerfFrames == 432
-continue
-set var g_ps1PadTestMask = 0x08
-delete"
-fi
+if [ "${CHASE:-0}" = 1 ]; then MASK=8; FROM=240; fi
+CJ=; [ "${CHASE:-0}" = 1 ] && CJ=" || g_ps1PerfFrames == 420 || g_ps1PerfFrames == 432"
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
@@ -33,14 +23,28 @@ set var g_ps1PadTestMask = ${MASK:-8}
 delete
 break PS1PerfTick if g_ps1PerfFrames == $START
 continue
+set var g_ps1PcSampleCount = 0
 set var g_ps1PcSampleOn = 1
+set var g_ps1ChainOverflow = 0
+set var g_ps1ChainArenaFail = 0
 delete
-${CHASE_STEPS:-}
-break PS1PerfTick if g_ps1PerfFrames == $END
-continue
+shell : > ${OUT}_pcs.bin
+set \$total = 0
+break PS1PerfTick if g_ps1PcSampleCount >= 768 || g_ps1PerfFrames == $END${CJ}
+while g_ps1PerfFrames < $END
+  continue
+  if ${CHASE:-0} == 1 && g_ps1PerfFrames == 420
+    set var g_ps1PadTestMask = 0x18
+  end
+  if ${CHASE:-0} == 1 && g_ps1PerfFrames == 432
+    set var g_ps1PadTestMask = 0x08
+  end
+  eval "append binary memory ${OUT}_pcs.bin &g_ps1PcSamples[0] &g_ps1PcSamples[%u]", g_ps1PcSampleCount
+  set \$total = \$total + g_ps1PcSampleCount
+  set var g_ps1PcSampleCount = 0
+end
 set var g_ps1PcSampleOn = 0
-printf "SAMPLES %u frames $START-$END lastHbl=%u\n", g_ps1PcSampleCount, g_ps1PerfLastHbl
-eval "dump binary memory ${OUT}_pcs.bin &g_ps1PcSamples[0] &g_ps1PcSamples[%u]", g_ps1PcSampleCount
+printf "SAMPLES %u frames $START-$END lastHbl=%u chainOverflow=%u arenaFail=%u headroom=%u\n", \$total, g_ps1PerfLastHbl, g_ps1ChainOverflow, g_ps1ChainArenaFail, g_ps1HeapHeadroom
 detach
 GDBEOF
 redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
@@ -65,6 +69,12 @@ for pc in pcs:
     i = bisect.bisect_right(addrs, pc) - 1
     h[syms[i][1] if i >= 0 else '%08x' % pc] += 1
 print('%d samples' % len(pcs))
+if os.environ.get('SAMPLER_OK') != '1':
+    import re
+    t = open(out + '.txt').read()
+    m = re.search(r'chainOverflow=(\d+) arenaFail=(\d+)', t)
+    if not m or m.group(1) != '0' or m.group(2) != '0':
+        print('WARNING: the chain overflowed or had no arena during the profile: frames were not drawn, the profile is not the real path')
 for name, c in h.most_common(int(os.environ.get('TOP', 40))):
     print('%5.1f%% %5d  %s' % (100.0 * c / len(pcs), c, name[:120]))
 if os.environ.get('LINES') == '1':

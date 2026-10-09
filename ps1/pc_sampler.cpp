@@ -2,7 +2,9 @@
  * PC sampler (`make SAMPLER=1`, harness only): root counter 0 counts system clocks and raises its IRQ at a target that
  * changes pseudo-randomly each time (6,000-14,191 cycles, ~2.8-6.6 hblanks); the handler (BIOS IRQ chain, priority 0,
  * as irq_guard.cpp's filter) records the interrupted PC (COP0 EPC) while g_ps1PcSampleOn is set. A GDB script dumps
- * g_ps1PcSamples; tools/pc_profile.sh maps the PCs to functions. Samples are uniform over CPU time (unlike a debugger
+ * g_ps1PcSamples; tools/pc_profile.sh maps the PCs to functions. The buffer is small (4 KB: the special stages' heap has ~13 KB
+ * to spare and a bigger one left no room for the chain arenas, so nothing was drawn): the script drains it whenever it
+ * holds 768 samples (a full buffer stops recording until then). Samples are uniform over CPU time (unlike a debugger
  * break, which PCSX-Redux honours only at exception entry). The IRQ costs ~100 cycles a sample (~2 % of the CPU).
  */
 #include <stdint.h>
@@ -11,7 +13,7 @@
 #include "common/psxlibc/handlers.h"
 #include "common/syscalls/syscalls.h"
 
-#define PS1_PC_SAMPLES 8192
+#define PS1_PC_SAMPLES 1024
 volatile uint32_t g_ps1PcSamples[PS1_PC_SAMPLES];
 volatile uint32_t g_ps1PcSampleCount = 0;
 volatile uint32_t g_ps1PcSampleOn    = 0; // GDB: 1 = record (from a frame the script picks)
