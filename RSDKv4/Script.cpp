@@ -813,6 +813,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1RingSparkle", 0),
     FunctionInfo("PS1HPZSetup", 0),
     FunctionInfo("PS1SpecialPlayer", 0),
+    FunctionInfo("PS1ARZWater", 0),
 #endif
 };
 
@@ -1379,6 +1380,7 @@ enum ScrFunc {
     FUNC_PS1RINGSPARKLE,
     FUNC_PS1HPZSETUP,
     FUNC_PS1SPECIALPLAYER,
+    FUNC_PS1ARZWATER,
 #endif
     FUNC_MAX_CNT
 };
@@ -10065,6 +10067,232 @@ __attribute__((optimize("Os"))) static void PS1SpecialPlayerUpdate()
     PS1_OBJ(self).values[17]++;
     PS1_OBJ(self).values[17] %= 28;
 }
+// Aquatic Ruin's Water update sub (every frame: the water level from its motion function, then per player -- ARRAYPOS6
+// up to ARRAYPOS7 -- entering / leaving the water, the drowning countdown with its sounds, music and bubbles, the
+// splash), natively: one statement per script instruction, in order (t = temps, cr = check result, ap = array
+// positions, G = globals; P = the player in ARRAYPOS6, B = the entity ARRAYPOS6 past the water, N = the temp object in
+// ARRAYPOS8). Its CallFunctions run in the VM (PS1CallScriptFunction): 41, 37, 105, 106, 107 and value 3 (the motion
+// function its startup puts in a per-act table: 103 / 104, which the patcher checks; any other value is counted, and
+// called as the VM would). Patched in only when the sub and its jump-table entries match ARZWATER_SIG.
+volatile uint32_t g_ps1WaterUnverified = 0; // value 3 named a function the patcher didn't check (GDB; expected 0)
+__attribute__((optimize("Os"))) static void PS1ARZWaterUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition, *G = globalVariables;
+    int &cr        = scriptEng.checkResult;
+    const int self = objectEntityPos;
+#define P PS1_OBJ(ap[6])
+#define B PS1_OBJ(self + ap[6])
+#define N PS1_OBJ(ap[8])
+    t[0] = PS1_OBJ(0).xpos;
+    t[0] >>= 16;
+    t[1] = PS1_OBJ(0).ypos;
+    t[1] >>= 16;
+    ap[0] = self;
+    {
+        int fn = PS1_OBJ(self).values[3]; // the startup's table: 103 (act 1) / 104 (act 2), both checked by the patcher
+        if (fn != 103 && fn != 104)
+            g_ps1WaterUnverified = g_ps1WaterUnverified + 1;
+        PS1CallScriptFunction(fn, 0);
+    }
+    Entity &me = PS1_OBJ(self);
+    if (me.ypos < G[48])
+        me.ypos += 65536;
+    if (me.ypos > G[48])
+        me.ypos -= 65536;
+    waterLevel = me.ypos;
+    t[7]       = waterLevel;
+    waterLevel >>= 16;
+    ap[6] = 0;
+    while (ap[6] < ap[7]) {
+        if (P.values[25] == 14336) {
+            cr   = P.type != 9;
+            t[0] = cr;
+            cr   = P.state != 28;
+            t[0] &= cr;
+            cr = P.state != 1;
+            t[0] &= cr;
+            cr = P.ypos > t[7];
+            t[0] &= cr;
+            if (t[0] == 1) {
+                if (P.yvel > 0)
+                    P.yvel >>= 2;
+                if (me.ypos < G[48])
+                    P.yvel += 65536;
+                if (P.state == 19) {
+                    StopSfx(19);
+                    StopSfx(0);
+                }
+                P.xvel >>= 1;
+                P.speed >>= 1;
+                PS1CallScriptFunction(41, 0);
+                if (P.yvel != 0) {
+                    PS1CreateTempObject(72, 0, P.xpos, t[7]);
+                    N.drawOrder = 4;
+                    PlaySfx(44, 0);
+                }
+                B.values[1] = 52;
+                P.values[3] = 0;
+            }
+        }
+        else {
+            if (P.values[7] == 0) {
+                if (P.values[37] == 3) {
+                    t[2] = 0;
+                    while (t[2] < 8) {
+                        t[0] = rand() % 32;
+                        t[1] = rand() % 32;
+                        t[0] -= 16;
+                        t[0] <<= 16;
+                        t[0] += P.xpos;
+                        t[1] -= 16;
+                        t[1] <<= 16;
+                        t[1] += P.ypos;
+                        PS1CreateTempObject(20, 0, t[0], t[1]);
+                        N.drawOrder = P.values[18];
+                        N.drawOrder++;
+                        N.xvel = P.xvel;
+                        N.yvel = P.yvel;
+                        t[2]++;
+                    }
+                    P.values[37] = 0;
+                    ap[0]        = ap[6];
+                    ap[0] += ap[7];
+                    PS1CallScriptFunction(37, 0);
+                }
+                if (P.values[37] == 4) {
+                    P.values[37] = 0;
+                    ap[0]        = ap[6];
+                    ap[0] += ap[7];
+                    PS1CallScriptFunction(37, 0);
+                    if (scriptCode[63679] != 4)
+                        PS1ScriptWrite(63679, 4);
+                }
+            }
+            if (P.values[37] != 2) {
+                if (P.values[3] == 0) {
+                    P.values[4] = 0;
+                    PS1CallScriptFunction(107, 0);
+                }
+                // the countdown: (sound / music / number) at these frame counts, then drowning, then the bubbles
+                static const short at[10] = { 360, 660, 960, 1080, 1200, 1320, 1440, 1560, 1680, 1800 };
+                int k = P.values[4];
+                if (k >= 0 && k <= 9) {
+                    PS1CallScriptFunction(105, 0);
+                    P.values[3]++;
+                    if (P.values[3] == at[k]) {
+                        if (k <= 2) {
+                            if (ap[6] == 0)
+                                PlaySfx(45, 0);
+                            P.values[4]++;
+                        }
+                        else if (k <= 8) {
+                            if (k == 3 && ap[6] == 0) {
+                                me.values[8] = trackID;
+                                PlayMusic(6, 0);
+                            }
+                            t[0] = k - 3;
+                            PS1CallScriptFunction(106, 0);
+                            P.values[4]++;
+                        }
+                        else if (P.state != 28) {
+                            if (ap[6] == 0) {
+                                timeEnabled   = 0;
+                                cameraEnabled = 0;
+                            }
+                            P.state              = 29;
+                            P.animation          = G[71];
+                            P.speed              = 0;
+                            P.xvel               = 0;
+                            P.yvel               = 0;
+                            P.tileCollisions     = 0;
+                            P.objectInteractions = 0;
+                            P.values[18]         = 5;
+                            B.values[1]          = 2;
+                            PlaySfx(46, 0);
+                            P.values[4]++;
+                        }
+                    }
+                }
+                else if (k == 10) {
+                    P.values[3]++;
+                    if (P.values[3] == 1860)
+                        P.values[4]++;
+                    if (B.values[1] > 0) {
+                        B.values[1]--;
+                        if (B.values[2] > 0)
+                            B.values[2]--;
+                        else {
+                            t[1] = rand() % 2;
+                            t[1] += 2;
+                            PS1CreateTempObject(42, t[1], P.xpos, P.ypos);
+                            N.drawOrder = 5;
+                            N.yvel      = -34816;
+                            N.ypos -= 393216;
+                            N.values[2] = ap[6];
+                            N.angle     = rand() % 256;
+                            N.values[1] = N.xpos;
+                            B.values[2] = 512;
+                        }
+                    }
+                    else {
+                        t[0] = rand() % 5;
+                        if (t[0] == 1)
+                            B.values[2] = 2;
+                        else
+                            B.values[2] = 512;
+                        B.values[1] = 6;
+                        t[1]        = rand() % 2;
+                        t[1] += 2;
+                        PS1CreateTempObject(42, t[1], P.xpos, P.ypos);
+                        N.drawOrder = 5;
+                        N.yvel      = -34816;
+                        N.ypos -= 393216;
+                        N.values[2] = ap[6];
+                        N.angle     = rand() % 256;
+                        N.values[1] = N.xpos;
+                    }
+                }
+            }
+            cr   = P.type == 9;
+            t[0] = cr;
+            cr   = P.ypos < t[7];
+            t[0] |= cr;
+            if (t[0] == 1) {
+                if (P.state != 28) {
+                    P.yvel <<= 1;
+                    if (P.yvel < -1048576)
+                        P.yvel = -1048576;
+                    if (P.state == 19) {
+                        if (P.values[1] < 480)
+                            PlaySfx(19, 1);
+                        else
+                            PlaySfx(0, 1);
+                    }
+                    PS1CallScriptFunction(41, 0);
+                    if (P.yvel != 0) {
+                        t[0] = me.ypos;
+                        t[0] -= P.ypos;
+                        if (t[0] < 15728640) {
+                            PS1CreateTempObject(72, 0, P.xpos, t[7]);
+                            N.drawOrder = 4;
+                            PlaySfx(44, 0);
+                        }
+                    }
+                    P.values[3] = 0;
+                    PS1CallScriptFunction(107, 0);
+                }
+            }
+        }
+        ap[6]++;
+    }
+    me.animationTimer++;
+    me.animationTimer &= 31;
+    me.frame = me.animationTimer;
+    me.frame >>= 3;
+#undef P
+#undef B
+#undef N
+}
 // The Halfpipe's update sub (Special), natively: one statement per script instruction, in order; its segment build
 // (function 0) runs natively too (PS1HalfpipeSegment). Advances the pipe (value1 += speed; a new segment each 64) and
 // interpolates the camera / pipe tables between segments. Patched in only when the sub and its jump-table entries match
@@ -12880,6 +13108,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 PS1SpecialPlayerUpdate();
                 break;
+            case FUNC_PS1ARZWATER: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1ARZWaterUpdate();
+                break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
                 // one statement per script instruction, in order; patched in only when it matches HDOOR_SIG exactly.
@@ -13061,7 +13293,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
             case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
             case FUNC_PS1HORIZONTALDOOR: case FUNC_PS1SPECIALBGDRAW: case FUNC_PS1RINGSPARKLE: case FUNC_PS1HPZSETUP:
-            case FUNC_PS1SPECIALPLAYER:
+            case FUNC_PS1SPECIALPLAYER: case FUNC_PS1ARZWATER:
                 opcodeSize           = 0;
                 g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
                 running              = false;
