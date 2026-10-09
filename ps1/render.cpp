@@ -1230,6 +1230,16 @@ static uint16_t s_chunkRowPlanes[CHUNKTILE_COUNT / 64];
 
 static inline bool PS1TileSolid(int t) { return (g_ps1TileSolid[t >> 3] >> (t & 7)) & 1; }
 
+// Copy16x16Tile destinations made solid at least once since the stage load ("sticky"): their chunk rows stay marked
+// whatever the tile shows later (docs/30 / docs/37 "Mania lessons pass"). The row masks are a superset of the rows
+// with a visible tile -- PS1DrawTileBand still checks each tile's solidity -- so pictures don't change; a tile an
+// animation keeps turning empty and solid costs one rebuild per stage instead of one per copy. A rebuild is also
+// deferred to the next tile layer draw: a frame of animated-tile copies rebuilds once (Sonic 1's special stage: ~30
+// rebuilds in one frame, a 39-vblank freeze).
+static uint8_t s_tileSticky[1024 / 8];
+static bool s_tileVisualsDirty = false;
+static inline bool PS1TileMaybeSolid(int t) { return ((g_ps1TileSolid[t >> 3] | s_tileSticky[t >> 3]) >> (t & 7)) & 1; }
+
 static void PS1UpdateChunkRows(int chunk)
 {
     uint16_t m          = 0;
@@ -1237,15 +1247,37 @@ static void PS1UpdateChunkRows(int chunk)
     for (int t = 0; t < 64; ++t) {
         uint16_t tv = tiles[t];
         int plane   = tv >> PS1_TV_PLANE_SHIFT;
-        if (plane <= 1 && PS1TileSolid(tv & PS1_TV_INDEX))
+        if (plane <= 1 && PS1TileMaybeSolid(tv & PS1_TV_INDEX))
             m |= 1 << ((t >> 3) * 2 + plane);
     }
     s_chunkRowPlanes[chunk] = m;
 }
 
-void PS1BuildTileVisuals()
+static void PS1RebuildTileVisuals()
 {
-    for (int c = 0; c < CHUNKTILE_COUNT / 64; ++c) PS1UpdateChunkRows(c);
+    // PS1UpdateChunkRows for every chunk, from a byte per tile (the bit tables unpacked once): ~half the instructions
+    uint8_t maybe[1024];
+    for (int t = 0; t < 1024; ++t) maybe[t] = PS1TileMaybeSolid(t);
+    const ushort *tiles = &tiles128x128.ps1Tile[0];
+    for (int c = 0; c < CHUNKTILE_COUNT / 64; ++c) {
+        uint32_t m = 0;
+        for (int row = 0; row < 8; ++row) {
+            uint32_t bit = 1u << (row * 2);
+            for (int k = 0; k < 8; ++k) {
+                uint32_t tv = *tiles++, plane = tv >> PS1_TV_PLANE_SHIFT;
+                if (plane <= 1 && maybe[tv & PS1_TV_INDEX])
+                    m |= bit << plane;
+            }
+        }
+        s_chunkRowPlanes[c] = (uint16_t)m;
+    }
+    s_tileVisualsDirty = false;
+}
+
+void PS1BuildTileVisuals() // a stage load: no copies yet
+{
+    memset(s_tileSticky, 0, sizeof(s_tileSticky));
+    PS1RebuildTileVisuals();
 }
 
 void PS1TileChanged(int chunkTile)
@@ -1297,9 +1329,10 @@ void PS1Copy16x16Tile(int dest, int src)
         g_ps1TileSolid[dest >> 3] |= (uint8_t)(1 << (dest & 7));
     else
         g_ps1TileSolid[dest >> 3] &= (uint8_t)~(1 << (dest & 7));
-    if (solid && !wasSolid) { // chunk tiles showing `dest` were skipped as empty
-        PS1BuildTileVisuals();
-        g_ps1TileRebuild = g_ps1TileRebuild + 1;
+    if (solid && !wasSolid && !((s_tileSticky[dest >> 3] >> (dest & 7)) & 1)) { // chunk tiles showing `dest` were skipped
+        s_tileSticky[dest >> 3] |= (uint8_t)(1 << (dest & 7));                      // as empty: rebuilt before the next draw
+        s_tileVisualsDirty = true;
+        g_ps1TileRebuild   = g_ps1TileRebuild + 1;
     }
 }
 
@@ -1692,6 +1725,8 @@ void DrawHLineScrollLayer(int layerID)
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
     if (!layer->xsize || !layer->ysize)
         return;
+    if (s_tileVisualsDirty) // Copy16x16Tile made tiles solid since the last draw (PS1Copy16x16Tile)
+        PS1RebuildTileVisuals();
     uint32_t t0       = PS1Hblanks();
     g_ps1ProfLayer[4] = g_ps1ProfLayer[4] + 1;
     int layerwidth    = layer->xsize;
