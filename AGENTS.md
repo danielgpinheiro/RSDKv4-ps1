@@ -45,6 +45,9 @@ tools/vram_test.sh Zone01_st [OUT] [F]        # BOOT= build: tile pages + atlas 
 [MASK=8 FROM=240] tools/frame_capture.sh N OUT                  # both framebuffers as PNGs at frame N + renderer counters
 tools/input_test.sh [OUT] [F]   # every pad-1 button through the real pad path (tools/pad.lua) -> its engine input
 tools/boot_test.sh [OUT] [F1] [F2]            # headless boot over GDB: loads, fps, heap, VM/array guards
+[GAME=1] tools/special_entry_test.sh OUT [POS] [SP]   # natural build: menus -> a zone -> the special stage, as a player
+                                              # gets there (a BOOT=Special build starts on a clean heap); fails on an
+                                              # arena-less frame. Run it after any RAM / code-size change
 tools/logic_test.sh [OUT] [S0 S1 S2 S3]       # BOOT= build: run right, jump, land (g_ps1PadTestMask) + dumps (guards and
                                               # audio counters as files: OUT_guards.bin / OUT_audio.bin)
 GAME=1 tools/zone_sweep.sh OUT Zone01:0 ...   # per FOLDER:PLAYER a BOOT= build + logic test, one line each (restores make)
