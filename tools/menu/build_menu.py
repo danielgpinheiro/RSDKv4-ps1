@@ -59,6 +59,10 @@ EXTRA_STRINGS = {'SonicAndTails': 'SONIC & TAILS', 'Options': 'OPTIONS', 'Back':
                  # MAX EMERALDS): Sonic 2's four shield settings, Sonic 1's four, Sonic 1's emerald count
                  'Shields': 'SHIELDS', 'ShieldSonic1': 'SONIC 1', 'ShieldSonic2': 'SONIC 2',
                  'ShieldSonic2Insta': 'SONIC 2 + INSTA', 'ShieldSonic3': 'SONIC 3', 'ShieldSonic3Insta': 'SONIC 3 + INSTA',
+                 # (tester report 2026-10-10: options.shieldType's real values in Sonic 2's scripts: 0 Sonic 2,
+                 # 1 Sonic 3 shields + insta, 2 every monitor random (the Sonic 2 set, Eggman), 3 random with the
+                 # Sonic 3 shields + insta)
+                 'ShieldRandom': 'RANDOM', 'ShieldRandomInsta': 'RANDOM + INSTA',
                  'ShieldSonic1S3': 'SONIC 1 + S3', 'ShieldSonic2S3': 'SONIC 2 + S3', 'MaxEmeralds': 'MAX EMERALDS',
                  'Six': '6', 'Seven': '7'}
 EXTRA_CHARS = "0123456789:'\".,!?-&/()<> "

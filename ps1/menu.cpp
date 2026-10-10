@@ -323,7 +323,10 @@ enum { PS1_OPT_SET = 0x100 };
 #if PS1_GAME == 1
 constexpr int kShieldDefault = 2; // "S1+S3": Sonic 1's blue shield and invincibility, the Sonic 3 shields + insta shield
 #else
-constexpr int kShieldDefault = 3; // bit 0 the insta shield, bit 1 the Sonic 3 shields
+// options.shieldType as Sonic 2's scripts read it (tester report 2026-10-10; the Monitor startup, the random monitor's
+// tables, GlobalCode function 58): 0 Sonic 2, 1 the Sonic 3 shields as placed + the insta shield, 2 every monitor random
+// from the Sonic 2 set (the Eggman monitor included), 3 random from the Sonic 3 set + the insta shield
+constexpr int kShieldDefault = 1; // Sonic 3 shields + insta shield
 #endif
 int optShield() {
     int v = ((const SaveGame *)saveRAM)->unused[0];
@@ -973,8 +976,8 @@ void optionsScreen(int moveY, int moveX, bool ok, bool back) {
     s_m.sel               = (s_m.sel + moveY + ROWS) % ROWS;
     drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SETTINGS), 160, 6, 1);
     static const int items[ROWS] = { PS1_STR_MUSIC, PS1_STR_SOUND_F_X, PS1_STR_SHIELDS, PS1_STR_STAFF_CREDITS };
-    static const int shields[4]  = { PS1_STR_SHIELD_SONIC2, PS1_STR_SHIELD_SONIC2_INSTA, PS1_STR_SHIELD_SONIC3,
-                                     PS1_STR_SHIELD_SONIC3_INSTA }; // options.shieldType: bit 0 insta, bit 1 Sonic 3
+    static const int shields[4]  = { PS1_STR_SHIELD_SONIC2, PS1_STR_SHIELD_SONIC3_INSTA, PS1_STR_SHIELD_RANDOM,
+                                     PS1_STR_SHIELD_RANDOM_INSTA }; // options.shieldType's values (kShieldDefault)
     for (int i = 0; i < ROWS; ++i) {
         int y = 56 + i * 36;
         drawBar(y - 4, 28, i == s_m.sel);
