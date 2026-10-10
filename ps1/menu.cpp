@@ -314,6 +314,36 @@ void drawBar(int y, int h, bool selected) {
 
 void setGlobal(const char *name, int v) { SetGlobalVariableByName(name, v); }
 
+// The original 2013 port's hidden options (its level select's ITEMS / MAX EMERALDS: options.shieldType, Sonic 1's
+// options.superStates), which its Stage Setup wipes in save mode; on the PS1 that wipe is patched out
+// (patch_bytecode.py patch_keep_options) and the Options screen keeps them in two of SaveGame's unused values (47, 48)
+// with a marker bit: a card without them reads as the defaults (user 2026-10-09: enabled). Story play uses them (a new
+// game, a file, no save), Time Attack the original 0.
+enum { PS1_OPT_SET = 0x100 };
+#if PS1_GAME == 1
+constexpr int kShieldDefault = 2; // "S1+S3": Sonic 1's blue shield and invincibility, the Sonic 3 shields + insta shield
+#else
+constexpr int kShieldDefault = 3; // bit 0 the insta shield, bit 1 the Sonic 3 shields
+#endif
+int optShield() {
+    int v = ((const SaveGame *)saveRAM)->unused[0];
+    return v & PS1_OPT_SET ? v & 3 : kShieldDefault;
+}
+void setOptShield(int v) { ((SaveGame *)saveRAM)->unused[0] = PS1_OPT_SET | (v & 3); }
+#if PS1_GAME == 1
+int optSevenEmeralds() { // options.superStates: the 7th special stage (MAX EMERALDS 07)
+    int v = ((const SaveGame *)saveRAM)->unused[1];
+    return v & PS1_OPT_SET ? v & 1 : 1;
+}
+void setOptSevenEmeralds(int v) { ((SaveGame *)saveRAM)->unused[1] = PS1_OPT_SET | (v & 1); }
+#endif
+void applyStoryOptions() {
+    setGlobal("options.shieldType", optShield());
+#if PS1_GAME == 1
+    setGlobal("options.superStates", optSevenEmeralds());
+#endif
+}
+
 // PlayerSelectScreen.cpp (PLAYERSELECTSCREEN_STATE_... after the fade): a new game (no save / a new file).
 void startNewGame(int saveSlot, int charID) {
     SaveGame *saveGame = (SaveGame *)saveRAM;
@@ -344,6 +374,7 @@ void startNewGame(int saveSlot, int charID) {
     setGlobal("timeAttack.result", 0);
     setGlobal("lampPostID", 0);
     setGlobal("starPostID", 0);
+    applyStoryOptions();
     debugMode = false;
     InitStartingStage(STAGELIST_PRESENTATION, 0, charID);
 }
@@ -361,6 +392,7 @@ void loadSavedGame(int slot) {
     setGlobal("specialStage.emeralds", f.emeralds);
     setGlobal("lampPostID", 0);
     setGlobal("starPostID", 0);
+    applyStoryOptions();
     if (f.stageID >= 0x80) {
         setGlobal("specialStage.nextZone", f.stageID - 0x81);
         InitStartingStage(STAGELIST_SPECIAL, f.specialStageID, f.characterID);
@@ -468,6 +500,10 @@ void taPlay() {
     setGlobal("lampPostID", 0);
     setGlobal("starPostID", 0);
     setGlobal("timeAttack.result", 0);
+    setGlobal("options.shieldType", 0); // the original shields: records stay comparable (user 2026-10-09)
+#if PS1_GAME == 1
+    setGlobal("options.superStates", 0);
+#endif
     int z = s_ta.zone;
 #if PS1_GAME == 1
     if (z >= 7) // RECORDSSCREEN_STATE_LOADSTAGE GAME_SONIC1: the special stages
@@ -589,7 +625,9 @@ void saveScreen(int move, bool ok, bool back) {
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
     static const int icons[4] = { PS1_MENU_ICON_SONIC, PS1_MENU_ICON_TAILS, PS1_MENU_ICON_KNUX, PS1_MENU_ICON_SONIC };
-    static const uint32_t emeralds[6] = { 0x8080FF, 0xFFFF00, 0xFF60C0, 0xA0FF00, 0xFF4060, 0xFFFFFF }; // SubMenuButton S1
+    // SubMenuButton S1's six; the 7th (options.superStates) in its special-stage sprite's purple (Special/Objects.gif
+    // 0xA440FF, brightened like the six)
+    static const uint32_t emeralds[7] = { 0x8080FF, 0xFFFF00, 0xFF60C0, 0xA0FF00, 0xFF4060, 0xFFFFFF, 0xBA49FF };
     s_m.sel = (s_m.sel + move + 5) % 5;
     drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SAVE_SELECT), 160, 6, 1);
     for (int i = 0; i < 5; ++i) {
@@ -614,7 +652,8 @@ void saveScreen(int move, bool ok, bool back) {
         if ((f.characterID & 3) == 3)
             drawImage(mp.images[PS1_MENU_ICON_TAILS], 28, y + 2);
         drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(name), 60, y + 3);
-        for (int e = 0; e < 6; ++e) { // six emeralds, each in its colour when collected (SubMenuButton, GAME_SONIC1)
+        int shown = (f.emeralds >> 6) & 1 || optSevenEmeralds() ? 7 : 6; // the 7th only when it can be (or was) won
+        for (int e = 0; e < shown; ++e) { // each in its colour when collected (SubMenuButton, GAME_SONIC1)
             if ((f.emeralds >> e) & 1)
                 drawImageTint(mp.images[PS1_MENU_EMERALD_ON], 60 + e * 12, y + 20, emeralds[e]);
             else
@@ -635,12 +674,11 @@ void saveScreen(int move, bool ok, bool back) {
         go(PS1_MENU_MAIN, 0);
 }
 
-// Player select, Sonic 1 (PlayerSelectScreen.cpp): Tails and Knuckles start locked (the save's flags, set by the
-// Ending): only the unlocked ones can be chosen (Sonic; + Sonic & Tails, Tails; + Knuckles), locked ones not shown.
+// Player select, Sonic 1 (PlayerSelectScreen.cpp): the original locks Tails and Knuckles until the Ending (the save's
+// flags); on the PS1 every character is there from the start (user 2026-10-09): Sonic, Sonic & Tails, Tails, Knuckles.
 void playerScreen(int moveX, bool ok, bool back) {
-    const PS1MenuPack &mp    = g_ps1MenuScreens;
-    const SaveGame *saveGame = (const SaveGame *)saveRAM;
-    int count                = saveGame->knuxUnlocked ? 4 : saveGame->tailsUnlocked ? 3 : 1;
+    const PS1MenuPack &mp = g_ps1MenuScreens;
+    const int count       = 4;
     if (count > 1)
         s_m.sel = (s_m.sel + moveX + count) % count;
     else
@@ -670,16 +708,21 @@ void playerScreen(int moveX, bool ok, bool back) {
 }
 
 // Options, Sonic 1 (SettingsScreen.cpp GAME_SONIC1): music / SFX volume, the spin dash (on / off: saveGame's value 35,
-// which Sonic 1's player script reads), the staff credits.
+// which Sonic 1's player script reads), the shields and the emerald count (the original's hidden options:
+// applyStoryOptions), the staff credits.
 void optionsScreen(int moveY, int moveX, bool ok, bool back) {
+    enum { ROW_SHIELDS = 3, ROW_EMERALDS = 4, ROW_CREDITS = 5, ROWS = 6 };
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
-    s_m.sel               = (s_m.sel + moveY + 4) % 4;
+    s_m.sel               = (s_m.sel + moveY + ROWS) % ROWS;
     drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SETTINGS), 160, 6, 1);
-    static const int items[4] = { PS1_STR_MUSIC, PS1_STR_SOUND_F_X, PS1_STR_SPIN_DASH, PS1_STR_STAFF_CREDITS };
-    for (int i = 0; i < 4; ++i) {
-        int y = 56 + i * 36;
-        drawBar(y - 4, 28, i == s_m.sel);
+    static const int items[ROWS]  = { PS1_STR_MUSIC,   PS1_STR_SOUND_F_X,    PS1_STR_SPIN_DASH,
+                                      PS1_STR_SHIELDS, PS1_STR_MAX_EMERALDS, PS1_STR_STAFF_CREDITS };
+    static const int shields[4]   = { PS1_STR_SHIELD_SONIC1, PS1_STR_SHIELD_SONIC2, PS1_STR_SHIELD_SONIC1_S3,
+                                      PS1_STR_SHIELD_SONIC2_S3 }; // the level select's S1 / S2 / S1+S3 / S2+S3
+    for (int i = 0; i < ROWS; ++i) {
+        int y = 46 + i * 31;
+        drawBar(y - 4, 26, i == s_m.sel);
         drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(items[i]), 40, y);
         if (i < 2) { // volume: 5 notches
             int vol = i == 0 ? saveGame->musVolume : saveGame->sfxVolume;
@@ -694,6 +737,15 @@ void optionsScreen(int moveY, int moveX, bool ok, bool back) {
             drawRect(244, y - 2, 42, 18, 0, !on ? 160 : 96, !on ? 72 : 32);
             drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_ON), 217, y + 1, 1);
             drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_OFF), 265, y + 1, 1);
+        }
+        else if (i == ROW_SHIELDS)
+            drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(shields[optShield()]), 246, y + 1, 1);
+        else if (i == ROW_EMERALDS) { // 6 / 7, the chosen one lit
+            bool seven = optSevenEmeralds();
+            drawRect(214, y - 2, 30, 18, 0, !seven ? 160 : 96, !seven ? 72 : 32);
+            drawRect(250, y - 2, 30, 18, 0, seven ? 160 : 96, seven ? 72 : 32);
+            drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_SIX), 229, y + 1, 1);
+            drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(PS1_STR_SEVEN), 265, y + 1, 1);
         }
     }
     if (moveX && s_m.sel < 2) { // SettingsScreen.cpp SETTINGSSCREEN_SEL_MUSVOL / SFXVOL
@@ -720,7 +772,15 @@ void optionsScreen(int moveY, int moveX, bool ok, bool back) {
         PlaySfxByName("Menu Move", false);
         saveGame->spindashEnabled = !saveGame->spindashEnabled;
     }
-    if (ok && s_m.sel == 3) {
+    else if (moveX && s_m.sel == ROW_SHIELDS) { // the level select's ITEMS: left / right cycle the four
+        PlaySfxByName("Menu Move", false);
+        setOptShield((optShield() + moveX + 4) & 3);
+    }
+    else if (moveX && s_m.sel == ROW_EMERALDS) { // MAX EMERALDS 06 / 07
+        PlaySfxByName("Menu Move", false);
+        setOptSevenEmeralds(!optSevenEmeralds());
+    }
+    if (ok && s_m.sel == ROW_CREDITS) {
         PlaySfxByName("Menu Select", false);
         InitStartingStage(STAGELIST_PRESENTATION, 2, 0); // the scripted Staff Credits; its end returns to the menus
     }
@@ -903,16 +963,20 @@ void playerScreen(int moveX, bool ok, bool back) {
 }
 
 // Options (OptionsMenu / SettingsScreen): music and SFX volume in the native 5 steps (SetGameVolumes; heard from
-// phase 5), the staff credits (the scripted Credits stage, presentation list 2). Sonic 2's scripts never read the
-// spin dash setting (a Sonic 1 option) and the box art only changes the mobile title: not shown.
+// phase 5), the shields (the original's hidden option: applyStoryOptions), the staff credits (the scripted Credits
+// stage, presentation list 2). Sonic 2's scripts never read the spin dash setting (a Sonic 1 option) and the box art
+// only changes the mobile title: not shown.
 void optionsScreen(int moveY, int moveX, bool ok, bool back) {
+    enum { ROW_SHIELDS = 2, ROW_CREDITS = 3, ROWS = 4 };
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
-    s_m.sel               = (s_m.sel + moveY + 3) % 3;
+    s_m.sel               = (s_m.sel + moveY + ROWS) % ROWS;
     drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SETTINGS), 160, 6, 1);
-    static const int items[3] = { PS1_STR_MUSIC, PS1_STR_SOUND_F_X, PS1_STR_STAFF_CREDITS };
-    for (int i = 0; i < 3; ++i) {
-        int y = 70 + i * 40;
+    static const int items[ROWS] = { PS1_STR_MUSIC, PS1_STR_SOUND_F_X, PS1_STR_SHIELDS, PS1_STR_STAFF_CREDITS };
+    static const int shields[4]  = { PS1_STR_SHIELD_SONIC2, PS1_STR_SHIELD_SONIC2_INSTA, PS1_STR_SHIELD_SONIC3,
+                                     PS1_STR_SHIELD_SONIC3_INSTA }; // options.shieldType: bit 0 insta, bit 1 Sonic 3
+    for (int i = 0; i < ROWS; ++i) {
+        int y = 56 + i * 36;
         drawBar(y - 4, 28, i == s_m.sel);
         drawText(mp, PS1_FONT_LABEL_L, PS1MenuString(items[i]), 40, y);
         if (i < 2) { // volume: 5 notches
@@ -922,6 +986,8 @@ void optionsScreen(int moveY, int moveX, bool ok, bool back) {
                 drawRect(200 + k * 18, y + 2, 12, 12, on ? 255 : 40, on ? 210 : 40, on ? 0 : 80);
             }
         }
+        else if (i == ROW_SHIELDS)
+            drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(shields[optShield()]), 246, y + 1, 1);
     }
     if (moveX && s_m.sel < 2) { // SettingsScreen.cpp SETTINGSSCREEN_SEL_MUSVOL / SFXVOL
         PlaySfxByName("Menu Move", false);
@@ -943,7 +1009,11 @@ void optionsScreen(int moveY, int moveX, bool ok, bool back) {
             SetGameVolumes(saveGame->musVolume, saveGame->sfxVolume);
         }
     }
-    if (ok && s_m.sel == 2) {
+    else if (moveX && s_m.sel == ROW_SHIELDS) { // the level select's shield setting: left / right cycle the four
+        PlaySfxByName("Menu Move", false);
+        setOptShield((optShield() + moveX + 4) & 3);
+    }
+    if (ok && s_m.sel == ROW_CREDITS) {
         PlaySfxByName("Menu Select", false);
         InitStartingStage(STAGELIST_PRESENTATION, 2, 0); // the scripted Staff Credits; its end returns to the menus
     }

@@ -1248,7 +1248,10 @@ void DrawStageGFX()
         PS1DrawLayer(3);
         DrawObjectList(5);
 #if RETRO_REV03
-        if (forceUseScripts || Engine.usingOrigins)
+        // Upstream draws layer 7 only for Origins data (its fix for the mobile Tails Object in the special stages).
+        // The mobile data's only layer-7 objects are the Sonic 3 shields' (Sonic 2's Fire Shield; Sonic 1's Fire
+        // Shield and Lightning Spark), which the PS1 Options turn on (user 2026-10-09): drawn outside the special stages.
+        if (forceUseScripts || Engine.usingOrigins || activeStageList != STAGELIST_SPECIAL)
             DrawObjectList(7);
 #endif
         DrawObjectList(6);
