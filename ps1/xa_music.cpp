@@ -21,12 +21,15 @@ extern psyqo::GPU *g_ps1GPU;
 extern volatile uint32_t g_ps1PerfFrames;
 bool PS1FsFind(const char *path, uint32_t *lba, uint32_t *size); // cdrom_fs.cpp
 void PS1FsStopStream();                                          // cdrom_fs.cpp: one CD action at a time
+uint32_t PS1Hblanks();                                           // video.cpp: root counter 1
 
 volatile uint32_t g_ps1XaStarts      = 0;
 volatile uint32_t g_ps1XaLoops       = 0;
 volatile uint32_t g_ps1XaEnds        = 0;
 volatile uint32_t g_ps1XaDataSectors = 0;
 volatile uint32_t g_ps1XaForcedStops = 0;
+volatile uint32_t g_ps1XaAborts       = 0; // waits for the drive's PAUSE that timed out: the action was ended by abort()
+volatile uint32_t g_ps1XaGiveUps      = 0; // ... and the drive didn't answer the abort either (last resort)
 volatile uint32_t g_ps1XaLoopFrame   = 0;
 volatile uint32_t g_ps1XaStartFrame  = 0;
 volatile int32_t g_ps1XaChannel      = -1;
@@ -113,6 +116,26 @@ class XaAction : public psyqo::CDRomDevice::Action<XaState> {
         psyqo::Kernel::fastLeaveCriticalSection();
     }
     void clearPauseRequest() { m_pauseRequested = false; }
+    // From the main loop, when the drive hasn't answered for XA_WAIT_HBL (waitIdle): make it answer and end the
+    // action through psyqo's own IRQ path (a plain timeout would leave the action registered: psyqo then asserts on
+    // the next one). PAUSE always answers INT3 and stops the drive; the next response of any kind ends the action
+    // with success false (the callback runs, s_xa.running goes false). A later response of the abandoned command
+    // finds no action: ps1/irq_guard.cpp drains it.
+    void abort() {
+        psyqo::Kernel::fastEnterCriticalSection();
+        m_abort          = true;
+        m_pauseRequested = true;
+        psyqo::Hardware::CDRom::Command.send(CDL::PAUSE);
+        psyqo::Kernel::fastLeaveCriticalSection();
+    }
+    void clearAbort() { m_abort = false; }
+    bool aborted() {
+        if (!m_abort)
+            return false;
+        m_abort = false;
+        setSuccess(false);
+        return true;
+    }
     bool dataReady(const psyqo::CDRomDevice::Response &) override {
         // Only data sectors reach the CPU in XA mode: read it (header + subheader + data) and
         // look for our channel's end marker.
@@ -149,15 +172,19 @@ class XaAction : public psyqo::CDRomDevice::Action<XaState> {
             }
         }
         eastl::atomic_signal_fence(eastl::memory_order_release);
-        return false;
+        return aborted(); // the sector was read: an abort ends the action here
     }
     bool complete(const psyqo::CDRomDevice::Response &) override {
+        if (aborted())
+            return true;
         if (getState() != XaState::PAUSE_ACK)
             return false;
         setSuccess(true);
         return true;
     }
     bool acknowledge(const psyqo::CDRomDevice::Response &) override {
+        if (aborted())
+            return true;
         switch (getState()) {
             case XaState::SETLOC:
                 setState(XaState::SETFILTER);
@@ -195,6 +222,7 @@ class XaAction : public psyqo::CDRomDevice::Action<XaState> {
 
   private:
     volatile bool m_pauseRequested = false;
+    volatile bool m_abort          = false;
 };
 
 XaAction s_action;
@@ -223,15 +251,39 @@ class DemuteAction : public psyqo::CDRomDevice::Action<DemuteState> {
 };
 DemuteAction s_demute;
 
+// PS1XaStop / PS1XaPause (PauseSound: the pause menu, every 1-up's jingle): wait for the drive's PAUSE. Bounded
+// (docs/29: every CD wait needs a bound; tester report 2026-10-10, freezes at 1-ups not reproduced in emulators): after
+// XA_WAIT_HBL without an answer the action is aborted (XaAction::abort), and after as long again it is given up
+// (the drive answers nothing at all). Root counter 1 wraps at 16 bits: the elapsed time is summed per iteration.
+#define XA_WAIT_HBL (3 * 15734) // ~3 s (NTSC hblanks; PAL a little longer)
 void waitIdle() {
-    while (s_xa.running && g_ps1GPU)
+    uint32_t last = PS1Hblanks(), waited = 0;
+    bool aborted = false;
+    while (s_xa.running && g_ps1GPU) {
         g_ps1GPU->pumpCallbacks();
+        uint32_t now = PS1Hblanks();
+        waited += (now - last) & 0xffff;
+        last = now;
+        if (waited > XA_WAIT_HBL) {
+            waited = 0;
+            if (!aborted) {
+                aborted = true;
+                g_ps1XaAborts = g_ps1XaAborts + 1;
+                s_action.abort();
+            } else {
+                g_ps1XaGiveUps = g_ps1XaGiveUps + 1;
+                s_xa.running = false; // nothing answers: the next CD action may find the device busy
+                break;
+            }
+        }
+    }
 }
 
 void startAction(bool resume) {
     PS1FsStopStream();
     s_xa.running = true;
     s_action.clearPauseRequest();
+    s_action.clearAbort();
     eastl::atomic_signal_fence(eastl::memory_order_release);
     s_action.start(resume);
 }

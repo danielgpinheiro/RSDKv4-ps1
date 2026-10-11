@@ -16,6 +16,7 @@ extern psyqo::GPU *g_ps1GPU;
 volatile uint32_t g_ps1CdIrqKicks  = 0;
 volatile uint32_t g_ps1DmaIrqKicks = 0;
 volatile uint32_t g_ps1CdIrqStale  = 0;
+volatile uint32_t g_ps1CdIrqOrphans = 0; // responses with no action registered (after an abort), drained here
 volatile uint32_t g_ps1IrqTestStaleCd = 0; // GDB test hook: > 0 -> make that many stale CD latches (checks cdIrqFilter)
 
 #define GUARD_PERIOD_US 10000 // a lost edge costs at most ~10 ms (plus the wait for the next pump)
@@ -89,6 +90,17 @@ static int cdIrqFilter() {
             CDRom::Cause = 0x18; // HCLRCTL: BFEMPT / BFWRDY, which psyqo's irq() doesn't expect alone either
         CPU::IReg.access() = ~cd; // 0 acknowledges, 1 leaves the other bits alone
         g_ps1CdIrqStale = g_ps1CdIrqStale + 1;
+    } else if (g_ps1CDRom && g_ps1CDRom->isIdle()) {
+        // A response with no action registered: the late answer of a command whose action was aborted
+        // (XaAction::abort, StreamAction::abort). psyqo's irq() would assert ("no action - spurious interrupt?").
+        // Acknowledged and drained as irq() does (cause, then the response FIFO), a data sector left unread.
+        CDRom::Cause = 7;
+        if (hintsts & 0x18)
+            CDRom::Cause = 0x18;
+        for (int i = 0; i < 16 && (CDRom::Ctrl.access() & 0x20); i++)
+            (void)CDRom::Response.access();
+        CPU::IReg.access() = ~cd;
+        g_ps1CdIrqOrphans = g_ps1CdIrqOrphans + 1;
     }
     CDRom::Ctrl = bank;
     return 0; // never runs a second function; the chain goes on

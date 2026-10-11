@@ -23,7 +23,8 @@ void PS1FsStopStream(); // cdrom_fs.cpp: one CD action at a time
 volatile uint32_t g_ps1StreamRestarts     = 0;
 volatile uint32_t g_ps1StreamDiscarded    = 0;
 volatile uint32_t g_ps1StreamInt1         = 0; // data-ready IRQs seen by the stream (delivered or dropped)
-volatile uint32_t g_ps1StreamCloseTimeout = 0; // closes that gave up waiting for the drive's PAUSE
+volatile uint32_t g_ps1StreamCloseTimeout = 0; // closes whose wait for the drive's PAUSE timed out: aborted (StreamAction::abort)
+volatile uint32_t g_ps1StreamCloseGiveUps = 0; // ... and the drive didn't answer the abort either (last resort)
 
 namespace {
 
@@ -75,8 +76,29 @@ class StreamAction : public psyqo::CDRomDevice::Action<StreamState> {
         }
         psyqo::Kernel::fastLeaveCriticalSection();
     }
+    // From the main loop (PS1StreamClose), when the drive hasn't answered the PAUSE in time: make it answer and end
+    // the action through psyqo's IRQ path (as XaAction::abort in ps1/xa_music.cpp; a plain timeout leaves the action
+    // registered and psyqo asserts on the next one). The abandoned command's late answers: ps1/irq_guard.cpp.
+    void abort() {
+        psyqo::Kernel::fastEnterCriticalSection();
+        m_abort = true;
+        psyqo::Hardware::CDRom::Command.send(psyqo::Hardware::CDRom::CDL::PAUSE);
+        psyqo::Kernel::fastLeaveCriticalSection();
+    }
+    void clearAbort() { m_abort = false; }
+    bool aborted() {
+        if (!m_abort)
+            return false;
+        m_abort = false;
+        setSuccess(false);
+        return true;
+    }
     bool dataReady(const psyqo::CDRomDevice::Response &) override {
         g_ps1StreamInt1 = g_ps1StreamInt1 + 1;
+        if (m_abort) { // dropped like a late sector; the abort ends the action
+            g_ps1StreamDiscarded = g_ps1StreamDiscarded + 1;
+            return aborted();
+        }
         StreamState st = getState();
         bool room = (s_stream.written - s_stream.consumed) < s_stream.ringSectors;
         if (s_stream.xa && st == StreamState::READ_ACK && !room && s_stream.written < s_stream.total && !s_stream.stopping) {
@@ -116,12 +138,16 @@ class StreamAction : public psyqo::CDRomDevice::Action<StreamState> {
         return false;
     }
     bool complete(const psyqo::CDRomDevice::Response &) override {
+        if (aborted())
+            return true;
         if (getState() != StreamState::PAUSE_ACK)
             return false;
         setSuccess(true);
         return true;
     }
     bool acknowledge(const psyqo::CDRomDevice::Response &) override {
+        if (aborted())
+            return true;
         StreamState st = getState();
         if (s_stream.stopping && st != StreamState::PAUSE && st != StreamState::PAUSE_ACK) {
             setState(StreamState::PAUSE); // closed mid-sequence (requestPause): no further commands
@@ -159,6 +185,9 @@ class StreamAction : public psyqo::CDRomDevice::Action<StreamState> {
         }
         return false;
     }
+
+  private:
+    volatile bool m_abort = false;
 };
 
 StreamAction s_action;
@@ -166,6 +195,7 @@ StreamAction s_action;
 void startRead() {
     s_stream.running = true;
     eastl::atomic_signal_fence(eastl::memory_order_release);
+    s_action.clearAbort();
     s_action.start(g_ps1CDRom, s_stream.startLBA + s_stream.written);
 }
 
@@ -255,18 +285,27 @@ void PS1StreamClose() {
         s_action.requestPause(); // PAUSE now (or on the pending ack), never "on the next sector"
     s_stream.stopping = true;
     eastl::atomic_signal_fence(eastl::memory_order_release);
-    // Bounded: a drive that never answers must not hang the game (root counter 1 wraps at 16 bits,
-    // so the elapsed time is summed per iteration).
+    // Bounded: a drive that never answers must not hang the game. After CLOSE_TIMEOUT_HBL the action is aborted
+    // (StreamAction::abort), after as long again given up. Root counter 1 wraps at 16 bits, so the elapsed time is
+    // summed per iteration.
     uint32_t last = PS1Hblanks(), waited = 0;
+    bool aborted = false;
     while (s_stream.running && g_ps1GPU) {
         g_ps1GPU->pumpCallbacks();
         uint32_t now = PS1Hblanks();
         waited += (now - last) & 0xffff;
         last = now;
         if (waited > CLOSE_TIMEOUT_HBL) {
-            g_ps1StreamCloseTimeout = g_ps1StreamCloseTimeout + 1;
-            s_stream.running = false; // give the CD back; the next action replaces this one
-            break;
+            waited = 0;
+            if (!aborted) {
+                aborted = true;
+                g_ps1StreamCloseTimeout = g_ps1StreamCloseTimeout + 1;
+                s_action.abort();
+            } else {
+                g_ps1StreamCloseGiveUps = g_ps1StreamCloseGiveUps + 1;
+                s_stream.running = false; // nothing answers: the next CD action may find the device busy
+                break;
+            }
         }
     }
     s_stream.open = false;
