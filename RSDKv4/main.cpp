@@ -81,6 +81,10 @@ __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
     g_ps1HeapHeadroom = ss - top;
 }
 
+#ifdef PS1_COMBO_TEST
+void PS1ComboTestTick(uint32_t frame); // ps1/combo_test.cpp
+#endif
+
 #ifdef PS1_BOOT_FOLDER
 extern "C" const char g_ps1BootBuild[] = PS1_BOOT_FOLDER; // marks a `make BOOT=` test build (make dist refuses it)
 #endif
@@ -154,6 +158,9 @@ class RSDKv4PS1App final : public psyqo::Application {
         if (cpu > 262)
             g_ps1PerfOverHbl = g_ps1PerfOverHbl + 1;
         PS1PerfTick(gpu());
+#ifdef PS1_COMBO_TEST
+        PS1ComboTestTick(g_ps1PerfFrames);
+#endif
     }
 
     psyqo::CDRomDevice m_cdrom;

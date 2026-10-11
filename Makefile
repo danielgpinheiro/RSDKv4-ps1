@@ -88,6 +88,13 @@ CPPFLAGS += -DPS1_PC_SAMPLER=1
 SRCS += ps1/pc_sampler.cpp
 endif
 
+# `make BOOT=<stage> COMBO=1|2 [GAP=n]`: 1-up jingle + Sign Post (1) / Super (2) test, no debugger needed
+# (ps1/combo_test.cpp; RetroArch cores).
+ifneq ($(COMBO),)
+CPPFLAGS += -DPS1_COMBO_TEST=$(COMBO) -DPS1_COMBO_GAP=$(or $(GAP),30)
+SRCS += ps1/combo_test.cpp
+endif
+
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp).
 ifeq ($(MEMCARD_TEST),1)
 CPPFLAGS += -DPS1_MEMCARD_TEST=1
@@ -97,11 +104,11 @@ endif
 # Build-flag stamp: every object depends on build/flags.txt, rewritten only when PROFILE / BOOT / BOOT_ID /
 # BOOT_PLAYER / GAME change, so switching them rebuilds everything (make only sees source timestamps otherwise: a
 # PROFILE=1 build once kept a non-profile Object.o).
-BUILD_FLAGS := PROFILE=$(PROFILE) SAMPLER=$(SAMPLER) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER) GAME=$(GAME)
+BUILD_FLAGS := PROFILE=$(PROFILE) SAMPLER=$(SAMPLER) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER) GAME=$(GAME) COMBO=$(COMBO) GAP=$(GAP)
 # The objects are deleted too: macOS's make 3.81 compares timestamps to the second, and an object built in the same second
 # as the rewrite (a GAME=2 build followed at once by GAME=1) looked up to date and kept the other game's code.
 $(shell mkdir -p build; echo '$(BUILD_FLAGS)' | cmp -s - build/flags.txt || { echo '$(BUILD_FLAGS)' > build/flags.txt; \
-        rm -f $(addsuffix .o,$(basename $(SRCS) ps1/platform_test.cpp ps1/memcard_test.cpp ps1/pc_sampler.cpp)) rsdkv4.elf; })
+        rm -f $(addsuffix .o,$(basename $(SRCS) ps1/platform_test.cpp ps1/memcard_test.cpp ps1/pc_sampler.cpp ps1/combo_test.cpp)) rsdkv4.elf; })
 EXTRA_DEPS += build/flags.txt
 
 # C++20 is the minimum required by psyqo.
@@ -156,6 +163,7 @@ LICENSE ?= ../LICENSE.DAT
 DIST := build/dist/Sonic$(GAME)-PS1
 dist:
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1BootBuild; then echo "dist: rsdkv4.ps-exe is a BOOT= test build"; exit 1; fi
+	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1ComboTest; then echo "dist: rsdkv4.ps-exe is a COMBO= test build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1McTestSteps; then echo "dist: rsdkv4.ps-exe is a MEMCARD_TEST build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1PcSamples; then echo "dist: rsdkv4.ps-exe is a SAMPLER build"; exit 1; fi
 	@if ! mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1InitDone; then echo "dist: rsdkv4.ps-exe is not the game (PLATFORM_TEST?)"; exit 1; fi
