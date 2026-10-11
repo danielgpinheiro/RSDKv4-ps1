@@ -178,6 +178,8 @@ struct MenuState {
     int player;    // player select: 0 Sonic, 1 Sonic & Tails, 2 Tails, 3 Knuckles (the native SAVESEL_* order)
     int timer;
     int fade;      // frames of fade-in left
+    int delDialog; // save select: the delete dialog is open (saveDeleteFrame)
+    int delSel;    // its selection: 0 YES, 1 NO
 } s_m;
 
 const int kPlayerChar[4] = { 0, 3, 1, 2 }; // SAVESEL_SONIC / ST / TAILS / KNUX -> characterID
@@ -580,6 +582,59 @@ void go(int screen, int sel = 0) {
     s_m.fade   = 8;
 }
 
+// SaveSelect.cpp SAVESELECT_STATE_DELSETUP / DIALOGWAIT (the mobile versions' DELETE button): a used file is deleted
+// behind the DialogPanel's yes / no ("Delete Saved Game?", NO first like the pause dialogs). On the PS1 Select opens it on
+// the selected file (tester report 2026-10-10). YES resets the file as the native does (characterID 0, 3 lives, score
+// 0, bonus 50000, stage 0, no emeralds) and writes the card; the other files, the records and the options stay.
+// Returns true while the dialog is open (it takes the screen's input and draws over the list).
+bool saveDeleteFrame(int moveX, bool ok, bool back, bool select) {
+    const PS1MenuPack &rp = g_ps1MenuResident;
+    SaveGame *saveGame    = (SaveGame *)saveRAM;
+    int slot              = s_m.sel - 1;
+    if (!s_m.delDialog) {
+        if (!select || slot < 0 || saveGame->files[slot].stageID <= 0)
+            return false;
+        PlaySfxByName("Menu Select", false);
+        s_m.delDialog = 1;
+        s_m.delSel    = 1;
+        moveX         = 0;
+        ok = back = false;
+    }
+    s_m.delSel = (s_m.delSel + moveX + 2) & 1;
+    drawRect(30, 60, 260, 120, 16, 40, 150); // the pause dialogs' panel
+    drawText(rp, PS1_FONT_TEXT_S, PS1MenuString(PS1_STR_DELETE_SAVED_GAME), 160, 96, 1);
+    for (int i = 0; i < 2; ++i) {
+        int x = i ? 200 : 120;
+        if (i == s_m.delSel)
+            drawRect(x - 34, 145, 68, 18, 170, 130, 0);
+        drawText(rp, PS1_FONT_LABEL_S, PS1MenuString(i ? PS1_STR_NO : PS1_STR_YES), x, 148, 1);
+    }
+    if (ok && s_m.delSel == 0) {
+        PlaySfxByName("Event", false);
+        SaveFile &f      = saveGame->files[slot];
+        f.characterID    = 0;
+        f.lives          = 3;
+        f.score          = 0;
+        f.scoreBonus     = 50000;
+        f.stageID        = 0;
+        f.emeralds       = 0;
+        f.specialStageID = 0;
+        WriteSaveRAMData();
+        s_m.delDialog = 0;
+    }
+    else if (ok || back) {
+        PlaySfxByName("Menu Back", false);
+        s_m.delDialog = 0;
+    }
+    return true;
+}
+
+// The save screen's hint on a used file's bar (right of the emeralds).
+void saveDeleteHint(const PS1MenuPack &mp, int y) {
+    static const char hint[] = "SELECT: DELETE";
+    drawText(mp, PS1_FONT_LABEL_M, hint, 312 - textWidth(mp, PS1_FONT_LABEL_M, hint), y + 20);
+}
+
 // ---- screens -----------------------------------------------------------------------------------------
 
 void titleScreen(bool ok, bool back) {
@@ -624,14 +679,15 @@ void mainScreen(int move, bool ok, bool back) {
 }
 
 #if PS1_GAME == 1
-void saveScreen(int move, bool ok, bool back) {
+void saveScreen(int move, int moveX, bool ok, bool back, bool select) {
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
     static const int icons[4] = { PS1_MENU_ICON_SONIC, PS1_MENU_ICON_TAILS, PS1_MENU_ICON_KNUX, PS1_MENU_ICON_SONIC };
     // SubMenuButton S1's six; the 7th (options.superStates) in its special-stage sprite's purple (Special/Objects.gif
     // 0xA440FF, brightened like the six)
     static const uint32_t emeralds[7] = { 0x8080FF, 0xFFFF00, 0xFF60C0, 0xA0FF00, 0xFF4060, 0xFFFFFF, 0xBA49FF };
-    s_m.sel = (s_m.sel + move + 5) % 5;
+    if (!s_m.delDialog)
+        s_m.sel = (s_m.sel + move + 5) % 5;
     drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SAVE_SELECT), 160, 6, 1);
     for (int i = 0; i < 5; ++i) {
         int y = 44 + i * 38;
@@ -655,6 +711,8 @@ void saveScreen(int move, bool ok, bool back) {
         if ((f.characterID & 3) == 3)
             drawImage(mp.images[PS1_MENU_ICON_TAILS], 28, y + 2);
         drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(name), 60, y + 3);
+        if (i == s_m.sel && !s_m.delDialog)
+            saveDeleteHint(mp, y);
         int shown = (f.emeralds >> 6) & 1 || optSevenEmeralds() ? 7 : 6; // the 7th only when it can be (or was) won
         for (int e = 0; e < shown; ++e) { // each in its colour when collected (SubMenuButton, GAME_SONIC1)
             if ((f.emeralds >> e) & 1)
@@ -663,6 +721,8 @@ void saveScreen(int move, bool ok, bool back) {
                 drawImage(mp.images[PS1_MENU_EMERALD_OFF], 60 + e * 12, y + 20);
         }
     }
+    if (saveDeleteFrame(moveX, ok, back, select))
+        return;
     if (ok) {
         PlaySfxByName("Menu Select", false);
         int slot = s_m.sel - 1;
@@ -896,11 +956,12 @@ void recordsScreen(int moveX, bool ok, bool back) {
 }
 
 #else
-void saveScreen(int move, bool ok, bool back) {
+void saveScreen(int move, int moveX, bool ok, bool back, bool select) {
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
     static const int icons[4] = { PS1_MENU_ICON_SONIC, PS1_MENU_ICON_TAILS, PS1_MENU_ICON_KNUX, PS1_MENU_ICON_SONIC };
-    s_m.sel = (s_m.sel + move + 5) % 5;
+    if (!s_m.delDialog)
+        s_m.sel = (s_m.sel + move + 5) % 5;
     drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SAVE_SELECT), 160, 6, 1);
     for (int i = 0; i < 5; ++i) {
         int y = 44 + i * 38;
@@ -923,9 +984,13 @@ void saveScreen(int move, bool ok, bool back) {
         if ((f.characterID & 3) == 3)
             drawImage(mp.images[PS1_MENU_ICON_TAILS], 28, y + 2);
         drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(name), 60, y + 3);
+        if (i == s_m.sel && !s_m.delDialog)
+            saveDeleteHint(mp, y);
         for (int e = 0; e < 7; ++e)
             drawImage(mp.images[(f.emeralds >> e) & 1 ? PS1_MENU_EMERALD_ON : PS1_MENU_EMERALD_OFF], 60 + e * 12, y + 20);
     }
+    if (saveDeleteFrame(moveX, ok, back, select))
+        return;
     if (ok) {
         PlaySfxByName("Menu Select", false);
         int slot = s_m.sel - 1;
@@ -1188,7 +1253,7 @@ void PS1MenuFrame() {
     switch (screen) {
         case PS1_MENU_TITLE: titleScreen(ok, back); break;
         case PS1_MENU_MAIN: mainScreen(moveY, ok, back); break;
-        case PS1_MENU_SAVE: saveScreen(moveY, ok, back); break;
+        case PS1_MENU_SAVE: saveScreen(moveY, moveX, ok, back, keyPress.select); break;
         case PS1_MENU_PLAYER: playerScreen(moveX, ok, back); break;
         case PS1_MENU_OPTIONS: optionsScreen(moveY, moveX, ok, back); break;
         case PS1_MENU_TIMEATTACK: timeAttackScreen(moveY, ok, back); break;

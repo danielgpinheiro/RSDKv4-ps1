@@ -81,7 +81,9 @@ FONTS = [
 HEADING_KEYS = ['Pause', 'SaveSelect', 'PlayerSelect', 'TimeAttack', 'Settings', 'Records', 'HelpAndOptions', 'Options']
 TEXT_KEYS = ['RestartMessage', 'ExitMessage', 'DeleteSavedGame', 'NewBestTime', 'TotalTime', 'PressStart']
 RESIDENT_KEYS = {'heading': ['Pause'], 'label': ['Continue', 'Restart', 'Exit', 'Yes', 'No'],
-                 'text': ['RestartMessage', 'ExitMessage']}
+                 # DeleteSavedGame: the save screen's delete dialog (tester report 2026-10-10) is drawn like the
+                 # pause dialogs, with the resident fonts
+                 'text': ['RestartMessage', 'ExitMessage', 'DeleteSavedGame']}
 
 # VRAM areas (halfwords): x, y, w, h
 RESIDENT_AREA = [(0, 242, 320, 14)]               # glyph strips; 4-bit texture pages at pageX 0-4, pageY 0
