@@ -153,7 +153,7 @@ $(OBJS): build/flags.txt
 ORDER_ENV := $(if $(filter 1,$(GAME)),PS1_LOAD_ORDER=tools/disc/load_order_s1.txt PS1_EXE_NAME=SONIC1.EXE)
 disc:
 	$(ORDER_ENV) /usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe none build/game
-	/usr/bin/python3 tools/disc/verify_disc.py build/game.bin build/iso rsdkv4.ps-exe none
+	$(ORDER_ENV) /usr/bin/python3 tools/disc/verify_disc.py build/game.bin build/iso rsdkv4.ps-exe none
 
 # Distribution image (docs/30 phase 10): the natural game only (not a BOOT= / PROFILE / MEMCARD_TEST / PLATFORM_TEST
 # build), on a disc with the license sectors from the workspace's LICENSE.DAT (read by path, never copied;
@@ -168,10 +168,10 @@ dist:
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1PcSamples; then echo "dist: rsdkv4.ps-exe is a SAMPLER build"; exit 1; fi
 	@if ! mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1InitDone; then echo "dist: rsdkv4.ps-exe is not the game (PLATFORM_TEST?)"; exit 1; fi
 	@if ! grep -q "^PROFILE= " build/flags.txt; then echo "dist: rsdkv4.ps-exe is a PROFILE build"; exit 1; fi
-	@if ! grep -q " GAME=$(GAME)$$" build/flags.txt; then echo "dist: rsdkv4.ps-exe was built for another GAME"; exit 1; fi
+	@if ! grep -qE " GAME=$(GAME)( |$$)" build/flags.txt; then echo "dist: rsdkv4.ps-exe was built for another GAME"; exit 1; fi
 	mkdir -p build/dist
 	$(ORDER_ENV) /usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe $(LICENSE) $(DIST)
-	/usr/bin/python3 tools/disc/verify_disc.py $(DIST).bin build/iso rsdkv4.ps-exe $(LICENSE)
+	$(ORDER_ENV) /usr/bin/python3 tools/disc/verify_disc.py $(DIST).bin build/iso rsdkv4.ps-exe $(LICENSE)
 	cd build/dist && shasum -a 256 Sonic$(GAME)-PS1.bin Sonic$(GAME)-PS1.cue > SHA256SUMS && cat SHA256SUMS
 
 .PHONY: disc dist
