@@ -150,7 +150,7 @@ $(OBJS): build/flags.txt
 # Test disc (phase 0): a hand-picked subset of ../Sonic2_Extracted/Data (tools/smoke_disc.sh), then
 # mkpsxiso + the byte-level verifier. The real asset pipeline arrives in phase 1.
 # GAME=1: Sonic 1's load order (tools/disc/load_order_s1.txt, written by GAME=1 tools/data_disc.sh).
-ORDER_ENV := $(if $(filter 1,$(GAME)),PS1_LOAD_ORDER=tools/disc/load_order_s1.txt)
+ORDER_ENV := $(if $(filter 1,$(GAME)),PS1_LOAD_ORDER=tools/disc/load_order_s1.txt PS1_EXE_NAME=SONIC1.EXE)
 disc:
 	$(ORDER_ENV) /usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv4.ps-exe none build/game
 	/usr/bin/python3 tools/disc/verify_disc.py build/game.bin build/iso rsdkv4.ps-exe none

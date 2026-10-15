@@ -30,6 +30,7 @@ for d in scripts atlas tiles bgstrips menu audio disc; do
   cp tools/$d/*.py "$B/tools/$d/"
 done
 cp tools/disc/$TRACE "$B/tools/disc/"
+[ "$GAME" = 1 ] && echo SONIC1.EXE > "$B/tools/disc/exe_name.txt" || echo SONIC2.EXE > "$B/tools/disc/exe_name.txt" # the disc's executable name (build_disc.exe_name)
 rm -f "$B/tools/audio/listen_sfx.py" # a listening aid for the port, not a build step
 cp tools/rsdkmanifest/Makefile tools/rsdkmanifest/main.cpp tools/rsdkmanifest/host_stubs.cpp "$B/tools/rsdkmanifest/"
 cp RSDKv4/*.hpp "$B/RSDKv4/"
