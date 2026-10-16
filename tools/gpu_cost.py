@@ -65,7 +65,9 @@ if tail is not None and node != tail:
 tex_mode = 0          # E1 bits 7-8: 0 = 4-bit, 1 = 8-bit, 2 = 15-bit
 semi_mode = 0
 check_mask = False
-area = (0, 0, 1023, 511)
+# psyqo sets the drawing area and offset outside the chain, at every flip (nugget/psyqo/src/gpu.cpp getScissor):
+# (0, 0)-(width, height) relative to the frame's buffer; the chain's coordinates are relative to that offset.
+area = (0, 0, 320, 240)
 offset = (0, 0)
 clut_reg, clut_8 = None, False
 
