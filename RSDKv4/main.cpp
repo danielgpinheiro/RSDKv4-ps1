@@ -36,6 +36,27 @@ static uint32_t s_ps1PerfLastCount         = 0;
 volatile uint32_t g_ps1PerfWinFrom = 0xFFFFFFFFu, g_ps1PerfWinTo = 0;
 volatile uint32_t g_ps1PerfWinFrames = 0, g_ps1PerfWinHbl = 0, g_ps1PerfWinMaxHbl = 0; // frames, CPU hblanks sum / worst
 volatile uint32_t g_ps1PerfWinVbl = 0, g_ps1PerfWinMaxVbl = 0, g_ps1PerfWinOver = 0;   // vblanks sum / worst, CPU > 262
+#ifdef PS1_PERF_SPLIT
+// `make PERF_SPLIT=1` (docs/43, harness only): the frame time besides the CPU's. psyqo sends a frame's chain right after
+// the flip, so the GPU draws it while the CPU builds the next frame, and the flip waits for that chain and a new vblank.
+// GpuTail: hblanks the GPU was still drawing the previous frame's chain (its DMA, up to the GPU FIFO's last 16 words)
+// after this frame's CPU work ended; 0 in PCSX-Redux, which draws instantly, modelled by DuckStation. Flip: hblanks from
+// the end of frame() to the next frame() (the vblank wait; the tail is already waited for). Window sums as above, plus
+// the window sums of the per-frame section counters (g_ps1PerfWinSec[], order as s_ps1PerfSec).
+volatile uint32_t g_ps1PerfGpuTail = 0, g_ps1PerfFlip = 0;
+volatile uint32_t g_ps1PerfWinTail = 0, g_ps1PerfWinMaxTail = 0, g_ps1PerfWinTailFrames = 0; // sum / worst / frames > 0
+volatile uint32_t g_ps1PerfWinFlip = 0, g_ps1PerfWinMaxFlip = 0;
+static uint32_t s_ps1FrameEnd = 0;
+extern volatile uint32_t g_ps1ProfObjectsHbl, g_ps1ProfDrawHbl, g_ps1ProfObjDrawHbl, g_ps1ProfFloorsHbl, g_ps1ProfLayer[5];
+extern volatile uint32_t g_ps1Prof3DTransformHbl, g_ps1Prof3DSortHbl, g_ps1Prof3DDrawHbl;
+// objects, draw (all of DrawStageGFX), object draw subs, 3D floors, FG layers, per-line passes, tile bands, strip bands,
+// 3D transform, sort, draw (the last Draw3DScene: stale outside 3D scenes)
+static volatile uint32_t *const s_ps1PerfSec[11] = {
+    &g_ps1ProfObjectsHbl, &g_ps1ProfDrawHbl, &g_ps1ProfObjDrawHbl, &g_ps1ProfFloorsHbl, &g_ps1ProfLayer[0],
+    &g_ps1ProfLayer[1], &g_ps1ProfLayer[2], &g_ps1ProfLayer[3], &g_ps1Prof3DTransformHbl, &g_ps1Prof3DSortHbl,
+    &g_ps1Prof3DDrawHbl};
+volatile uint32_t g_ps1PerfWinSec[11] = {};
+#endif
 
 psyqo::GPU *g_ps1GPU           = nullptr;
 psyqo::AdvancedPad *g_ps1Pad   = nullptr;
@@ -69,6 +90,19 @@ __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
                 g_ps1PerfWinMaxVbl = d;
             if (h > 262)
                 g_ps1PerfWinOver = g_ps1PerfWinOver + 1;
+#ifdef PS1_PERF_SPLIT
+            uint32_t t = g_ps1PerfGpuTail, fl = g_ps1PerfFlip;
+            g_ps1PerfWinTail = g_ps1PerfWinTail + t;
+            g_ps1PerfWinFlip = g_ps1PerfWinFlip + fl;
+            if (t)
+                g_ps1PerfWinTailFrames = g_ps1PerfWinTailFrames + 1;
+            if (t > g_ps1PerfWinMaxTail)
+                g_ps1PerfWinMaxTail = t;
+            if (fl > g_ps1PerfWinMaxFlip)
+                g_ps1PerfWinMaxFlip = fl;
+            for (int k = 0; k < 11; ++k)
+                g_ps1PerfWinSec[k] = g_ps1PerfWinSec[k] + *s_ps1PerfSec[k];
+#endif
         }
     }
     s_ps1PerfLastCount = now;
@@ -145,6 +179,10 @@ class RSDKv4PS1App final : public psyqo::Application {
     void frame() override
     {
         uint32_t t0 = PS1Hblanks();
+#ifdef PS1_PERF_SPLIT
+        if (s_ps1FrameEnd)
+            g_ps1PerfFlip = (t0 - s_ps1FrameEnd) & 0xffff;
+#endif
         PS1MenuTestService(); // GDB: g_ps1MenuTestLoad
         PS1SaveTestService(); // GDB: g_ps1SaveTest
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
@@ -157,9 +195,17 @@ class RSDKv4PS1App final : public psyqo::Application {
             g_ps1PerfMaxHbl = cpu;
         if (cpu > 262)
             g_ps1PerfOverHbl = g_ps1PerfOverHbl + 1;
+#ifdef PS1_PERF_SPLIT
+        uint32_t tw = PS1Hblanks();
+        gpu().waitChainIdle(); // psyqo's flip waits for it too
+        g_ps1PerfGpuTail = PS1HblanksSince(tw);
+#endif
         PS1PerfTick(gpu());
 #ifdef PS1_COMBO_TEST
         PS1ComboTestTick(g_ps1PerfFrames);
+#endif
+#ifdef PS1_PERF_SPLIT
+        s_ps1FrameEnd = PS1Hblanks();
 #endif
     }
 
