@@ -6,6 +6,7 @@
 # CHASE=1: tools/perf_scene.sh's input instead (Right from 240, Right + A from 420 to 432, then Right): profile the frames
 # perf_scene.sh times. The ELF is copied to OUT.elf with the samples and the report maps through that copy, so a report
 # re-run after a rebuild still reads the right symbols (docs/32 9f lesson).
+# PRE='gdb commands': run before the game starts (e.g. a breakpoint that sets a global at the stage load).
 cd "$(dirname "$0")/.."
 OUT=$1; START=${2:-300}; END=${3:-420}
 . tools/redux_env.sh
@@ -17,6 +18,7 @@ set pagination off
 set confirm off
 target remote localhost:${REDUX_PORT}
 symbol-file $OUT.elf
+${PRE:-}
 break PS1PerfTick if g_ps1PerfFrames == ${FROM:-240}
 continue
 set var g_ps1PadTestMask = ${MASK:-8}

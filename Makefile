@@ -114,8 +114,12 @@ BUILD_FLAGS := PROFILE=$(PROFILE) SAMPLER=$(SAMPLER) BOOT=$(BOOT) BOOT_ID=$(BOOT
 # The objects are deleted too: macOS's make 3.81 compares timestamps to the second, and an object built in the same second
 # as the rewrite (a GAME=2 build followed at once by GAME=1) looked up to date and kept the other game's code.
 $(shell mkdir -p build; echo '$(BUILD_FLAGS)' | cmp -s - build/flags.txt || { echo '$(BUILD_FLAGS)' > build/flags.txt; \
-        rm -f $(addsuffix .o,$(basename $(SRCS) ps1/platform_test.cpp ps1/memcard_test.cpp ps1/pc_sampler.cpp ps1/combo_test.cpp)) rsdkv4.elf rsdkv4.ps-exe; })
+        rm -f $(addsuffix .o,$(basename $(SRCS) ps1/platform_test.cpp ps1/memcard_test.cpp ps1/pc_sampler.cpp ps1/combo_test.cpp)) rsdkv4.elf; })
 EXTRA_DEPS += build/flags.txt
+# The EXE is always re-made from the ELF (one objcopy): an EXE written in the same second as the ELF it came from once
+# looked up to date after a flag switch (make 3.81). Not deleted with the objects: `make disc` (which uses it) may run
+# with other flags.
+.PHONY: rsdkv4.ps-exe
 
 # C++20 is the minimum required by psyqo.
 CXXFLAGS = -std=c++20
