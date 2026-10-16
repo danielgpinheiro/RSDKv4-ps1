@@ -1,0 +1,12 @@
+#!/bin/bash
+# GDB 18 wrapper for the PCSX-Redux harness scripts (the default GDB of perf_scene.sh / scene_run.sh / pc_profile.sh; docs/43): each -x script's "target remote localhost:N" goes through
+# gdbrelay.py (the stub's thread id fixed); everything else is passed to /opt/homebrew/bin/gdb as is.
+D=$(cd "$(dirname "$0")" && pwd); T=${TMPDIR:-/tmp}
+args=(); prev=
+for a in "$@"; do
+  if [ "$prev" = "-x" ] && [ -f "$a" ]; then
+    t=$(mktemp "$T/gdbw.XXXXXX"); sed -E "s#target remote localhost:([0-9]+)#target remote | /usr/bin/python3 $D/gdbrelay.py \\1#" "$a" > "$t"; a=$t
+  fi
+  args+=("$a"); prev=$a
+done
+exec /opt/homebrew/bin/gdb "${args[@]}"

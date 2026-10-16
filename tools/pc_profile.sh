@@ -53,7 +53,7 @@ redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another s
 $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
 EMU=$!
 sleep 4
-timeout ${TIMEOUT:-600} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "SAMPLES .*" | tee "$OUT.txt"
+timeout ${TIMEOUT:-600} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "SAMPLES .*" | tee "$OUT.txt"
 kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
 /usr/bin/python3 - "$OUT" <<'PYEOF' | tee -a "$OUT.txt"
 import bisect, collections, os, struct, subprocess, sys

@@ -71,7 +71,7 @@ else
     EMU_PID=$!
     sleep 4
 fi
-timeout -k 10 ${TIMEOUT:-900} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" > "$OUT.gdblog" 2>&1
+timeout -k 10 ${TIMEOUT:-900} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" > "$OUT.gdblog" 2>&1
 if [ "$EMU" = ds ]; then ds_stop; else kill $EMU_PID 2>/dev/null; wait $EMU_PID 2>/dev/null; fi
 X=$(grep -oE "X P0 .*" "$OUT.gdblog")
 /usr/bin/python3 - "$OUT" "$EMU" "$X" <<'PYEOF' | tee "$OUT.txt"
