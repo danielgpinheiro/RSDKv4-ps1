@@ -15,6 +15,8 @@
 #   SHOTS="f1 f2 ..." (PCSX-Redux only): at these frames save VRAM (web API: both framebuffers, the frame before f
 #   complete) to OUT_shot_F.vram and the entity table to OUT_ent_F.bin, for exact A/B checks between builds
 #   (tools/shots_cmp.py REF_OUT NEW_OUT; docs/perf-43-tracker.md).
+#   PAD="f:mask ...": more pad masks at engine frames (after the chase's own at 240 / 420 / 432).
+#   HOLD=0x18: the pad mask held from frame 240 instead of Right (0x08), e.g. Right + A to keep jumping.
 #   MID='gdb lines' / POST='gdb lines' run at frame FROM / at the window's end (e.g. printf of counters: delta = POST - MID).
 #   A `make PERF_SPLIT=1` build adds a "SPLIT" line: GPU tail (GPU still drawing the previous chain after the CPU's work;
 #   only DuckStation models it), flip gap, and the section averages, hblanks a frame over the window (RSDKv4/main.cpp).
@@ -22,6 +24,7 @@ cd "$(dirname "$0")/.."
 OUT=$1; FROM=${2:-300}; TO=${3:-900}
 EMU=${EMU:-redux}
 JM=0x18; [ "${JUMP:-1}" = 0 ] && JM=0x08
+HOLD=${HOLD:-0x08} # the pad mask held from frame 240 (0x18 = Right + A: keeps jumping)
 ELF=${RUN_ELF:-rsdkv4.elf}   # RUN_EXE / RUN_ELF: run a saved build (A/B against a reference) instead of the tree's
 if [ "$EMU" = ds ]; then
     . tools/emu_ds.sh
@@ -39,22 +42,26 @@ printf "%s\n%s\n" "$HDR" "${PRE:-}" > "$OUT.hdr"
 SPLIT=0; mipsel-none-elf-nm "$ELF" 2>/dev/null | grep -q g_ps1PerfGpuTail && SPLIT=1
 # The GDB script: one conditional break per event frame, in order (PS1PerfTick runs at the frame's end, after its chain is
 # complete): the window and pad at 240 / 420 / 432, the GPU dumps, the window's counters at TO + 1.
-/usr/bin/python3 - "$OUT" "$FROM" "$TO" "$JM" "$SPLIT" "${GPU:-}" "${SHOTS:-}" "${REDUX_WEB:-}" "${POST:-}" "${MID:-}" > "$OUT.gdb" <<'PYEOF'
+/usr/bin/python3 - "$OUT" "$FROM" "$TO" "$JM" "$SPLIT" "${GPU:-}" "${SHOTS:-}" "${REDUX_WEB:-}" "${POST:-}" "${MID:-}" "$HOLD" "${PAD:-}" > "$OUT.gdb" <<'PYEOF'
 import sys
+hold = sys.argv[11]
+pad = [tuple(e.split(':')) for e in sys.argv[12].split()]  # PAD="frame:mask ...": extra pad masks at engine frames
 out, frm, to, jm, split, gpu = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5] == '1', sys.argv[6].split()
 shots, web = sys.argv[7].split(), sys.argv[8]
 post, mid = sys.argv[9], sys.argv[10]  # POST: GDB lines at the window's end; MID: at the window's start (frame FROM)
 ev = {}
 def add(f, *lines): ev.setdefault(f, []).extend(lines)
-add(240, 'set var g_ps1PerfWinFrom = %d' % frm, 'set var g_ps1PerfWinTo = %d' % to, 'set var g_ps1PadTestMask = 0x08')
+add(240, 'set var g_ps1PerfWinFrom = %d' % frm, 'set var g_ps1PerfWinTo = %d' % to, 'set var g_ps1PadTestMask = %s' % hold)
 add(420, 'set var g_ps1PadTestMask = %s' % jm)
-add(432, 'set var g_ps1PadTestMask = 0x08')
+add(432, 'set var g_ps1PadTestMask = %s' % hold)
 for f in map(int, gpu):
     add(f, 'dump binary memory %s_gpu_%d.ram 0x80000000 0x80200000' % (out, f),
         'printf "GPUHEAD %u %08x %08x %08x %d\\n", g_ps1PerfFrames, (unsigned)g_ps1GPU->m_chainHead, '
         '(unsigned)g_ps1GPU->m_chainTail, (unsigned)g_ps1GPU->m_chainTailCount, (int)g_ps1GPU->m_chainHeadOversized')
 if mid:
     add(frm, *mid.split('\n'))
+for f, m in pad:
+    add(int(f), 'set var g_ps1PadTestMask = %s' % m)
 for f in map(int, shots):
     add(f, 'shell curl -s -o %s_shot_%d.vram http://localhost:%s/api/v1/gpu/vram/raw' % (out, f, web),
         'dump binary memory %s_ent_%d.bin (char*)objectEntityList (char*)objectEntityList+sizeof(objectEntityList)' % (out, f))
@@ -83,7 +90,7 @@ if [ "$EMU" = ds ]; then
 else
     for attempt in 1 2; do # a rare GDB race ("target is running": the first continue lost) loses a run: once more
         redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running: not starting it" >&2; exit 2; }
-        $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe ${RUN_EXE:-rsdkv4.ps-exe} >/dev/null 2>&1 &
+        $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso ${DISC:-build/game.cue} -exe ${RUN_EXE:-rsdkv4.ps-exe} >/dev/null 2>&1 &
         EMU_PID=$!
         sleep 4
         timeout -k 10 ${TIMEOUT:-900} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" > "$OUT.gdblog" 2>&1
