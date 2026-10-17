@@ -327,6 +327,17 @@ void PS1ChainTPage(psyqo::PrimPieces::TPageAttr attr) {
 
 void PS1ChainInvalidateTPage() { s_tpageValid = false; }
 
+// docs/43 G3: when the last texpage chained has flip bits (render.cpp's flipped tiles), chain the same page without them.
+void PS1ChainTPageNoFlip() {
+    if (!s_cur || !s_tpageValid || !(s_lastTPage & 0x3000))
+        return;
+    uint16_t raw = (uint16_t)(s_lastTPage & ~0x3000);
+    psyqo::PrimPieces::TPageAttr attr;
+    __builtin_memcpy(&attr, &raw, 2);
+    s_tpageValid = false;
+    PS1ChainTPage(attr);
+}
+
 bool g_ps1ChainSkipPrims = false;
 
 void PS1ChainSprite16(const psyqo::Prim::Sprite16x16 &s) {

@@ -71,6 +71,7 @@ void PS1SaveTestService(); // RSDKv4/Userdata.cpp (GDB test hook)
 void PS1RenderBeginFrame(psyqo::GPU &gpu); // ps1/render.cpp
 #include "../ps1/menu.hh"
 void PS1RenderEndFrame();
+void PS1DetectGpuVersion(); // ps1/render.cpp
 
 __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
 {
@@ -160,6 +161,7 @@ class RSDKv4PS1App final : public psyqo::Application {
         // calls get the cached result): a card read inside the load left the heap split under the chain arenas
         // (47 KB less headroom at the load peak).
         ReadSaveRAMData();
+        PS1DetectGpuVersion(); // flip-bit sprites for flipped tiles if the GPU draws them (ps1/render.cpp, docs/43 G3)
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
         PS1Scene3DReadList(); // the stages that get the Scene3D block (RSDKv4/Scene3D.cpp)
         Engine.Init();

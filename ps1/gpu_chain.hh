@@ -55,7 +55,8 @@ void PS1ChainRepeatLastFrame();
 // in chunkData[], halfword counts in chunkLen[]), 0 if the arena is full.
 int PS1ChainReserveRow(int count, int16_t x, int16_t y, uint16_t **chunkData, uint16_t *chunkLen, int maxChunks);
 void PS1ChainTPage(psyqo::PrimPieces::TPageAttr attr);         // skipped if identical to the last one
-void PS1ChainInvalidateTPage();                                // GPU texpage state unknown
+void PS1ChainInvalidateTPage();
+void PS1ChainTPageNoFlip(); // docs/43 G3: undo the flip bits of the last texpage, if any                                // GPU texpage state unknown
 void PS1ChainSprite16(const psyqo::Prim::Sprite16x16 &s);      // batched (tiles)
 // Fast tile path: a Sprite16x16 from its raw words (colour 0x80, xy = x | y << 16, tex = u | v << 8 | clut << 16).
 void PS1ChainSprite16Raw(uint32_t xy, uint32_t tex);

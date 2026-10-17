@@ -80,6 +80,7 @@ volatile uint32_t g_ps1ProfObjDrawHbl = 0; // this frame: object draw subs (scri
 volatile uint32_t g_ps1ProfFloorsHbl  = 0; // this frame: every 3D floor / sky layer
 volatile uint32_t g_ps1ProfLayer[5]   = {}; // this frame: FG (uniform) layers, per-line passes, tile bands, strip bands (hblanks), HScroll calls
 volatile uint32_t g_ps1ProfSlot[4]    = {}; // this frame: hblanks per draw slot (layerID 0-3)
+volatile uint32_t g_ps1TileFlipRects  = 0; // flipped tiles drawn as flip-bit sprites (total, docs/43 G3)
 volatile uint32_t g_ps1TileFlipped    = 0; // this frame: tiles drawn as flipped / partial quads or sprites (slow path)
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
 volatile int32_t g_ps1MissSheet = -1, g_ps1MissX = 0, g_ps1MissY = 0; // the last miss (atlas sheet, texel)
@@ -478,6 +479,7 @@ void PS1RenderMenuFrame(bool clear)
 
 void PS1RenderEndFrame()
 {
+    PS1ChainTPageNoFlip(); // the next frame / an immediate draw (loading icon, FMV) starts without flip bits (G3)
     if (!s_frameOpen) {
         PS1FrameStart(false); // nothing drawn: keep the image in both buffers
         PS1FillPalette(gfxLineBuffer[0]);
@@ -1404,6 +1406,58 @@ static void PS1TileSetup()
     }
 }
 
+// Texture flip bits (docs/43 G3; nocash psx-spx "GPU Render Rectangle Commands" / "GPU Versions"): GP0(E1h) bits 12-13
+// mirror rectangles on every GPU but the old 160-pin CXD8514Q (PU-7 / EARLY-PU-8 boards; every PSone has them), which is
+// why flipped tiles were 9-word textured quads (~3x a rectangle's GPU time, "GPU Rendering Timings"). Emulators differ
+// (PCSX-Redux and DuckStation before 2026-10-16 ignore the bits; DuckStation b9b8366 draws them), so the GPU is tested at
+// boot instead of trusting GP1(10h) index 7: two texels uploaded off screen, a 2 x 1 X-flipped rect drawn from them and read
+// back by GP0(C0h). Only when they come back mirrored (texcoord u0, then u0 - 1: the rule the quads' backwards UVs give)
+// are flipped tiles sprites under a flipped texpage (X flip starts at the tile's last texel column, u + 15).
+// g_ps1FlipRectsOn = 0 (GDB) forces the quads; g_ps1FlipRectsForce = 1 forces flip rects (harness: CPU cost on emulators
+// that don't draw them).
+static bool s_flipRects = false;
+volatile uint32_t g_ps1GpuVersion = 0, g_ps1FlipRectsOn = 1, g_ps1FlipTest = 0; // FlipTest: the readback word
+volatile uint32_t g_ps1FlipRectsForce = 0;
+void PS1DetectGpuVersion() // main.cpp start(), before anything is drawn
+{
+    using namespace psyqo::Hardware;
+    auto ready = []() { while (!(GPU::Ctrl & (1 << 26))) {} };
+    auto query = [](uint32_t index) { GPU::Ctrl = 0x10000000 | index; return (uint32_t)GPU::Data; };
+    ready();
+    const uint32_t area0 = query(3), area1 = query(4), offset = query(5), stat = GPU::Ctrl;
+    g_ps1GpuVersion = query(7); // 2 on the new GPU (DuckStation >= a9c01a6 answers; PCSX-Redux doesn't)
+    // the corner of VRAM (x 1016-1023, y 511): texels u 60-63 of the 15-bit page at x 960, y 256; free at boot
+    ready();
+    GPU::Data = 0xA0000000;                  // CPU -> VRAM
+    GPU::Data = (511u << 16) | 1020u;
+    GPU::Data = (1u << 16) | 4u;
+    GPU::Data = 0x56781234u;                 // u 60 = 1234h, u 61 = 5678h
+    GPU::Data = 0x0F0F0F0Fu;                 // u 62, 63
+    ready();
+    GPU::Data = 0xE3000000;                  // drawing area: all of VRAM, no offset
+    GPU::Data = 0xE4000000 | (511u << 10) | 1023u;
+    GPU::Data = 0xE5000000;
+    GPU::Data = 0xE1000000 | 0x1000 | 0x400 | 0x100 | 0x10 | 15; // X flip, draw to display, 15-bit, page (960, 256)
+    GPU::Data = 0x01000000;                  // clear the texture cache
+    GPU::Data = 0x65808080;                  // textured raw rect, variable size
+    GPU::Data = (511u << 16) | 1016u;
+    GPU::Data = (255u << 8) | 61u;           // u0 61, v 255
+    GPU::Data = (1u << 16) | 2u;
+    ready();
+    GPU::Data = 0x01000000;
+    GPU::Data = 0xC0000000;                  // VRAM -> CPU: the two drawn pixels
+    GPU::Data = (511u << 16) | 1016u;
+    GPU::Data = (1u << 16) | 2u;
+    while (!(GPU::Ctrl & (1 << 27))) {}
+    g_ps1FlipTest = (uint32_t)GPU::Data;
+    s_flipRects   = g_ps1FlipTest == 0x12345678u; // pixel 1016 = u 61, 1017 = u 60: mirrored
+    ready();
+    GPU::Data = 0xE1000000 | (stat & 0x7FF); // the texpage as it was (GPUSTAT bits 0-10), flip bits clear
+    GPU::Data = 0xE3000000 | (area0 & 0xFFFFF);
+    GPU::Data = 0xE4000000 | (area1 & 0xFFFFF);
+    GPU::Data = 0xE5000000 | (offset & 0x3FFFFF);
+}
+
 // Screen lines [sy, sy + h) showing layer lines [ly, ly + h) (inside one tile row) scrolled to chunkX.
 // Bands touching a screen edge are extended to whole tile rows (the GPU clips).
 // Raw textured quad(s) for rows [ty0, ty0 + h) of a tile at screen (sx, sy), flipped per `dir`: GP0 2Ch,
@@ -1457,7 +1511,11 @@ static int PS1TileQuadWords(uint32_t *w, int sx, int sy, int tileIndex, int ty0,
 // Bands touching a screen edge are extended to whole tile rows (the GPU clips). Tiles of one band never
 // overlap, so they are grouped: whole unflipped tiles per texture page (texpage + bulk 16x16 sprites),
 // then flipped / partial tiles as raw quads (each carries its texpage).
-static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
+static void PS1ChainFlipTiles(const uint32_t *f, int n, int sy, int ty0, int h);
+// FLIP (docs/43 G3): flipped tiles recorded for PS1ChainFlipTiles' flip rects; else textured quads written in the loop,
+// as before (two instances: the quad path keeps its registers).
+template <bool FLIP>
+static void PS1DrawTileBandT(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
 {
     g_ps1TileBandCount = g_ps1TileBandCount + 1;
     int ty0            = ly & 0xF;
@@ -1479,7 +1537,8 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
     uint32_t partial[4][24 * 3]; // unflipped partial rows: variable sprites {xy, uv|clut, wh} per page
     int partialN[4] = { 0, 0, 0, 0 };
     uint32_t whWord = (uint32_t)TILE_SIZE | ((uint32_t)h << 16);
-    uint32_t quads[24 * 18];
+    uint32_t flipped[FLIP ? 24 : 1]; // FLIP: flipped tiles, x | tile index << 16 | dir << 28
+    uint32_t quads[FLIP ? 1 : 24 * 18];
     int quadWords = 0, quadN = 0;
     int px = chunkX & ~0xF;
     int sx = -(chunkX & 0xF);
@@ -1511,6 +1570,9 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
                         w[2]        = whWord;
                     }
                 }
+                else if constexpr (FLIP) { // flipped: drawn after the loop as flip rects (PS1ChainFlipTiles)
+                    flipped[quadN++] = (uint32_t)(uint16_t)x | (uint32_t)tileIndex << 16 | (uint32_t)dir << 28;
+                }
                 else {
                     quadWords += PS1TileQuadWords(&quads[quadWords], x, sy, tileIndex, ty0, h, dir);
                     ++quadN;
@@ -1530,9 +1592,59 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
                 PS1ChainSprite16RawN(pageXY[p], pageTex[p], pageN[p]);
                 PS1ChainSpriteRawN(partial[p], partialN[p]);
             }
-        PS1ChainPrimsRawN(quads, 9, quadWords / 9);
+        if constexpr (FLIP) {
+            if (quadN)
+                PS1ChainFlipTiles(flipped, quadN, sy, ty0, h);
+        }
+        else
+            PS1ChainPrimsRawN(quads, 9, quadWords / 9);
     }
     g_ps1LayerPrims = g_ps1LayerPrims + prims;
+}
+static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
+{
+    if ((s_flipRects || g_ps1FlipRectsForce) && g_ps1FlipRectsOn)
+        PS1DrawTileBandT<true>(layer, above, sy, h, ly, chunkX, fullW);
+    else
+        PS1DrawTileBandT<false>(layer, above, sy, h, ly, chunkX, fullW);
+}
+// PS1DrawTileBand's flipped tiles (n entries x | tile index << 16 | dir << 28, rows [ty0, ty0 + h) at screen line sy):
+// as flip rects (docs/43 G3): per tile page and direction the page's texpage with the flip bits, then the sprites (16 x 16,
+// or variable for a partial band) with the texcoords of their first texel (u + 15 for an X flip, v + 15 - ty0 for a Y flip).
+static __attribute__((noinline)) void PS1ChainFlipTiles(const uint32_t *f, int n, int sy, int ty0, int h)
+{
+    const uint32_t yWord = (uint32_t)(uint16_t)sy << 16, whWord = (uint32_t)TILE_SIZE | ((uint32_t)h << 16);
+    int keyN[12] = {}, start[12], fill[12], pos = 0;
+    for (int i = 0; i < n; ++i) ++keyN[((f[i] >> 24) & 3) * 3 + (f[i] >> 28) - 1]; // page * 3 + dir - 1
+    for (int k = 0; k < 12; ++k) start[k] = fill[k] = pos, pos += keyN[k];
+    uint32_t w[24 * 3];
+    const bool whole = h == TILE_SIZE;
+    for (int i = 0; i < n; ++i) {
+        int tileIndex = (f[i] >> 16) & 0xFFF, dir = f[i] >> 28, page = tileIndex >> 8, pt = tileIndex & 0xFF;
+        int u = ((pt & 0xF) << 4) + ((dir & FLIP_X) ? 15 : 0), v = (pt & 0xF0) + ((dir & FLIP_Y) ? 15 - ty0 : ty0);
+        int at = fill[page * 3 + dir - 1]++;
+        uint32_t xy = yWord | (f[i] & 0xFFFF), tex = (uint32_t)(u | (v << 8)) | (s_tileSetB ? s_tileClutWordB : s_tileClutWord);
+        if (whole)
+            w[at] = xy, w[24 + at] = tex; // Sprite16RawN: xy and texinfo arrays
+        else
+            w[3 * at] = xy, w[3 * at + 1] = tex, w[3 * at + 2] = whWord; // SpriteRawN: {xy, texinfo, wh}
+    }
+    for (int k = 0; k < 12; ++k) {
+        if (!keyN[k])
+            continue;
+        int page = k / 3, dir = k % 3 + 1;
+        uint16_t raw;
+        __builtin_memcpy(&raw, &s_tileTPage[page], 2);
+        raw = (uint16_t)(raw | (dir << 12)); // GP0(E1h) bit 12 X flip, bit 13 Y flip (RSDK FLIP_X 1, FLIP_Y 2)
+        psyqo::PrimPieces::TPageAttr attr;
+        __builtin_memcpy(&attr, &raw, 2);
+        PS1ChainTPage(attr);
+        if (whole)
+            PS1ChainSprite16RawN(&w[start[k]], &w[24 + start[k]], keyN[k]);
+        else
+            PS1ChainSpriteRawN(&w[3 * start[k]], keyN[k]);
+    }
+    g_ps1TileFlipRects = g_ps1TileFlipRects + n;
 }
 
 // A tile band under the bank split: set B below the split line, cut there when it crosses it.
