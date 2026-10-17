@@ -1,12 +1,14 @@
 # The PCSX-Redux instance the test harness drives (sourced by every emulator script, from the repo root).
-# User 2026-10-09: the 16 MB PCSX-Redux copy (../pcsx-redux-16mb/redux16mb) in STOCK mode only (-2mb, 1 MB VRAM: never
-# -8mb / -16mb / -2mbvram), each game on its own portable instance next to other sessions' emulators:
+# User 2026-10-16: the stock PCSX-Redux app (/Applications/PCSX-Redux.app), not the patched 16 MB copy (that one is the
+# GTA III project's; 2026-10-09..16 the harness ran it in stock mode: the same numbers within 0.05 %), with the stock
+# console (-2mb: 2 MB RAM, 1 MB VRAM), each game on its own portable instance next to other sessions' emulators:
 #   GAME=2 (Sonic 2): portable settings in ../pcsx-redux-s2perf, GDB 3342, web 8102
 #   GAME=1 (Sonic 1): portable settings in ../pcsx-redux-s1perf, GDB 3343, web 8103
-# (the shared install, GDB 3333, is the Mania session's; the Sonic CD session uses 3338 / 8088.) OpenBIOS, fastboot.
+# (the Mania harness's EMU=redux uses 3333; the Sonic CD harness 3338 / 8088.) OpenBIOS (../pcsx-redux-16mb/openbios.bin, a
+# BIOS image only), fastboot.
 # REDUX_PORT / REDUX_WEB / REDUX_PORTABLE / PCSX override the choice. Scripts kill only the PID they started.
 PS1_ROOT=$(cd .. && pwd)
-PCSX=${PCSX:-$PS1_ROOT/pcsx-redux-16mb/redux16mb}
+PCSX=${PCSX:-/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux}
 if [ "${GAME:-2}" = 1 ]; then
     REDUX_PORTABLE=${REDUX_PORTABLE:-$PS1_ROOT/pcsx-redux-s1perf}
     REDUX_PORT=${REDUX_PORT:-3343}

@@ -6,7 +6,7 @@
 # CPU time is over 262. The counters go to OUT_win.bin (6 u32; GDB printf lines get lost) and one line to stdout.
 # Usage: [EMU=redux|ds] [PRE='gdb commands'] [JUMP=0] tools/perf_scene.sh OUT [FROM=300] [TO=900]
 #   JUMP=0: Right only, no jump (Sonic 1's special stage: the jump ends it early; window 300-1500 there).
-#   EMU=redux (default): the stock-mode redux16mb instance of tools/redux_env.sh, EXE given with -exe.
+#   EMU=redux (default): the stock PCSX-Redux instance of tools/redux_env.sh (2 MB, own portable dir), EXE given with -exe.
 #   EMU=ds: DuckStation (tools/emu_ds.sh) booted from a snapshot of build/game.cue + rsdkv4.elf in OUT_ds/; only when no
 #   other session runs it (exit 2 otherwise). PRE runs before the game starts: on DuckStation that is before the EXE is
 #   read from the disc (a .data switch set there is overwritten), so FROM must be > 240 (the window is set at frame 240).
