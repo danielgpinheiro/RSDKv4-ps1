@@ -95,14 +95,20 @@ static uint32_t readMem(uint32_t addr, uint8_t size, uint8_t sign) {
 // logic frame. A main loop stuck for hangLimitSec (loadLimitSec while a load is bracketed) prints HANG with the
 // interrupted thread's PC / RA / SP (current TCB: [[108h]], psx-spx kernelbios.md "Thread Control Blocks") and leaves the
 // machine as it is: the runner attaches GDB (registers, backtrace) and then stops the emulator.
+// Own vblank count, taken in this handler from I_STAT (psyqo's frame counter is pumped from the main loop, so it stops
+// with the very loops the watchdog must catch). psyqo's handler acknowledges VBlank later in the same exception, so each
+// vblank is seen once.
+static volatile uint32_t s_vbl = 0;
 static volatile uint32_t s_lastVbl = 0, s_lastFrame = 0, s_loadStart = 0;
 static volatile uint8_t s_phase = 0;
 static volatile bool s_wasLoading = false;
 static uint32_t *curTcb() { return *(uint32_t **)(*(uint32_t *)0x80000108); }
 static int watchdog() {
-    if (!g_ps1Test || !g_ps1GPU || g_ps1Test->ended)
+    if ((*(volatile uint32_t *)0xBF801070 & *(volatile uint32_t *)0xBF801074) & 1) // I_STAT & I_MASK: VBlank
+        s_vbl = s_vbl + 1;
+    if (!g_ps1Test || g_ps1Test->ended)
         return 0;
-    uint32_t now  = g_ps1GPU->getFrameCount();
+    uint32_t now  = s_vbl;
     bool loading  = PS1LoadingActive();
     if (loading && !s_wasLoading)
         s_loadStart = now; // a load starts: timed on its own limit
@@ -197,11 +203,13 @@ void PS1TestInit() {
     ttysx(h.seed);
     ttysx(h.endFrame);
     ttyc('\n');
-    s_lastVbl = g_ps1GPU ? g_ps1GPU->getFrameCount() : 0;
+    s_lastVbl = s_vbl;
     syscall_sysEnqIntRP(0, &s_watchdog);
     ((uint32_t *)0x80000200)[0x40] = (uint32_t)&PS1TestUnresolved; // A0 table (RAM, 200h)
-    if (h.flags & F_SELFTEST_CRASH)
-        *(volatile uint32_t *)0x00000001 = 0; // unaligned store: address error -> CRASH path
+    if (h.flags & F_SELFTEST_CRASH) { // jump to a misaligned PC: address error on fetch -> the CRASH path
+        void (*bad)() = (void (*)())0x80010002;
+        bad();
+    }
 }
 
 bool PS1TestBootStage() { return g_ps1Test && g_ps1Test->h.folder[0]; }
@@ -214,7 +222,7 @@ void PS1TestAfterInit() {
     if (!g_ps1Test)
         return;
     srand(g_ps1Test->h.seed);
-    s_lastVbl = g_ps1GPU->getFrameCount();
+    s_lastVbl = s_vbl;
 }
 
 void PS1TestPreFrame() {
@@ -295,7 +303,7 @@ void PS1TestPostFrame() {
         return;
     uint32_t fr = g_ps1PerfFrames - 1; // the frame RunFrame just ran
     s_lastFrame = fr;
-    s_lastVbl   = g_ps1GPU->getFrameCount();
+    s_lastVbl   = s_vbl;
     uint32_t h  = 5381;
     if (!(s->h.flags & F_NOHASH))
         for (int i = 0; i < s->h.nHash; i++) {
