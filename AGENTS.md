@@ -107,6 +107,14 @@ python3 tools/memcard/build_icons.py                  # regenerate ps1/memcard_i
   `-run`** when GDB sets breakpoints before the first `continue`. Use line breakpoints (`file.cpp:N if cond`) rather
   than watchpoints. GDB convenience variables must not be register names (`$v0`, `$s0`…).
 
+## docs/43 fix pass (2026-10-16/17)
+Results per issue: `docs/perf-43-report.md` (log: `docs/perf-43-tracker.md`; hardware facts: `docs/ps1-perf-findings.md`).
+New in RSDKv4-ps1: `ps1/pad.cpp` (psyqo's AdvancedPad driver for port 1 only), flip-bit tile sprites after a boot
+self-test (`PS1DetectGpuVersion`; GDB `g_ps1FlipRectsOn` / `g_ps1FlipRectsForce`), the special-stage Bomb native
+(`PS1SpecialBomb`), the ordering table's rare paths out of line. Harness: `tools/perf_scene.sh` `SHOTS=` (VRAM + entity
+table per frame) with `tools/shots_cmp.py`, `RUN_EXE` / `RUN_ELF`, `DISC=` (reference on the pre-patch disc), `HOLD=`,
+`PAD="f:mask ..."`, `MID=` / `POST=` (GDB lines at the window's start / end), a retry when GDB loses the race.
+
 ## Layout
 | Path | Role |
 |---|---|
