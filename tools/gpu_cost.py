@@ -62,6 +62,7 @@ if tail is not None and node != tail:
     print('warning: the walk ended at %06x, not at the tail %06x' % (node, tail))
 
 # GP0 state
+e1 = 0                # the last GP0(E1h) word (texpage, flip bits)
 tex_mode = 0          # E1 bits 7-8: 0 = 4-bit, 1 = 8-bit, 2 = 15-bit
 semi_mode = 0
 check_mask = False
@@ -206,7 +207,8 @@ while i < n:
         kind = 'rect%s%s%s' % (' textured %s' % ['4-bit', '8-bit', '15-bit', '15-bit'][tex_mode] if textured else ' flat',
                                ' semi' if semi else '', ' wide' if textured and dw > 128 else '')
         cost[kind] += t; count[kind] += 1; pixels[kind] += dw * dh
-        items.append((t, kind, '%dx%d at %d,%d' % (rw, rh, x, y)))
+        items.append((t, kind, '%dx%d at %d,%d' % (rw, rh, x, y) +
+                      (' tpage=%04x uv|clut=%08x' % (e1 & 0x3FFF, words[i + 2]) if textured else '')))
         i = k
         continue
     if op == 0x80:  # VRAM copy
@@ -226,6 +228,7 @@ while i < n:
         continue
     if op == 0xE1:
         tex_mode, semi_mode = (w0 >> 7) & 3, (w0 >> 5) & 3
+        e1 = w0
     elif op == 0xE3:
         area = (w0 & 0x3FF, (w0 >> 10) & 0x1FF, area[2], area[3])
     elif op == 0xE4:
