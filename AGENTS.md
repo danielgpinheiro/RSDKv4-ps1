@@ -14,7 +14,7 @@ Sonic 1-only opcodes after Sonic 2's (docs/37 choices 9-10).
 ## What this is
 RSDKv4-Decompilation (Retro Engine v4, Sonic 1/2 2013) ported to the PS1 with **psyqo** (C++20) on
 branch `ps1`: **Sonic 2** and **Sonic 1** (`GAME=1`, docs/37). Remotes: `origin` = upstream RSDKModding (read-only),
-`fork` = github.com/danielgpinheiro/RSDKv4-ps1 (**private**; push here).
+`fork` = github.com/danielgpinheiro/RSDKv4-ps1 (public on GitHub as of 2026-10-16; push here).
 
 **Status (2026-10-16): both done**, both run on a PSone from a CD-R (Sonic 2 2026-09-28, Sonic 1 2026-09-29). Public
 builders: https://github.com/danielgpinheiro/Sonic-2-PS1-ISO-Builder (head `f05e07b`) and
