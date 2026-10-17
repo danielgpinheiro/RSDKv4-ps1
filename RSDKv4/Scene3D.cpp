@@ -336,6 +336,10 @@ static bool PS1MatrixInverseRotation(Matrix *matrix)
     double det = 1.0 / ((double)D / 16777216.0);
     int out[16];
     for (int i = 0; i < 16; ++i) {
+        if (i != 15 && !N[i]) { // 0.0 * det * 256 truncates to 0 (det is finite): no soft-float calls (docs/43 C12;
+            out[i] = 0;         // N[3], [7], [11]-[14] are always 0 here, the others when an entry is)
+            continue;
+        }
         double inv = i == 15 ? (double)D15 / 16777216.0 : (double)N[i] / 65536.0;
         out[i]     = (int)((inv * det) * 256);
     }
@@ -884,6 +888,7 @@ static inline void PS1ProjectedVertex(int i, int *x, int *y)
 }
 int PS1FadedFaces(int i, int count); // above: a run of faded faces, returns where it stopped
 void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended); // ps1/render.cpp
+bool PS1TexturedRectWords(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended, uint32_t *w);
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
 static uint32_t s_ps1FadedHbl = 0, s_ps1GeneralN = 0; // this Draw3DScene: faded runs' hblanks, general-path faces
@@ -916,6 +921,8 @@ volatile uint32_t g_ps1Draw3DOT      = 1;
 volatile uint32_t g_ps1OTBuckets     = 0; // last frame: buckets in the table
 volatile uint32_t g_ps1OTCaptured    = 0; // last frame: faces drawn by the general path (captured sub-lists)
 volatile uint32_t g_ps1OTFailed      = 0; // frames whose table didn't fit the arena (total; primitives dropped)
+volatile uint32_t g_ps1Draw3DTexFast = 1; // GDB: 0 = TEXTURED_C / _BLEND faces through the general path (same-build A/B)
+volatile uint32_t g_ps1OTTexFast     = 0; // last frame: textured quads written directly (docs/43 C1)
 struct PS1OTRec {
     int depth;
     uint32_t *first; // the face's first node (bit 0: a captured sub-list, its last node in g_ps1Scene3DScratch), or null
@@ -935,7 +942,7 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     int cap = 0, used = 0;
     uint32_t cacheColor = 0, cacheCmd = 0;
     int cacheAlpha = -1;
-    uint32_t fast = 0, culled = 0, drawn = 0, captured = 0;
+    uint32_t fast = 0, culled = 0, drawn = 0, captured = 0, texFast = 0;
     const uint32_t fog = fogColor, fogRB = ((fog >> 19) & 0x1F) | ((fog >> 3) & 0x1F) << 16, fogG = (fog >> 11) & 0x1F;
     const int fogMax = fogStrength, xMax = SCREEN_XSIZE, yMax = SCREEN_YSIZE;
     int lo = 0, hi = 0;
@@ -965,11 +972,14 @@ void PS1Draw3DSceneOT(int spriteSheetID)
                     continue;
                 if (alpha > 0xFF)
                     alpha = 0xFF;
-                int x0 = (int16_t)(pa & 0xFFFF), x1 = (int16_t)(pb & 0xFFFF), x2 = (int16_t)(pc & 0xFFFF), x3 = (int16_t)(pd & 0xFFFF);
-                int y0 = (int16_t)(pa >> 16), y1 = (int16_t)(pb >> 16), y2 = (int16_t)(pc >> 16), y3 = (int16_t)(pd >> 16);
-                if ((x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) || (x0 > xMax && x1 > xMax && x2 > xMax && x3 > xMax)
-                    || (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) || (y0 > yMax && y1 > yMax && y2 > yMax && y3 > yMax)
-                    || (x0 == x1 && x1 == x2 && x2 == x3) || (y0 == y1 && y1 == y2 && y2 == y3)) {
+                // PS1FadedFaces' off-screen / degenerate tests on the packed corners (docs/43 C1): x and y are -1024..1023
+                // here (the GTE's saturation; x tested above), so x < 0 is bit 15, y < 0 bit 31, x > xMax the sign of the low
+                // half of p - (xMax + 1) (no wrap: -1345..702), y > yMax the sign of the high half of p - ((yMax + 1) << 16)
+                const uint32_t pn = pa & pb & pc & pd;
+                const uint32_t qx = xMax + 1, qy = (uint32_t)(yMax + 1) << 16;
+                const uint32_t px = (pa - qx) | (pb - qx) | (pc - qx) | (pd - qx), py = (pa - qy) | (pb - qy) | (pc - qy) | (pd - qy);
+                const uint32_t eq = (pa ^ pb) | (pa ^ pc) | (pa ^ pd);
+                if ((pn & 0x80008000u) || !(px & 0x8000) || !(py & 0x80000000u) || !(eq & 0xFFFF) || !(eq & 0xFFFF0000u)) {
                     ++culled;
                     continue;
                 }
@@ -1014,6 +1024,34 @@ void PS1Draw3DSceneOT(int spriteSheetID)
                 continue;
             }
         }
+        // the rings', bombs' and shadows' textured quads (TEXTURED_C / _BLEND: ~30-55 a frame): the general path's code
+        // (PS1Draw3DList's two cases) with the 9 words written straight into the arena, unlinked like a faded quad, instead
+        // of a captured sub-list (docs/43 C1: ~1,550 cycles a face through the capture)
+        if ((f.flag == FACE_FLAG_TEXTURED_C || f.flag == FACE_FLAG_TEXTURED_C_BLEND) && g_ps1Draw3DTexFast) {
+            if (!draw)
+                continue;
+            PS1VertexXYZ ta = PS1ExactT(f.a);
+            if (ta.z <= 0)
+                continue;
+            const Vertex &vb = vertexBuffer[f.b], &va = vertexBuffer[f.a], &vc = vertexBuffer[f.c];
+            uint32_t w9[9];
+            if (!PS1TexturedRectWords(SCREEN_CENTERX + projectionX * (ta.x - vb.u) / ta.z, SCREEN_CENTERY - projectionY * (ta.y + vb.v) / ta.z,
+                                      SCREEN_CENTERX + projectionX * (ta.x + vb.u) / ta.z, SCREEN_CENTERY - projectionY * (ta.y - vb.v) / ta.z,
+                                      va.u - vc.u, va.v - vc.v, va.u + vc.u, va.v + vc.v, spriteSheetID, f.flag == FACE_FLAG_TEXTURED_C_BLEND, w9))
+                continue;
+            if (run) {
+                PS1ChainBulkKeep(used);
+                PS1FadeRecordRun(run, used, 6);
+                run = nullptr, cap = used = 0;
+            }
+            uint32_t *h = PS1ChainOTRaw(9);
+            if (!h)
+                continue;
+            for (int k = 0; k < 9; ++k) h[1 + k] = w9[k];
+            rec[i].first = reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(h) | 2);
+            ++drawn, ++texFast;
+            continue;
+        }
         // any other face: Draw3DScene's general path on a one-entry draw order, captured (after closing the open run:
         // what the capture allocates goes after it in the arena)
         if (run) {
@@ -1057,9 +1095,14 @@ void PS1Draw3DSceneOT(int spriteSheetID)
                     continue;
                 uint32_t *slot = &ot[((unsigned)hi - (unsigned)rec[i].depth) >> shift];
                 uint32_t link  = *slot; // an empty tag's size is 0: the word is the next node's address
-                if (reinterpret_cast<uintptr_t>(p) & 1) {
+                const uintptr_t tag = reinterpret_cast<uintptr_t>(p) & 3;
+                if (tag == 1) {
                     p = reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(p) & ~(uintptr_t)1);
                     *reinterpret_cast<uint32_t *>(subLast[i].faceID) = (uint32_t)subLast[i].depth | link;
+                }
+                else if (tag == 2) { // a textured quad: 9 words
+                    p  = reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(p) & ~(uintptr_t)3);
+                    *p = (9u << 24) | link;
                 }
                 else
                     *p = (5u << 24) | link; // a faded quad: 5 words
@@ -1070,6 +1113,7 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     g_ps1FadedFast      = g_ps1FadedFast + fast;
     g_ps1FadedCulled    = g_ps1FadedCulled + culled;
     g_ps1OTCaptured     = captured;
+    g_ps1OTTexFast      = texFast;
     g_ps1Prof3DSort     = PS1HblanksSince(t1); // the second pass (linking)
     g_ps1Prof3DFaces    = count;
     g_ps1Prof3DDraw     = PS1HblanksSince(t0);

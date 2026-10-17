@@ -822,6 +822,20 @@ uint32_t *PS1ChainOTBegin(int n) {
     return ot;
 }
 
+uint32_t *PS1ChainOTRaw(int words) {
+    runHook();
+    flushBatch();
+    if (g_ps1ChainSkipPrims || !s_cur || s_cur + 1 + words > s_end) {
+        if (!g_ps1ChainSkipPrims)
+            PS1ChainOverflowHook();
+        return nullptr;
+    }
+    uint32_t *h  = s_cur;
+    s_cur       += 1 + words;
+    s_tpageValid = false;
+    return h;
+}
+
 void PS1ChainBulkKeep(int used) {
     if (s_bulk && used > 0)
         s_cur = s_bulk + used * ((uint32_t)s_bulkWpp + 1);

@@ -86,6 +86,8 @@ void PS1ChainBulkEnd(int used);
 //    a node / sub-list goes into bucket k as its new head: last = count | (tag[k] & 0xffffff), tag[k] = first.
 //    Every node must be <= 14 words (psyqo flags bigger ones with bit 23).
 void PS1ChainBulkKeep(int used);
+//  - PS1ChainOTRaw(words): `words` (<= 14) unlinked, after its header word (returned); the caller links it (docs/43 C1).
+uint32_t *PS1ChainOTRaw(int words);
 void PS1ChainCaptureBegin();
 bool PS1ChainCaptureEnd(uint32_t **first, uint32_t **last, uint32_t *countWord);
 uint32_t *PS1ChainOTBegin(int n);

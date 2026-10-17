@@ -2728,14 +2728,16 @@ PS1_HOT3D static void PS1TexturedFace(const Vertex *q, byte sheetID, bool blende
 // Draw3DScene's TEXTURED_C / _BLEND faces (the special stage's rings and shadows: ~45 a frame) are axis-aligned
 // rectangles: corners (x0, y0) (x1, y0) (x0, y1) (x1, y1) with texels (u0, v0) (u1, v0) (u0, v1) (u1, v1). The same
 // words as PS1TexturedFace for that quad, without its per-corner loops (docs/30 phase 7.2b).
-PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended)
+// PS1TexturedRectWords: the same quad's 9 words into w (false: nothing to draw), for Sonic 2's ordering table, which
+// writes them straight into its arena (RSDKv4/Scene3D.cpp PS1Draw3DSceneOT, docs/43 C1).
+PS1_HOT3D bool PS1TexturedRectWords(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended, uint32_t *w)
 {
     if (!s_frameOpen || PS1ObjectsHidden())
-        return;
+        return false;
     int sheet = PS1SurfaceSheet(sheetID);
     if (sheet < 0) {
         g_ps1SheetUnbound = g_ps1SheetUnbound + 1;
-        return;
+        return false;
     }
     int umin = u0 < u1 ? u0 : u1, umax = u0 < u1 ? u1 : u0, vmin = v0 < v1 ? v0 : v1, vmax = v0 < v1 ? v1 : v0;
     int xmin = x0 < x1 ? x0 : x1, xmax = x0 < x1 ? x1 : x0, ymin = y0 < y1 ? y0 : y1, ymax = y0 < y1 ? y1 : y0;
@@ -2744,7 +2746,7 @@ PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, i
         if (beyond)
             g_ps1WrapCulled = g_ps1WrapCulled + 1;
         if (g_ps1LimitFix)
-            return; // nothing on screen
+            return false; // nothing on screen
     }
     // A billboard passing the camera (the special stage's checkpoint gate balls, rings) projects far beyond the GPU
     // limits (psx-spx GPU "Vertex": 11-bit coordinates wrap, a polygon over 1023 x 511 is not drawn): it flickered.
@@ -2766,7 +2768,7 @@ PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, i
         g_ps1FaceTexMiss   = g_ps1FaceTexMiss + 1;
         g_ps1FaceMissSheet = sheet;
         g_ps1FaceMissU0 = umin, g_ps1FaceMissV0 = vmin, g_ps1FaceMissU1 = umax, g_ps1FaceMissV1 = vmax;
-        return;
+        return false;
     }
     if (c != s_faceCluster) {
         psyqo::PrimPieces::TPageAttr tp = PS1ClusterTPage(c);
@@ -2786,7 +2788,6 @@ PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, i
     auto tu = [&](int u) { return (uint32_t)(uint8_t)(u + du > 255 ? 255 : u + du); };
     auto tv = [&](int v) { return (uint32_t)(uint8_t)(v + dv > 255 ? 255 : v + dv) << 8; };
     auto xy = [](int x, int y) { return (uint32_t)(uint16_t)x | ((uint32_t)(uint16_t)y << 16); };
-    uint32_t w[9];
     w[0] = blended ? 0x2E808080u : 0x2C808080u;
     w[1] = xy(x0, y0);
     w[2] = tu(u0) | tv(v0) | ((uint32_t)s_faceClut << 16);
@@ -2796,6 +2797,13 @@ PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, i
     w[6] = tu(u0) | tv(v1);
     w[7] = xy(x1, y1);
     w[8] = tu(u1) | tv(v1);
+    return true;
+}
+PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended)
+{
+    uint32_t w[9];
+    if (!PS1TexturedRectWords(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, w))
+        return;
     PS1ChainPrimsRawN(w, 9, 1);
     g_ps1Faces = g_ps1Faces + 1;
 }
