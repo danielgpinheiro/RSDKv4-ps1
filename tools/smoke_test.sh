@@ -47,7 +47,7 @@ $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -exec "dofile
       -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
 EMU=$!
 sleep 4
-timeout 600 /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -E "^(ICON|LOAD|RESULT|FILE|PAD)" | tee "$OUT.log"
+timeout 600 ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -E "^(ICON|LOAD|RESULT|FILE|PAD)" | tee "$OUT.log"
 kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
 python3 - "$OUT.log" <<'PYEOF'
 import re, sys, zlib

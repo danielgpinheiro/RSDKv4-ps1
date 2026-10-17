@@ -44,6 +44,6 @@ $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -iso build/ga
       >/dev/null 2>&1 &
 EMU=$!
 sleep 4
-timeout ${TIMEOUT:-240} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(INJECT|LOADED|FRAME) .*"
+timeout ${TIMEOUT:-240} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "(INJECT|LOADED|FRAME) .*"
 kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
 /usr/bin/python3 tools/check_vram.py "${OUT}_vram.bin" build/iso/Data "$STAGE" "${OUT}_pal.bin"

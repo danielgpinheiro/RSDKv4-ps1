@@ -43,5 +43,5 @@ $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
 EMU=$!
 sleep 4
-timeout ${TIMEOUT:-240} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|FRAME|STATE|PROF|GUARDS) .*|rror.*" | tee "$OUT.txt"
+timeout ${TIMEOUT:-240} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|FRAME|STATE|PROF|GUARDS) .*|rror.*" | tee "$OUT.txt"
 kill $EMU 2>/dev/null; wait $EMU 2>/dev/null

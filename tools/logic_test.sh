@@ -100,7 +100,7 @@ $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
 EMU=$!
 sleep 4
-timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|STATE|ENTSIZE|OOR|DRAW) .*" | tee "$OUT.txt"
+timeout ${TIMEOUT:-300} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|STATE|ENTSIZE|OOR|DRAW) .*" | tee "$OUT.txt"
 kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
 ES=$(grep -oE "ENTSIZE [0-9]+" "$OUT.txt" | awk '{print $2}')
 [ -f "${OUT}_ents.bin" ] && [ -n "$ES" ] && /usr/bin/python3 - "${OUT}_ents.bin" "$ES" <<'PYEOF'

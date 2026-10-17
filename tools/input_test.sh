@@ -43,7 +43,7 @@ $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -exec "dofile
       -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
 EMU=$!
 sleep 4
-timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(BUTTON|RELEASED) .*" | tee "$OUT.txt"
+timeout ${TIMEOUT:-300} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "(BUTTON|RELEASED) .*" | tee "$OUT.txt"
 kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
 /usr/bin/python3 - "$OUT.txt" <<'PYEOF'
 import re, sys

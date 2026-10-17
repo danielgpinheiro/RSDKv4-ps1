@@ -26,7 +26,7 @@ run() { # run CARD1 GDBFILE: one emulator session
           -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
     local emu=$!
     sleep 4
-    timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$2" 2>&1 | grep -E "^(READ|WRITE|BOOT|FILE)"
+    timeout ${TIMEOUT:-300} ${GDB:-tools/gdbw} --batch -x "$2" 2>&1 | grep -E "^(READ|WRITE|BOOT|FILE)"
     kill $emu 2>/dev/null; wait $emu 2>/dev/null
 }
 at() { printf 'break PS1PerfTick if g_ps1PerfFrames == %d\ncontinue\ndelete\n' "$1"; }

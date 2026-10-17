@@ -36,5 +36,5 @@ redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another s
 $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -webserver -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
 EMU=$!
 sleep 4
-timeout ${TIMEOUT:-400} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "STATE .*|rror.*"
+timeout ${TIMEOUT:-400} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "STATE .*|rror.*"
 kill $EMU 2>/dev/null; wait $EMU 2>/dev/null
