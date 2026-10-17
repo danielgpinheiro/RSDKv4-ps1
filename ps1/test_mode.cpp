@@ -38,7 +38,8 @@ struct ScnHeader {
     uint8_t gameMode, hangLimitSec, loadLimitSec;
     uint16_t nInput, nCheck, nPoke, nWatchF, nWatchC, nHash, nArr, nDump;
     uint32_t bodyBytes;
-    char name[32];
+    uint32_t reserve; // bytes of heap held back from boot on (low-memory tests)
+    char name[28];
 };
 static_assert(sizeof(ScnHeader) == 96, "scn.py header layout");
 struct ScnInput { uint32_t frame, mask; };
@@ -198,6 +199,12 @@ void PS1TestInit() {
     s->dump   = (const ScnRange *)b;  b += h.nDump * sizeof(ScnRange);
     s->arr    = b;
     g_ps1Test = s;
+    if (h.reserve) { // a low-memory test: this much less heap for the whole run
+        void *r = psyqo_malloc(h.reserve);
+        tty(r ? "T reserve" : "T reserve-failed");
+        ttysx(h.reserve);
+        ttyc('\n');
+    }
     tty("S ");
     tty(h.name);
     ttysx(h.seed);
