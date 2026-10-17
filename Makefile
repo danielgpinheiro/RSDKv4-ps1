@@ -108,14 +108,21 @@ CPPFLAGS += -DPS1_MEMCARD_TEST=1
 SRCS += ps1/memcard_test.cpp
 endif
 
+# `make TEST=1`: the regression test mode (ps1/test_mode.cpp, ../docs/45; the scenario comes from the test disc's
+# TEST.SEL, written by ../tests/run.py): harness only, make dist and tools/export_builder.sh refuse it.
+ifeq ($(TEST),1)
+CPPFLAGS += -DPS1_TEST=1
+SRCS += ps1/test_mode.cpp
+endif
+
 # Build-flag stamp: every object depends on build/flags.txt, rewritten only when PROFILE / BOOT / BOOT_ID /
 # BOOT_PLAYER / GAME change, so switching them rebuilds everything (make only sees source timestamps otherwise: a
 # PROFILE=1 build once kept a non-profile Object.o).
-BUILD_FLAGS := PROFILE=$(PROFILE) SAMPLER=$(SAMPLER) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER) GAME=$(GAME) COMBO=$(COMBO) GAP=$(GAP) PERF_SPLIT=$(PERF_SPLIT)
+BUILD_FLAGS := PROFILE=$(PROFILE) SAMPLER=$(SAMPLER) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER) GAME=$(GAME) COMBO=$(COMBO) GAP=$(GAP) PERF_SPLIT=$(PERF_SPLIT) TEST=$(TEST)
 # The objects are deleted too: macOS's make 3.81 compares timestamps to the second, and an object built in the same second
 # as the rewrite (a GAME=2 build followed at once by GAME=1) looked up to date and kept the other game's code.
 $(shell mkdir -p build; echo '$(BUILD_FLAGS)' | cmp -s - build/flags.txt || { echo '$(BUILD_FLAGS)' > build/flags.txt; \
-        rm -f $(addsuffix .o,$(basename $(SRCS) ps1/platform_test.cpp ps1/memcard_test.cpp ps1/pc_sampler.cpp ps1/combo_test.cpp)) rsdkv4.elf; })
+        rm -f $(addsuffix .o,$(basename $(SRCS) ps1/platform_test.cpp ps1/memcard_test.cpp ps1/pc_sampler.cpp ps1/combo_test.cpp ps1/test_mode.cpp)) rsdkv4.elf; })
 EXTRA_DEPS += build/flags.txt
 # The EXE is always re-made from the ELF (one objcopy): an EXE written in the same second as the ELF it came from once
 # looked up to date after a flag switch (make 3.81). Not deleted with the objects: `make disc` (which uses it) may run
@@ -177,6 +184,7 @@ dist:
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1ComboTest; then echo "dist: rsdkv4.ps-exe is a COMBO= test build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1McTestSteps; then echo "dist: rsdkv4.ps-exe is a MEMCARD_TEST build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1PcSamples; then echo "dist: rsdkv4.ps-exe is a SAMPLER build"; exit 1; fi
+	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1TestBuild; then echo "dist: rsdkv4.ps-exe is a TEST=1 build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1PerfGpuTail; then echo "dist: rsdkv4.ps-exe is a PERF_SPLIT build"; exit 1; fi
 	@if ! mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1InitDone; then echo "dist: rsdkv4.ps-exe is not the game (PLATFORM_TEST?)"; exit 1; fi
 	@if ! grep -q "^PROFILE= " build/flags.txt; then echo "dist: rsdkv4.ps-exe is a PROFILE build"; exit 1; fi

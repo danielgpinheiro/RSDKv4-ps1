@@ -19,6 +19,7 @@
 #include <psyqo/gpu.hh>
 
 #include "../ps1/loading.hh"
+#include "../ps1/test_mode.hh"
 #include "../ps1/video.hh"
 
 extern "C" char __heap_start, __stack_start;
@@ -157,6 +158,13 @@ class RSDKv4PS1App final : public psyqo::Application {
         StrCopy(Engine.startSceneFolder, g_ps1BootBuild);
         StrCopy(Engine.startSceneID, PS1_BOOT_ID);
 #endif
+#if PS1_TEST
+        PS1TestInit(); // TEST.SEL: the scenario (docs/45)
+        if (PS1TestBootStage()) {
+            StrCopy(Engine.startSceneFolder, PS1TestBootFolder());
+            StrCopy(Engine.startSceneID, PS1TestBootId());
+        }
+#endif
         // The memory card is read once, here, before the boot load (RSDKv4/Userdata.cpp; the engine's ReadSaveRAMData
         // calls get the cached result): a card read inside the load left the heap split under the chain arenas
         // (47 KB less headroom at the load peak).
@@ -169,10 +177,18 @@ class RSDKv4PS1App final : public psyqo::Application {
         // As a save file with this character starts a game (RetroEngine::Init, the startSave path).
         SetGlobalVariableByName("stage.player2Enabled", PS1_BOOT_PLAYER == 3);
 #endif
+#if PS1_TEST
+        if (PS1TestBootStage())
+            SetGlobalVariableByName("stage.player2Enabled", PS1TestBootPlayer() == 3);
+        PS1TestAfterInit();
+#endif
         PS1LoadingEnd();
         // The menus' resident fonts + strings (VRAM rows 242-255; docs/30 phase 4.2).
         PS1MenuResidentLoad();
 #if !defined(PS1_BOOT_FOLDER) && PS1_MENUS
+#if PS1_TEST
+        if (!PS1TestBootStage())
+#endif
         PS1MenuOpen(PS1_MENU_TITLE); // the mobile front end's flow (docs/30 phase 4): menus first, the scripted Title
                                      // comes when a game starts
 #endif
@@ -188,6 +204,9 @@ class RSDKv4PS1App final : public psyqo::Application {
 #endif
         PS1MenuTestService(); // GDB: g_ps1MenuTestLoad
         PS1SaveTestService(); // GDB: g_ps1SaveTest
+#if PS1_TEST
+        PS1TestPreFrame(); // input track, pokes
+#endif
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
         PS1RenderEndFrame();
@@ -204,6 +223,9 @@ class RSDKv4PS1App final : public psyqo::Application {
         g_ps1PerfGpuTail = PS1HblanksSince(tw);
 #endif
         PS1PerfTick(gpu());
+#if PS1_TEST
+        PS1TestPostFrame(); // telemetry, checkpoints, end of the run
+#endif
 #ifdef PS1_COMBO_TEST
         PS1ComboTestTick(g_ps1PerfFrames);
 #endif

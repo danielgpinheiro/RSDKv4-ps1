@@ -2,6 +2,7 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/menu.hh"
+#include "../ps1/test_mode.hh"
 // GameConfig stage entries / names that did not fit the PS1-sized stageList (Scene.hpp); for GDB.
 volatile uint32_t g_ps1StageListClamped = 0;
 #endif
@@ -1458,6 +1459,9 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
         }
 #ifdef PS1_BOOT_PLAYER
         startPlayer = PS1_BOOT_PLAYER; // stage.playerListPos: 0 Sonic, 1 Tails, 2 Knuckles, 3 Sonic & Tails
+#elif PS1_TEST
+        if (PS1TestBootStage())
+            startPlayer = PS1TestBootPlayer(); // the scenario's character (docs/45)
 #endif
     }
 #else

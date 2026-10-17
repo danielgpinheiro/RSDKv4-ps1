@@ -14,6 +14,7 @@ mkdir -p "$DEST" && DEST=$(cd "$DEST" && pwd)
 cd "$(dirname "$0")/.."
 nm() { mipsel-none-elf-nm rsdkv4.elf; }
 if nm | grep -q g_ps1BootBuild; then echo "rsdkv4.ps-exe is a BOOT= test build: run make first"; exit 1; fi
+if nm | grep -q g_ps1TestBuild; then echo "rsdkv4.ps-exe is a TEST=1 build: run make first"; exit 1; fi
 if nm | grep -q g_ps1McTestSteps; then echo "rsdkv4.ps-exe is a MEMCARD_TEST build: run make first"; exit 1; fi
 if ! nm | grep -q g_ps1InitDone; then echo "rsdkv4.ps-exe is not the game (PLATFORM_TEST?): run make first"; exit 1; fi
 if ! grep -q "^PROFILE= " build/flags.txt; then echo "rsdkv4.ps-exe is a PROFILE build: run make first"; exit 1; fi
