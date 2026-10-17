@@ -9825,9 +9825,36 @@ __attribute__((optimize("Os"))) static void PS1SpecialBGDraw(ObjectScript *o)
     t[0] += SCREEN_CENTERX;
     t[1] += SCREEN_CENTERY;
     if (me.rotation == 0) {
+        // docs/43 G2: frame 8 repeats frame 1 (the same 256 x 256 tile at the same place: 28.7 GPU hblanks). An opaque
+        // sprite drawn again over itself changes nothing unless a frame drawn in between overlaps it: such frames are
+        // skipped (the mask is worked out once per frame list: the frames are the stage's data)
+        static int s_maskList = -1;
+        static uint32_t s_maskLoad = 0;
+        static uint16_t s_skip = 0;
+        extern volatile uint32_t g_ps1AtlasLoads; // ps1/sprite_atlas.cpp: bumped by every stage's atlas load
+        const SpriteFrame *fr = &scriptFrames[o->frameListOffset];
+        if (s_maskList != o->frameListOffset || s_maskLoad != g_ps1AtlasLoads) {
+            s_maskList = o->frameListOffset, s_maskLoad = g_ps1AtlasLoads, s_skip = 0;
+            for (int f = 0; f < 12; ++f)
+                for (int j = 0; j < f && !(s_skip >> f & 1); ++j) {
+                    const SpriteFrame *a = &fr[j], *sf = &fr[f];
+                    if (a->sprX != sf->sprX || a->sprY != sf->sprY || a->width != sf->width || a->height != sf->height
+                        || a->pivotX != sf->pivotX || a->pivotY != sf->pivotY || a->sheetID != sf->sheetID)
+                        continue;
+                    bool clear = true;
+                    for (int k = j + 1; k < f && clear; ++k) { // anything between j and f over a's rect?
+                        const SpriteFrame *b = &fr[k];
+                        clear = b->pivotX >= a->pivotX + a->width || b->pivotX + b->width <= a->pivotX
+                                || b->pivotY >= a->pivotY + a->height || b->pivotY + b->height <= a->pivotY;
+                    }
+                    if (clear)
+                        s_skip = (uint16_t)(s_skip | 1 << f);
+                }
+        }
         for (int f = 0; f < 12; ++f) { // DrawSpriteScreenXY f TEMP0 TEMP1
-            const SpriteFrame *sf = &scriptFrames[o->frameListOffset + f];
-            DrawSprite(t[0] + sf->pivotX, t[1] + sf->pivotY, sf->width, sf->height, sf->sprX, sf->sprY, o->spriteSheetID);
+            const SpriteFrame *sf = &fr[f];
+            if (!(s_skip >> f & 1))
+                DrawSprite(t[0] + sf->pivotX, t[1] + sf->pivotY, sf->width, sf->height, sf->sprX, sf->sprY, o->spriteSheetID);
         }
     }
     else {
