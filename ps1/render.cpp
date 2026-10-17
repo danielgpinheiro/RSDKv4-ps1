@@ -1878,7 +1878,9 @@ static short s_lineX[SCREEN_YSIZE];
 // upstream DrawHLineScrollLayer (v4 SW path): the same scroll-state update (BG autoscroll, parallax line
 // positions: game state) and per-line X (parallax line, deformation above / below the water line, wrap),
 // drawn as bands of lines sharing one X (a band never crosses a tile row).
-void DrawHLineScrollLayer(int layerID)
+// docs/43 C9: the per-line loops at -O2 (the rest of this file is -Os; the tile band itself measured slower at -O2:
+// Hidden Palace S&T tiles 109.6 -> 116.9)
+__attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
 {
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
     if (!layer->xsize || !layer->ysize)
