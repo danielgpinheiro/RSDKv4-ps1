@@ -9831,10 +9831,15 @@ __attribute__((optimize("Os"))) static void PS1SpecialBGDraw(ObjectScript *o)
         static int s_maskList = -1;
         static uint32_t s_maskLoad = 0;
         static uint16_t s_skip = 0;
+#ifdef RETRO_PS1_HOST_TOOL
+        const uint32_t atlasLoads = 0; // tools/rsdkmanifest (no atlas)
+#else
         extern volatile uint32_t g_ps1AtlasLoads; // ps1/sprite_atlas.cpp: bumped by every stage's atlas load
+        const uint32_t atlasLoads = g_ps1AtlasLoads;
+#endif
         const SpriteFrame *fr = &scriptFrames[o->frameListOffset];
-        if (s_maskList != o->frameListOffset || s_maskLoad != g_ps1AtlasLoads) {
-            s_maskList = o->frameListOffset, s_maskLoad = g_ps1AtlasLoads, s_skip = 0;
+        if (s_maskList != o->frameListOffset || s_maskLoad != atlasLoads) {
+            s_maskList = o->frameListOffset, s_maskLoad = atlasLoads, s_skip = 0;
             for (int f = 0; f < 12; ++f)
                 for (int j = 0; j < f && !(s_skip >> f & 1); ++j) {
                     const SpriteFrame *a = &fr[j], *sf = &fr[f];
