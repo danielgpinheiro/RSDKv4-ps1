@@ -451,8 +451,11 @@ volatile uint32_t g_ps1GteMatrixCPU   = 0; // frames whose matrix doesn't fit th
 volatile uint32_t g_ps1GteNear = 0, g_ps1GteFlagged = 0, g_ps1GteRange = 0; // CPU triples by reason (GDB)
 static void PS1CpuVertexT(int v)
 {
-    g_ps1Proj[v].u = 0x8000u;
-    g_ps1Proj[v].v = PS1ExactT(v).z;
+    // only the exact z (the sort's depth, PS1ExactTSlow's formula): x and y come from PS1ExactT if a face drawn by the
+    // general path reads them (docs/43 C4: 3 multiplies instead of 9 for the ~85 vertices a frame left to the CPU)
+    const Vertex &q = vertexBuffer[v];
+    g_ps1Proj[v].u  = 0x8000u;
+    g_ps1Proj[v].v  = (q.x * matFinal.values[0][2] >> 8) + (q.y * matFinal.values[1][2] >> 8) + (q.z * matFinal.values[2][2] >> 8) + matFinal.values[3][2];
 }
 void PS1TransformProject3D(int count)
 {
