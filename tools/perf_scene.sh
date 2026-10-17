@@ -12,13 +12,16 @@
 #   read from the disc (a .data switch set there is overwritten), so FROM must be > 240 (the window is set at frame 240).
 #   GPU="f1 f2 ...": at these frames dump RAM + the frame's chain (psyqo's head / tail) and price it with
 #   tools/gpu_cost.py (docs/43: DuckStation's GPU model) -> OUT_gpu_F.txt, one "GPUCOST" line each.
+#   SHOTS="f1 f2 ..." (PCSX-Redux only): at these frames save VRAM (web API: both framebuffers, the frame before f
+#   complete) to OUT_shot_F.vram and the entity table to OUT_ent_F.bin, for exact A/B checks between builds
+#   (tools/shots_cmp.py REF_OUT NEW_OUT; docs/perf-43-tracker.md).
 #   A `make PERF_SPLIT=1` build adds a "SPLIT" line: GPU tail (GPU still drawing the previous chain after the CPU's work;
 #   only DuckStation models it), flip gap, and the section averages, hblanks a frame over the window (RSDKv4/main.cpp).
 cd "$(dirname "$0")/.."
 OUT=$1; FROM=${2:-300}; TO=${3:-900}
 EMU=${EMU:-redux}
 JM=0x18; [ "${JUMP:-1}" = 0 ] && JM=0x08
-ELF=rsdkv4.elf
+ELF=${RUN_ELF:-rsdkv4.elf}   # RUN_EXE / RUN_ELF: run a saved build (A/B against a reference) instead of the tree's
 if [ "$EMU" = ds ]; then
     . tools/emu_ds.sh
     SNAP=${OUT}_ds; ds_busy && { echo "DuckStation is busy (another session): not starting it" >&2; exit 2; }
@@ -35,9 +38,10 @@ printf "%s\n%s\n" "$HDR" "${PRE:-}" > "$OUT.hdr"
 SPLIT=0; mipsel-none-elf-nm "$ELF" 2>/dev/null | grep -q g_ps1PerfGpuTail && SPLIT=1
 # The GDB script: one conditional break per event frame, in order (PS1PerfTick runs at the frame's end, after its chain is
 # complete): the window and pad at 240 / 420 / 432, the GPU dumps, the window's counters at TO + 1.
-/usr/bin/python3 - "$OUT" "$FROM" "$TO" "$JM" "$SPLIT" "${GPU:-}" > "$OUT.gdb" <<'PYEOF'
+/usr/bin/python3 - "$OUT" "$FROM" "$TO" "$JM" "$SPLIT" "${GPU:-}" "${SHOTS:-}" "${REDUX_WEB:-}" > "$OUT.gdb" <<'PYEOF'
 import sys
 out, frm, to, jm, split, gpu = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5] == '1', sys.argv[6].split()
+shots, web = sys.argv[7].split(), sys.argv[8]
 ev = {}
 def add(f, *lines): ev.setdefault(f, []).extend(lines)
 add(240, 'set var g_ps1PerfWinFrom = %d' % frm, 'set var g_ps1PerfWinTo = %d' % to, 'set var g_ps1PadTestMask = 0x08')
@@ -47,6 +51,9 @@ for f in map(int, gpu):
     add(f, 'dump binary memory %s_gpu_%d.ram 0x80000000 0x80200000' % (out, f),
         'printf "GPUHEAD %u %08x %08x %08x %d\\n", g_ps1PerfFrames, (unsigned)g_ps1GPU->m_chainHead, '
         '(unsigned)g_ps1GPU->m_chainTail, (unsigned)g_ps1GPU->m_chainTailCount, (int)g_ps1GPU->m_chainHeadOversized')
+for f in map(int, shots):
+    add(f, 'shell curl -s -o %s_shot_%d.vram http://localhost:%s/api/v1/gpu/vram/raw' % (out, f, web),
+        'dump binary memory %s_ent_%d.bin (char*)objectEntityList (char*)objectEntityList+sizeof(objectEntityList)' % (out, f))
 end = ['dump binary value %s_win.bin g_ps1PerfWinFrames' % out] + ['append binary value %s_win.bin %s' % (out, v) for v in
        ('g_ps1PerfWinHbl', 'g_ps1PerfWinMaxHbl', 'g_ps1PerfWinVbl', 'g_ps1PerfWinMaxVbl', 'g_ps1PerfWinOver')]
 if split:
@@ -67,7 +74,7 @@ if [ "$EMU" = ds ]; then
     ds_start "$SNAP"
 else
     redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running: not starting it" >&2; exit 2; }
-    $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe rsdkv4.ps-exe >/dev/null 2>&1 &
+    $PCSX -fastboot -interpreter -debugger -gdb $REDUX_ARGS -iso build/game.cue -exe ${RUN_EXE:-rsdkv4.ps-exe} >/dev/null 2>&1 &
     EMU_PID=$!
     sleep 4
 fi
