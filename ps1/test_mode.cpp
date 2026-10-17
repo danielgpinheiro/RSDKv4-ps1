@@ -93,22 +93,31 @@ static uint32_t readMem(uint32_t addr, uint8_t size, uint8_t sign) {
 // ---- watchdog + crash ---------------------------------------------------------------------------------------------
 // Runs first on every exception (BIOS IRQ chain, priority 0, as irq_guard's filter): counts the vblanks since the last
 // logic frame. A main loop stuck for hangLimitSec (loadLimitSec while a load is bracketed) prints HANG with the
-// interrupted thread's PC / RA / SP (current TCB: [[108h]], psx-spx kernelbios.md "Thread Control Blocks") and exits.
-static volatile uint32_t s_lastVbl = 0, s_lastFrame = 0;
+// interrupted thread's PC / RA / SP (current TCB: [[108h]], psx-spx kernelbios.md "Thread Control Blocks") and leaves the
+// machine as it is: the runner attaches GDB (registers, backtrace) and then stops the emulator.
+static volatile uint32_t s_lastVbl = 0, s_lastFrame = 0, s_loadStart = 0;
 static volatile uint8_t s_phase = 0;
+static volatile bool s_wasLoading = false;
 static uint32_t *curTcb() { return *(uint32_t **)(*(uint32_t *)0x80000108); }
 static int watchdog() {
     if (!g_ps1Test || !g_ps1GPU || g_ps1Test->ended)
         return 0;
-    uint32_t now = g_ps1GPU->getFrameCount();
-    uint32_t lim = (PS1LoadingActive() ? g_ps1Test->h.loadLimitSec : g_ps1Test->h.hangLimitSec) * 60u;
-    if (lim && now - s_lastVbl > lim) {
+    uint32_t now  = g_ps1GPU->getFrameCount();
+    bool loading  = PS1LoadingActive();
+    if (loading && !s_wasLoading)
+        s_loadStart = now; // a load starts: timed on its own limit
+    else if (!loading && s_wasLoading)
+        s_lastVbl = now;   // a load ended: counts as progress (a frame may hold several loads)
+    s_wasLoading = loading;
+    uint32_t since = loading ? now - s_loadStart : now - s_lastVbl;
+    uint32_t lim   = (loading ? g_ps1Test->h.loadLimitSec : g_ps1Test->h.hangLimitSec) * 60u;
+    if (lim && since > lim) {
         g_ps1Test->ended = true;
         uint32_t *t = curTcb();
         tty("HANG");
         ttysx(s_lastFrame);
-        ttysx(now - s_lastVbl);
-        ttysx(PS1LoadingActive());
+        ttysx(since);
+        ttysx(loading);
         ttysx(s_phase);
         tty(" epc");
         ttysx(t[0x88 / 4]);
@@ -117,7 +126,6 @@ static int watchdog() {
         tty(" sp");
         ttysx(t[(0x08 + 29 * 4) / 4]);
         ttyc('\n');
-        testExit(3);
     }
     return 0;
 }
