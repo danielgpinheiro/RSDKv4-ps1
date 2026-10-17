@@ -816,6 +816,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1ARZWater", 0),
     FunctionInfo("PS1CPZWater", 0),
     FunctionInfo("PS1HPZWater", 0),
+    FunctionInfo("PS1SpecialBomb", 0),
 #endif
 };
 
@@ -1385,6 +1386,7 @@ enum ScrFunc {
     FUNC_PS1ARZWATER,
     FUNC_PS1CPZWATER,
     FUNC_PS1HPZWATER,
+    FUNC_PS1SPECIALBOMB,
 #endif
     FUNC_MAX_CNT
 };
@@ -9190,7 +9192,7 @@ __attribute__((noinline)) static void PS1TransformWorld(int from, int to) // Tra
 }
 volatile uint32_t g_ps1HalfpipeCover = 0; // special-stage native branches taken (GDB): PS1HalfpipeSegment bits 0-3 turn,
 // 4-11 segment kind, 12-13 objects; PS1PlayerFaces 14 visible, 15 value4 sprite, 16 value23 sprite; PS1SpecialPlayerRun
-// 17 right, 18 left, 19 neither, 20 jump, 21 off the top
+// 17 right, 18 left, 19 neither, 20 jump, 21 off the top; PS1SpecialBombUpdate 22 touched, 23 hit, 24 hit while flying
 __attribute__((optimize("Os"))) static void PS1HalfpipeSegment()
 {
     int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
@@ -10608,6 +10610,156 @@ static void PS1SpecialRingUpdate()
                     SetSfxAttributes(2, -1, 100);
                     G[20] = 0;
                 }
+            }
+        }
+    }
+}
+// The special stage's Bomb update sub (stage object "Bomb" in Special: ~93 VM instructions a bomb a frame, 86 hblanks a
+// frame with 4 bombs in stage 7, docs/43 C2), natively: one statement per script instruction, in order. Its shadow face
+// (value7 == 1, as the Ring's) and bomb face (TEXTURED_C, U 83 / V 50, its size from its height over the player's) go
+// into the Scene3D buffers; a player (type 4) it touches turns it into type 10 (the explosion) and, unless already hit
+// (state 6) or still blinking (value7), runs script function 7 in the VM (PS1CallScriptFunction, one foreach deep) and is
+// hit (state 6) or, flying (gravity != 0), starts blinking (value7 60). Patched in only when the sub and its jump-table
+// entries match SPECIALBOMB_SIG.
+static void PS1SpecialBombUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int self = objectEntityPos;
+    Entity &me = PS1_OBJ(self);
+    int *v     = me.values;
+    ap[0] = vertexCount;
+    ap[1] = faceCount;
+    if (v[7] == 1) {
+        Face &f = PS1Face(ap[1]);
+        f.flag  = 6;
+        f.a     = ap[0];
+        Vertex *q = &PS1Vertex(ap[0]);
+        q->x    = v[11];
+        q->y    = v[12];
+        q->z    = v[13];
+        q->u    = v[14];
+        q->v    = 50;
+        ap[0]++;
+        f.b  = ap[0];
+        q    = &PS1Vertex(ap[0]);
+        q->x = v[11];
+        q->y = v[12];
+        q->z = v[13];
+        t[0] = PS1_OBJ(0).ypos;
+        t[0] -= 14680064;
+        me.scale = me.ypos;
+        me.scale -= t[0];
+        if (me.scale > 0) {
+            me.scale >>= 14;
+            me.scale += 1024;
+        }
+        else
+            me.scale = 1024;
+        q->u = me.scale;
+        q->v = me.scale;
+        ap[0]++;
+        f.c  = ap[0];
+        q    = &PS1Vertex(ap[0]);
+        q->x = v[11];
+        q->y = v[12];
+        q->z = v[13];
+        q->u = 17;
+        q->v = 16;
+        ap[0]++;
+        f.d  = ap[0];
+        q    = &PS1Vertex(ap[0]);
+        q->x = v[11];
+        q->y = v[12];
+        q->z = v[13];
+        ap[0]++;
+        ap[1]++;
+        PS1SetVertexCount(vertexCount + 4);
+        PS1SetFaceCount(faceCount + 1);
+    }
+    Face &f = PS1Face(ap[1]);
+    f.flag  = 5;
+    f.a     = ap[0];
+    Vertex *q = &PS1Vertex(ap[0]);
+    q->x    = v[4];
+    q->y    = v[5];
+    q->z    = v[6];
+    q->u    = 83;
+    q->v    = 50;
+    ap[0]++;
+    f.b  = ap[0];
+    q    = &PS1Vertex(ap[0]);
+    q->x = v[4];
+    q->y = v[5];
+    q->z = v[6];
+    t[0] = PS1_OBJ(0).ypos;
+    t[0] -= 16777216;
+    t[1] = me.ypos;
+    t[1] -= t[0];
+    if (t[1] > 0) {
+        t[1] >>= 14;
+        t[1] += 1536;
+    }
+    else
+        t[1] = 1536;
+    q->u = t[1];
+    q->v = t[1];
+    ap[0]++;
+    f.c  = ap[0];
+    q    = &PS1Vertex(ap[0]);
+    q->x = v[4];
+    q->y = v[5];
+    q->z = v[6];
+    q->u = 16;
+    q->v = 16;
+    ap[0]++;
+    f.d  = ap[0];
+    q    = &PS1Vertex(ap[0]);
+    q->x = v[4];
+    q->y = v[5];
+    q->z = v[6];
+    PS1SetVertexCount(vertexCount + 4);
+    PS1SetFaceCount(faceCount + 1);
+    if (v[3] < PS1_OBJ(0).values[13]) {
+        me.type = 0;
+        return;
+    }
+    TypeGroupList &players = objectTypeGroupList[4];
+    for (int loop = 0; loop < players.listSize; ++loop) { // ForEachActive 4, ARRAYPOS6
+        ap[6] = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[1] = v[3];
+        t[1] -= 131072;
+        t[2] = v[3];
+        t[2] += 131072;
+        if (p.values[14] > t[1] && p.values[14] < t[2]) {
+            t[0] = p.values[15];
+            t[0] -= v[1];
+            t[1] = t[0];
+            t[1] = (int)((uint)t[1] * (uint)t[0]);
+            t[0] = p.values[16];
+            t[0] -= v[2];
+            t[2] = t[0];
+            t[2] = (int)((uint)t[2] * (uint)t[0]);
+            t[1] += t[2];
+            if (t[1] < 12845056) {
+                me.type           = 10;
+                me.animationTimer = 0;
+                me.frame          = 0;
+                g_ps1HalfpipeCover = g_ps1HalfpipeCover | 1u << 22;
+                if (PS1_OBJ(ap[6]).state != 6) {
+                    if (PS1_OBJ(ap[6]).values[7] == 0) {
+                        PS1CallScriptFunction(7, 1);
+                        if (PS1_OBJ(ap[6]).gravity == 0) {
+                            PS1_OBJ(ap[6]).state = 6;
+                            g_ps1HalfpipeCover   = g_ps1HalfpipeCover | 1u << 23;
+                        }
+                        else {
+                            PS1_OBJ(ap[6]).values[7] = 60;
+                            g_ps1HalfpipeCover       = g_ps1HalfpipeCover | 1u << 24;
+                        }
+                    }
+                }
+                PlaySfx(45, 0);
             }
         }
     }
@@ -13159,6 +13311,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALRING:
                 opcodeSize = 0;
                 PS1SpecialRingUpdate();
+                break;
+            case FUNC_PS1SPECIALBOMB:
+                opcodeSize = 0;
+                PS1SpecialBombUpdate();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;
