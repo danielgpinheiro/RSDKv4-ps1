@@ -2,7 +2,8 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include <psyqo/advancedpad.hh>
-extern psyqo::AdvancedPad *g_ps1Pad; // main.cpp (initialized in start())
+#include "../ps1/pad.hh"
+extern PS1Pad *g_ps1Pad; // main.cpp (initialized in start()); port 1 only (docs/43 C11)
 volatile uint16_t g_ps1PadTestMask  = 0; // GDB-injected input, bit = INPUT_* index (test harness)
 volatile uint16_t g_ps1PadButtons   = 0; // last input mask (bit = INPUT_* index)
 volatile uint32_t g_ps1PadConnected = 0; // pad 1 seen by the BIOS driver

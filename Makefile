@@ -47,6 +47,7 @@ ps1/cdrom_fs.cpp \
 ps1/cdrom_stream.cpp \
 ps1/irq_guard.cpp \
 ps1/gpu_chain.cpp \
+ps1/pad.cpp \
 ps1/spu.cpp \
 ps1/xa_music.cpp \
 ps1/mdec.cpp \

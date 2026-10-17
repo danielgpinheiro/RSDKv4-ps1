@@ -12,6 +12,7 @@
  * 0 Sonic, 1 Tails, 2 Knuckles, 3 Sonic & Tails).
  */
 #include <psyqo/advancedpad.hh>
+#include "../ps1/pad.hh"
 #include <psyqo/alloc.h>
 #include <psyqo/application.hh>
 #include <psyqo/cdrom-device.hh>
@@ -59,7 +60,7 @@ volatile uint32_t g_ps1PerfWinSec[11] = {};
 #endif
 
 psyqo::GPU *g_ps1GPU           = nullptr;
-psyqo::AdvancedPad *g_ps1Pad   = nullptr;
+PS1Pad *g_ps1Pad   = nullptr;
 psyqo::CDRomDevice *g_ps1CDRom = nullptr;
 void PS1IrqGuardInstall(); // ps1/irq_guard.cpp
 #if PS1_PC_SAMPLER
@@ -147,7 +148,7 @@ class RSDKv4PS1App final : public psyqo::Application {
 #if PS1_PC_SAMPLER
         PS1PcSamplerInstall();
 #endif
-        m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
+        m_pad.initialize(); // psyqo AdvancedPad's driver on port 1 only (ps1/pad.hh, docs/43 C11); never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;
         PS1ProfTicksInit(); // per-object-type CPU profile (Object.cpp g_ps1TypeTicks)
         memset(&scriptEng, 0, sizeof(scriptEng)); // the VM state in the scratchpad (Script.hpp)
@@ -210,7 +211,7 @@ class RSDKv4PS1App final : public psyqo::Application {
     }
 
     psyqo::CDRomDevice m_cdrom;
-    psyqo::AdvancedPad m_pad;
+    PS1Pad m_pad;
 };
 
 RSDKv4PS1App s_app;
