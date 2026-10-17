@@ -200,6 +200,7 @@ bool PS1TestBootStage() { return g_ps1Test && g_ps1Test->h.folder[0]; }
 const char *PS1TestBootFolder() { return g_ps1Test->h.folder; }
 const char *PS1TestBootId() { return g_ps1Test->h.id; }
 int PS1TestBootPlayer() { return g_ps1Test ? g_ps1Test->h.player : -1; }
+int PS1TestBootMode() { return g_ps1Test ? g_ps1Test->h.gameMode : 0; }
 
 void PS1TestAfterInit() {
     if (!g_ps1Test)

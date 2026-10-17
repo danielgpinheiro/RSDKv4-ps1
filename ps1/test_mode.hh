@@ -18,6 +18,7 @@ bool PS1TestBootStage();         // the scenario boots straight into a stage (no
 const char *PS1TestBootFolder(); // its stage folder / id / player (stage.playerListPos)
 const char *PS1TestBootId();
 int PS1TestBootPlayer();
+int PS1TestBootMode();          // game mode (Sonic CD: Options.GameMode)
 void PS1TestAfterInit();         // after Engine.Init: seed, player 2 flag
 void PS1TestPreFrame();          // frame(), before RunFrame: input track, pokes
 void PS1TestPostFrame();         // frame(), after PS1PerfTick: telemetry, checkpoints, end of run
