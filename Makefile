@@ -72,7 +72,7 @@ CPPFLAGS += -DPS1_GAME=$(GAME)
 
 # `make BOOT=<stage folder>` (e.g. Zone01): start in that stage (test harness): its first GameConfig entry
 # unless BOOT_ID is given, with player BOOT_PLAYER (stage.playerListPos: 0 Sonic, 1 Tails, 2 Knuckles,
-# 3 Sonic & Tails). Rebuild RSDKv4/main.cpp and RetroEngine.cpp when switching (touch them).
+# 3 Sonic & Tails). Switching any of these rebuilds everything (the build-flag stamp below).
 # `make PROFILE=1`: count VM instructions per object type (tools/obj_profile.sh; costs ~1-2 % CPU).
 ifeq ($(PROFILE),1)
 CPPFLAGS += -DPS1_PROFILE=1
