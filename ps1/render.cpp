@@ -2945,6 +2945,44 @@ void DrawFadedFace(void *v, uint color, uint fogColor, int alpha)
     DrawFace(v, 0x7F000000u | ch(16) << 16 | ch(8) << 8 | ch(0)); // alpha 0xFE: opaque
 }
 
+#if PS1_GAME != 1 // Sonic 1 has no 3D stage (its EXE stays as it was)
+// DrawFadedFace + DrawFace as words for the ordering table (docs/43 C1: the special stage's faded faces with a corner left
+// to the CPU, ~30-200 a frame, no longer captured through the general path): the same early-outs, strip order, colour
+// and limits test. 0: nothing drawn; 1: w[0..4] = the opaque flat quad; 2: beyond the GPU limits (the caller draws it
+// through DrawFadedFace: the clipped polygon).
+PS1_HOT3D int PS1FadedFaceWords(const Vertex *q, uint color, uint fogColor, int alpha, uint32_t *w)
+{
+    if (alpha > 0xFF)
+        alpha = 0xFF;
+    if (alpha < 1)
+        return 0;
+    if ((q[0].x < 0 && q[1].x < 0 && q[2].x < 0 && q[3].x < 0) || (q[0].x > SCREEN_XSIZE && q[1].x > SCREEN_XSIZE && q[2].x > SCREEN_XSIZE && q[3].x > SCREEN_XSIZE)
+        || (q[0].y < 0 && q[1].y < 0 && q[2].y < 0 && q[3].y < 0) || (q[0].y > SCREEN_YSIZE && q[1].y > SCREEN_YSIZE && q[2].y > SCREEN_YSIZE && q[3].y > SCREEN_YSIZE))
+        return 0;
+    if ((q[0].x == q[1].x && q[1].x == q[2].x && q[2].x == q[3].x) || (q[0].y == q[1].y && q[1].y == q[2].y && q[2].y == q[3].y))
+        return 0;
+    if (!s_frameOpen || PS1ObjectsHidden()) // DrawFace's
+        return 0;
+    auto ch = [&](int shift) {
+        int c5 = ((color >> shift) & 0xFF) >> 3, f5 = ((fogColor >> shift) & 0xFF) >> 3;
+        return (uint32_t)((f5 * (0xFF - alpha) >> 8) + (c5 * alpha >> 8)) << 3;
+    };
+    Vertex strip[4];
+    PS1QuadStrip(q, strip);
+    int x0 = strip[0].x, x1 = strip[0].x, y0 = strip[0].y, y1 = strip[0].y;
+    for (int k = 1; k < 4; ++k) {
+        x0 = strip[k].x < x0 ? strip[k].x : x0, x1 = strip[k].x > x1 ? strip[k].x : x1;
+        y0 = strip[k].y < y0 ? strip[k].y : y0, y1 = strip[k].y > y1 ? strip[k].y : y1;
+    }
+    if (PS1BeyondGpuLimits(x0, y0, x1, y1))
+        return 2;
+    // DrawFace's colour word from DrawFadedFace's 0x7F000000 | R << 16 | G << 8 | B: BGR, opaque
+    w[0] = 0x28000000u | ch(0) << 16 | ch(8) << 8 | ch(16);
+    for (int k = 0; k < 4; ++k) w[1 + k] = (uint32_t)(uint16_t)strip[k].x | ((uint32_t)(uint16_t)strip[k].y << 16);
+    return 1;
+}
+#endif
+
 // Text menus (the scripts' DrawMenu: the level select and its results screens): upstream's code as is. Each character is
 // an 8 x 8 DrawSprite of the object's sheet (LevelSelect/Text.gif: the ASCII grid, the highlighted copy 128 lines
 // below), which the atlas holds whole (tools/atlas/runtime_frames.py, 'Menu Control').

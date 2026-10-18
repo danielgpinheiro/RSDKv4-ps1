@@ -942,7 +942,10 @@ static_assert(sizeof(PS1OTRec) == sizeof(DrawListEntry3D), "PS1OTRec reuses draw
 // The ordering table's faces other than the faded fast path (docs/43 C1): out of line, so the hot loop below keeps its
 // state in registers (with these paths inline GCC spilled ~30 values to the stack). Returns the face's record pointer
 // (tagged as in the link pass) or null. The caller has closed any open bulk run.
-static uint32_t s_ps1OTCaptured = 0, s_ps1OTTex = 0;
+static uint32_t s_ps1OTCaptured = 0, s_ps1OTTex = 0, s_ps1OTFadedGen[3];
+volatile uint32_t g_ps1Draw3DFadedFast = 1; // GDB: 0 = faded faces with a CPU corner through the captured general path
+volatile uint32_t g_ps1OTFadedGen[3];       // last frame: those faces not drawn / written as words / beyond the limits
+int PS1FadedFaceWords(const Vertex *q, uint color, uint fogColor, int alpha, uint32_t *w); // ps1/render.cpp
 static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int spriteSheetID, bool draw)
 {
     const Face &f = faceBuffer[i];
@@ -967,6 +970,38 @@ static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int 
         ++s_ps1OTTex;
         g_ps1Faces = g_ps1Faces + 1;
         return reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(h) | 2);
+    }
+    // a faded face with a corner left to the CPU (near the camera or beyond the GTE's screen range): upstream's general
+    // case (PS1Draw3DList: exact corners, fog, DrawFadedFace) as words when the quad fits the GPU limits (docs/43 C1)
+    if (f.flag == FACE_FLAG_FADED && g_ps1Draw3DFadedFast) {
+        if (g_ps1Proj[f.a].v <= 0 || g_ps1Proj[f.b].v <= 0 || g_ps1Proj[f.c].v <= 0 || g_ps1Proj[f.d].v <= 0) // PS1_ZPOS
+            return nullptr;
+        Vertex quad[4];
+        PS1ProjectedVertex(f.a, &quad[0].x, &quad[0].y);
+        PS1ProjectedVertex(f.b, &quad[1].x, &quad[1].y);
+        PS1ProjectedVertex(f.c, &quad[2].x, &quad[2].y);
+        PS1ProjectedVertex(f.d, &quad[3].x, &quad[3].y);
+        int fogStr = 0;
+        if ((depth - 0x8000) >> 8 >= 0)
+            fogStr = (depth - 0x8000) >> 8;
+        if (fogStr > fogStrength)
+            fogStr = fogStrength;
+        uint32_t w5[5];
+        int r = PS1FadedFaceWords(quad, f.color, fogColor, 0xFF - fogStr, w5);
+        if (r == 0) {
+            ++s_ps1OTFadedGen[0];
+            return nullptr;
+        }
+        if (r == 1) {
+            ++s_ps1OTFadedGen[1];
+            uint32_t *h = PS1ChainOTRaw(5);
+            if (!h)
+                return nullptr;
+            for (int k = 0; k < 5; ++k) h[1 + k] = w5[k];
+            g_ps1Faces = g_ps1Faces + 1;
+            return h; // a faded quad: the link pass writes its 5-word header
+        }
+        ++s_ps1OTFadedGen[2]; // beyond the limits: the clipped polygon, through the general path below
     }
     // any other face: Draw3DScene's general path on a one-entry draw order, captured
     DrawListEntry3D one;
@@ -1141,6 +1176,7 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     g_ps1Prof3DProject = 0;
     s_ps1FadedHbl = s_ps1GeneralN = 0;
     s_ps1OTCaptured = s_ps1OTTex = 0;
+    s_ps1OTFadedGen[0] = s_ps1OTFadedGen[1] = s_ps1OTFadedGen[2] = 0;
     for (int k = 0; k < 8; ++k) g_ps1Prof3DGenTicks[k] = g_ps1Prof3DGenCount[k] = 0;
     const int count = faceCount;
     PS1OTRec *rec   = reinterpret_cast<PS1OTRec *>(drawList3D);
@@ -1268,6 +1304,7 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     g_ps1FadedCulled    = g_ps1FadedCulled + culled;
     g_ps1OTCaptured     = s_ps1OTCaptured;
     g_ps1OTTexFast      = s_ps1OTTex;
+    for (int k = 0; k < 3; ++k) g_ps1OTFadedGen[k] = s_ps1OTFadedGen[k];
     g_ps1Prof3DSort     = PS1HblanksSince(t1); // the second pass (linking)
     g_ps1Prof3DFaces    = count;
     g_ps1Prof3DDraw     = PS1HblanksSince(t0);
