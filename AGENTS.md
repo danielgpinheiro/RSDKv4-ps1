@@ -49,6 +49,9 @@ make -j8 BOOT=Special BOOT_ID=1..8              # Sonic 2's special stages 1-8 (
 make BOOT=<stage> COMBO=1|2 [GAP=n]             # 1-up + Sign Post (1) / Super (2) test without a debugger (RetroArch
                                                 # cores); make dist refuses it
 make PERF_SPLIT=1 ...                           # docs/43 frame-split counters (GPU tail, flip gap, sections); harness only
+make BOOT=Special OT_CHECK=1                    # every call of the special stage's asm face loop (RSDKv4/Scene3DOT.S) replayed
+                                                # by the C fast path and compared: g_ps1OTCheckMismatch / Cover[] (GDB
+                                                # g_ps1OTCheckFogMax, g_ps1OTCheckNoDraw inject rare branches); harness only
 make PLATFORM_TEST=1            # the phase 0 smoke-test app (ps1/platform_test.cpp)
 tools/data_disc.sh              # = tools/build_assets.py --src ../Sonic2_Extracted (the builder's pipeline) + make disc;
                                 # game disc from ../Sonic2_Extracted (Data/ + Bytecode/, no sources / menus / ZoneM)
@@ -77,6 +80,8 @@ make BOOT=X SAMPLER=1 && tools/pc_profile.sh OUT [START END]   # CPU profile by 
                                               # keeps the RAM dumps, JUMP=0 = Right only (Sonic 1's special stage,
                                               # window 300-1500); a PERF_SPLIT=1 build adds the SPLIT line
 python3 tools/gpu_cost.py RAM.bin HEAD [TAIL ...]   # DuckStation's GPU model on a frame's chain (clipped to the screen)
+python3 tools/chain_cmp.py REF_OUT NEW_OUT        # two perf_scene.sh GPU= KEEP_RAM=1 runs: the frames' chain payload words
+                                                # compared in GPU order (links left out): exact A/B of draw code
 make BOOT=X PROFILE=1 && tools/obj_profile.sh X [OUT F1 F2]   # per-object-type CPU ticks + VM instruction counts
 tools/menu/menu_run.sh "F:MASK,..." "F,..." OUT  # menu runs: pad masks at frames, both framebuffers captured
 GAME=1 tools/export_builder.sh ../Sonic-1-PS1-ISO-Builder   # the Sonic 1 builder (published: github.com/danielgpinheiro/Sonic-1-PS1-ISO-Builder)
@@ -114,6 +119,17 @@ self-test (`PS1DetectGpuVersion`; GDB `g_ps1FlipRectsOn` / `g_ps1FlipRectsForce`
 (`PS1SpecialBomb`), the ordering table's rare paths out of line. Harness: `tools/perf_scene.sh` `SHOTS=` (VRAM + entity
 table per frame) with `tools/shots_cmp.py`, `RUN_EXE` / `RUN_ELF`, `DISC=` (reference on the pre-patch disc), `HOLD=`,
 `PAD="f:mask ..."`, `MID=` / `POST=` (GDB lines at the window's start / end), a retry when GDB loses the race.
+
+## Special stage in assembly (docs/43 C1 / C4, 2026-10-18)
+`RSDKv4/Scene3DOT.S` (the ordering table's faded fast path) and `RSDKv4/Scene3DTf.S` (the GTE transform loop), Sonic 2
+only (`GAME=1` doesn't build them; Sonic 1's EXE stays byte-identical). Both return to the C code at the first face /
+triple it must do; state structs `PS1OTFastState` / `PS1TfState` in `Scene3D.cpp` with `static_assert`s on the `.S`
+offsets. Hand-scheduling rules (comments at the top of each file): no load result used by the next instruction, no load
+or GTE instruction in a branch delay slot, two instructions between mtc2 and the command, two between mflo / mfhi and
+the next mult. Verify a change with `OT_CHECK=1`, `perf_scene.sh SHOTS= GPU= KEEP_RAM=1` + `shots_cmp.py` /
+`chain_cmp.py` against a saved reference EXE (`RUN_EXE` / `RUN_ELF`), and `../tests/tools/ab.py
+s2-release-ss-frames-ssN --ref <commit> [--cur <worktree>]` (stages 1-6 and ss1-jump are deterministic; 7 and 8 are not
+in release mode yet).
 
 ## Layout
 | Path | Role |
