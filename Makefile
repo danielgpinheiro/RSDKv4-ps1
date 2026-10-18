@@ -118,11 +118,11 @@ CPPFLAGS += -DPS1_TEST=1
 SRCS += ps1/test_mode.cpp
 endif
 
-# Sonic 2's special stage: the ordering table's faded fast path in assembly (RSDKv4/Scene3DOT.S, docs/43 C1; Sonic 1
-# doesn't use the ordering-table pass). `make OT_CHECK=1`: every asm call is replayed by the C fast path and compared
+# Sonic 2's special stage: the ordering table's faded fast path (RSDKv4/Scene3DOT.S, docs/43 C1) and the GTE transform
+# loop (RSDKv4/Scene3DTf.S, C4) in assembly; Sonic 1 has no 3D stage (its EXE stays as it was). `make OT_CHECK=1`: every asm call is replayed by the C fast path and compared
 # (g_ps1OTCheck* counters; harness only, make dist refuses it).
 ifneq ($(GAME),1)
-SRCS += RSDKv4/Scene3DOT.S
+SRCS += RSDKv4/Scene3DOT.S RSDKv4/Scene3DTf.S
 endif
 ifeq ($(OT_CHECK),1)
 CPPFLAGS += -DPS1_OT_CHECK=1

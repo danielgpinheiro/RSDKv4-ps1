@@ -465,6 +465,18 @@ static void PS1CpuVertexT(int v)
     g_ps1Proj[v].u  = 0x8000u;
     g_ps1Proj[v].v  = (q.x * matFinal.values[0][2] >> 8) + (q.y * matFinal.values[1][2] >> 8) + (q.z * matFinal.values[2][2] >> 8) + matFinal.values[3][2];
 }
+#if PS1_GAME != 1
+struct PS1TfState { // RSDKv4/Scene3DTf.S's T_* offsets
+    const Vertex *vb;
+    PS1ProjEntry *pj;
+    int end; // the last whole triple's end
+    int ox, oy, oz;
+};
+static_assert(offsetof(PS1TfState, pj) == 4 && offsetof(PS1TfState, end) == 8 && offsetof(PS1TfState, ox) == 12
+                  && offsetof(PS1TfState, oz) == 20 && sizeof(Vertex) == 20,
+              "Scene3DTf.S's layout");
+extern "C" int PS1TransformAsm(PS1TfState *s, int v);
+#endif
 void PS1TransformProject3D(int count)
 {
     using namespace psyqo::GTE;
@@ -507,7 +519,17 @@ void PS1TransformProject3D(int count)
     // the arrays' pointers in locals: the stores below could alias the globals, so GCC reloaded both every triple
     const Vertex *const vb = vertexBuffer;
     PS1ProjEntry *const pj = g_ps1Proj;
+#if PS1_GAME != 1
+    // the triples the GTE can do in assembly (docs/43 C4: RSDKv4/Scene3DTf.S); it returns at a triple for the code below
+    PS1TfState ts;
+    ts.vb = vb, ts.pj = pj, ts.end = count - count % 3, ts.ox = ox, ts.oy = oy, ts.oz = oz;
+#endif
     for (; v + 3 <= count; v += 3) {
+#if PS1_GAME != 1
+        v = PS1TransformAsm(&ts, v);
+        if (v + 3 > count)
+            break;
+#endif
         const Vertex *p = &vb[v];
         int dx0 = p[0].x - ox, dy0 = p[0].y - oy, dz0 = p[0].z - oz, dx1 = p[1].x - ox, dy1 = p[1].y - oy, dz1 = p[1].z - oz;
         int dx2 = p[2].x - ox, dy2 = p[2].y - oy, dz2 = p[2].z - oz;
