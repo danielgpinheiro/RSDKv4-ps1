@@ -19,7 +19,7 @@ if nm | grep -q g_ps1McTestSteps; then echo "rsdkv4.ps-exe is a MEMCARD_TEST bui
 if ! nm | grep -q g_ps1InitDone; then echo "rsdkv4.ps-exe is not the game (PLATFORM_TEST?): run make first"; exit 1; fi
 if ! grep -q "^PROFILE= " build/flags.txt; then echo "rsdkv4.ps-exe is a PROFILE build: run make first"; exit 1; fi
 if ! grep -q "RSDK_AUTOBUILD=1" Makefile; then echo "the executable must be built with RSDK_AUTOBUILD=1 (LICENSE.md)"; exit 1; fi
-if ! grep -q " GAME=$GAME$" build/flags.txt; then echo "rsdkv4.ps-exe is not a GAME=$GAME build: run make GAME=$GAME first"; exit 1; fi
+if ! grep -qE " GAME=$GAME( |$)" build/flags.txt; then echo "rsdkv4.ps-exe is not a GAME=$GAME build: run make GAME=$GAME first"; exit 1; fi
 if [ "$GAME" = 1 ]; then LIST=rsdkv4_filelist_s1.txt TRACE=boot_trace_s1.txt EXE=Sonic1-PS1.exe; else
   LIST=rsdkv4_filelist.txt TRACE=boot_trace.txt EXE=Sonic2-PS1.exe; fi
 B=$DEST/builder
