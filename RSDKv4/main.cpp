@@ -19,6 +19,7 @@
 #include <psyqo/gpu.hh>
 
 #include "../ps1/loading.hh"
+#include "../ps1/stack.hh"
 #include "../ps1/test_mode.hh"
 #include "../ps1/video.hh"
 
@@ -116,6 +117,8 @@ __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
         top = hs;
     g_ps1HeapTotal    = ss - hs;
     g_ps1HeapHeadroom = ss - top;
+    if (PS1StackGuardBroken()) // the main stack (ps1/stack.hh) overflowed its array
+        g_ps1StackOverflow = g_ps1StackOverflow + 1;
 }
 
 #ifdef PS1_COMBO_TEST
@@ -240,9 +243,15 @@ class RSDKv4PS1App final : public psyqo::Application {
 
 RSDKv4PS1App s_app;
 
+int ps1AppMain() { return s_app.run(); }
+
 } // namespace
 
-int main() { return s_app.run(); }
+// The app runs on its own .bss stack, out of the heap's way (ps1/stack.hh, V4-102).
+int main() {
+    PS1StackPaint();
+    return PS1RunOnStack(ps1AppMain, g_ps1Stack + PS1_STACK_BYTES / 4);
+}
 
 #else // PC and other platforms: the upstream main
 

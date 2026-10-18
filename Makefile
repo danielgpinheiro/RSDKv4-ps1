@@ -54,6 +54,7 @@ ps1/mdec.cpp \
 ps1/video.cpp \
 ps1/loading.cpp \
 ps1/memcard.cpp \
+ps1/stack.cpp \
 
 ifeq ($(PLATFORM_TEST),1)
 SRCS := ps1/platform_test.cpp $(filter-out RSDKv4/% ps1/%_headless.cpp ps1/render.cpp ps1/tileset.cpp ps1/sprite_atlas.cpp ps1/menu.cpp,$(SRCS))
@@ -64,6 +65,8 @@ endif
 # RSDK_AUTOBUILD=1: the decompilation's license (LICENSE.md) wants every pre-built executable built with the DLC
 # flags off (docs/30 phase 11); for the 2013 mobile data it changes nothing (no Amy, no game.hasPlusDLC before REV03).
 CPPFLAGS = -I ps1/libc -I RSDKv4 -I RSDKv4/NativeObjects -DRETRO_USE_MOD_LOADER=0 -DRETRO_USE_NETWORKING=0 -DRSDK_AUTOBUILD=1
+# The main stack is a .bss array (ps1/stack.hh, V4-102): the test mode's stack checkpoint measures it there.
+CPPFLAGS += -DPS1_SEPARATE_STACK=1
 
 GAME ?= 2
 ifeq ($(filter 1 2,$(GAME)),)

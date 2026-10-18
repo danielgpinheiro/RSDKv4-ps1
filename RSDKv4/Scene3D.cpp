@@ -10,6 +10,7 @@ Matrix matTemp  = Matrix();
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include <psyqo/alloc.h>
+#include "../ps1/gpu_chain.hh"
 // Without the block (see Scene3D.hpp): 1-entry dummies, capacity 0.
 static Face s_ps1DummyFace[1];
 static Vertex s_ps1DummyVertex[1];
@@ -79,6 +80,7 @@ void PS1Scene3DReadList()
         fclose(f);
     }
 }
+#define PS1_SCENE3D_ARENA_WORDS (40 * 1024 / 4) // the chain arenas' size while the block is loaded (below)
 // First thing in a stage load's bracket (RSDKv4/Scene.cpp), after PS1LoadingBegin freed the chain arenas: the block takes
 // the bottom of the free heap and the load's staging buffers, then the arenas, stack above it, as they did above the
 // static arrays. Allocated before the bracket, it sat above the arenas' hole and the load spilled past it (special
@@ -94,6 +96,7 @@ void PS1Scene3DPrepare(const char *folder)
         psyqo_free(s_ps1Scene3DBlock);
         s_ps1Scene3DBlock = nullptr;
         PS1Scene3DPoint(nullptr);
+        PS1ChainSetArenaWords(0); // the normal 64 KB arenas again
         g_ps1Scene3DFrees = g_ps1Scene3DFrees + 1;
         return;
     }
@@ -106,6 +109,11 @@ void PS1Scene3DPrepare(const char *folder)
     }
     memset(s_ps1Scene3DBlock, 0, size);
     PS1Scene3DPoint((uint8_t *)s_ps1Scene3DBlock);
+    // V4-102: the special stage chains at most 6,028 words a parity (stages 1-7, release EXE, 2026-10-18) of the
+    // 16,384 a 64 KB arena holds; its 40 KB arenas (allocated at this load's end, PS1LoadingEnd) leave the heap ~48 KB,
+    // which pays for the separate stack (ps1/stack.hh) and lifts the stage's thin headroom (V4-067). Overflow counts
+    // in g_ps1ChainOverflow.
+    PS1ChainSetArenaWords(PS1_SCENE3D_ARENA_WORDS);
     g_ps1Scene3DAllocs = g_ps1Scene3DAllocs + 1;
 }
 #else

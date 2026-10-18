@@ -70,7 +70,10 @@ struct VarFragment {
 };
 
 uint32_t *s_arenaMem = nullptr; // 2 x s_arenaWords (heap), nullptr while suspended
-uint32_t s_arenaWords = PS1_CHAIN_ARENA_WORDS; // per parity; smaller while an FMV plays (PS1ChainSetArenaWords)
+uint32_t s_arenaWords = PS1_CHAIN_ARENA_WORDS; // per parity; smaller while an FMV plays or the Scene3D block is loaded
+                                               // (PS1ChainSetArenaWords): applies at the next allocation
+uint32_t s_arenaLive  = 0; // words per parity of s_arenaMem: a load that kept the arenas (this frame had chained
+                           // something) keeps their size, so a larger s_arenaWords never indexes past the block
 void (*s_hook)() = nullptr;
 
 inline void runHook() {
@@ -176,8 +179,10 @@ static bool s_suspended = false;
 
 void PS1ChainBegin(psyqo::GPU &gpu) {
     s_gpu = &gpu;
-    if (!s_arenaMem && !s_suspended)
-        s_arenaMem = (uint32_t *)psyqo_malloc(2 * s_arenaWords * 4);
+    if (!s_arenaMem && !s_suspended) {
+        s_arenaMem  = (uint32_t *)psyqo_malloc(2 * s_arenaWords * 4);
+        s_arenaLive = s_arenaWords;
+    }
     if (!s_arenaMem) {
         g_ps1ChainArenaFail = g_ps1ChainArenaFail + 1;
         s_base = s_cur = s_end = nullptr;
@@ -185,9 +190,9 @@ void PS1ChainBegin(psyqo::GPU &gpu) {
         s_sbatch = nullptr;
         return;
     }
-    s_base       = s_arenaMem + (gpu.getParity() ? s_arenaWords : 0);
+    s_base       = s_arenaMem + (gpu.getParity() ? s_arenaLive : 0);
     s_cur        = s_base;
-    s_end        = s_base + s_arenaWords;
+    s_end        = s_base + s_arenaLive;
     s_batch      = nullptr;
     s_sbatch     = nullptr;
     s_tpageValid = false;
