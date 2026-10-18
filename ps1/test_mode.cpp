@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <psyqo/alloc.h>
+#include <psyqo/cdrom-device.hh>
 #include <psyqo/gpu.hh>
 #include "common/psxlibc/handlers.h"
 #include "common/syscalls/syscalls.h"
@@ -19,6 +20,7 @@
 extern volatile uint32_t g_ps1PerfFrames, g_ps1PerfLastHbl, g_ps1PerfLastFrameVsyncs;
 extern volatile uint16_t g_ps1PadTestMask, g_ps1PadButtons;
 extern psyqo::GPU *g_ps1GPU;
+extern psyqo::CDRomDevice *g_ps1CDRom;
 bool PS1LoadingActive(); // loading.cpp
 
 extern "C" const char g_ps1TestBuild[] = "TEST"; // marks a TEST=1 build (make dist / export_builder refuse it)
@@ -180,16 +182,20 @@ void PS1TestPhase(uint8_t p) { s_phase = p; }
 
 void PS1TestInit() {
     tty("T test-build v1\n");
+    // Sector reads straight into a stack buffer: a buffered fread would allocate a 32 KB read-ahead window, freed
+    // again but kept in the heap's high-water mark, and every memory guard of the test build would be 32 KB off.
     FILE *f = fopen("Data/TEST.SEL", "rb");
+    uint32_t lba = f ? f->lba : 0;
+    if (f)
+        fclose(f);
+    static_assert(sizeof(ScnHeader) <= 2048, "header in one sector");
+    uint32_t sec[512];
     ScnHeader h;
-    if (!f || fread(&h, sizeof(h), 1, f) != 1 || h.magic != SCN_MAGIC) {
-        if (f)
-            fclose(f);
+    if (!lba || !g_ps1CDRom->readSectorsBlocking(lba, 1, sec, *g_ps1GPU) || (memcpy(&h, sec, sizeof(h)), h.magic != SCN_MAGIC)) {
         tty("T no-scenario\n");
         return;
     }
     if (h.version != SCN_VERSION) {
-        fclose(f);
         tty("T bad-version");
         ttysx(h.version);
         ttyc('\n');
@@ -201,11 +207,18 @@ void PS1TestInit() {
     memset(s, 0, sizeof(*s));
     s->h = h;
     uint8_t *b = mem + sizeof(PS1TestScenario);
-    if (fread(b, 1, h.bodyBytes, f) != h.bodyBytes) {
-        tty("T short-read\n");
-        testExit(2);
+    for (uint32_t done = 0, k = 0; done < h.bodyBytes; k++) { // body bytes follow the header in the file
+        if (k && !g_ps1CDRom->readSectorsBlocking(lba + k, 1, sec, *g_ps1GPU)) {
+            tty("T short-read\n");
+            testExit(2);
+        }
+        uint32_t from  = k ? 0 : sizeof(ScnHeader);
+        uint32_t chunk = 2048 - from;
+        if (chunk > h.bodyBytes - done)
+            chunk = h.bodyBytes - done;
+        memcpy(b + done, (uint8_t *)sec + from, chunk);
+        done += chunk;
     }
-    fclose(f);
     s->input  = (const ScnInput *)b;  b += h.nInput * sizeof(ScnInput);
     s->check  = (const ScnCheck *)b;  b += h.nCheck * sizeof(ScnCheck);
     s->poke   = (const ScnPoke *)b;   b += h.nPoke * sizeof(ScnPoke);
