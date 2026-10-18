@@ -2404,7 +2404,7 @@ __attribute__((always_inline)) static inline void PS1DrawSpriteAffine(int direct
     g_ps1AffineMisses = g_ps1AffineMisses + 1;
     int sn = sin512LookupTable[rotation] * scale >> 9;
     int cs = cos512LookupTable[rotation] * scale >> 9;
-    bool fx = direction != FLIP_NONE;
+    bool fx = direction == FLIP_X; // upstream (software path) mirrors only for FLIP_X (V4-103)
     // Texel edges: see the Sonic 2 version below (PS1ChainPieceRect's rule at right angles and scale 1).
     const bool right  = scale == 0x200 && !(rotation & 0x7F);
     uint32_t misses   = g_ps1AtlasDrawMiss;
@@ -2442,7 +2442,7 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         rotation = 0x200 - rotation;
     int sn = sin512LookupTable[rotation] * scale >> 9;
     int cs = cos512LookupTable[rotation] * scale >> 9;
-    bool fx = direction != FLIP_NONE;
+    bool fx = direction == FLIP_X; // upstream (software path) mirrors only for FLIP_X (V4-103)
     // Texel edges (PS1ChainPieceRect): at right angles and scale 1 (Sonic's static-frame rotations 0 / 90 / 180 / 270,
     // mirrored when he faces left) the quad is axis-aligned and exact when a texture axis running left, or up, on
     // screen has its edges pulled back one texel; before, a mirrored frame read the atlas's next column along its left
@@ -2481,7 +2481,7 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
 void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                        int sheetID)
 {
-    if (!(rotation & 0x1FF) && direction == FLIP_NONE) { // no rotation: 1:1 sprite (pixel exact)
+    if (!(rotation & 0x1FF) && direction != FLIP_X) { // no rotation, not mirrored (upstream mirrors only FLIP_X): 1:1 sprite
         PS1DrawSprite(XPos - pivotX, YPos - pivotY, width, height, sprX, sprY, sheetID); // callers pass -frame pivot
         return;
     }

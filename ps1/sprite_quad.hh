@@ -15,19 +15,24 @@ struct PS1QuadUV {
 };
 
 // Corners of a piece (local rect ox, oy, w, h of the frame) rotated / zoomed about (pivotX, pivotY) and placed at
-// (XPos, YPos); sn / cs = sin / cos * scale (512 = 1.0), fx = mirrored. Upstream (HW path) corners.
+// (XPos, YPos); sn / cs = sin / cos * scale (512 = 1.0), fx = mirrored. A, B, C are upstream's (HW path) corners; D is
+// B + C - A, so the quad is an exact parallelogram (V4-103, as RSDKv3-ps1's CD-093): the GPU's two triangles then share one texture gradient.
+// With D rounded on its own (as before), ABC and BCD had different gradients and the texture sheared along the BC
+// diagonal, a shear that changed with every angle and position (the "varying UVs" of rotated sprites).
 static inline PS1QuadCorners PS1AffineCorners(int XPos, int YPos, int pivotX, int pivotY, int sn, int cs, bool fx, int ox, int oy,
                                               int w, int h)
 {
     PS1QuadCorners q;
-    const int lx[4] = { ox, ox + w, ox, ox + w };
-    const int ly[4] = { oy, oy, oy + h, oy + h };
-    for (int k = 0; k < 4; ++k) {
+    const int lx[3] = { ox, ox + w, ox };
+    const int ly[3] = { oy, oy, oy + h };
+    for (int k = 0; k < 3; ++k) {
         int x  = fx ? pivotX - lx[k] : lx[k] - pivotX;
         int y  = ly[k] - pivotY;
         q.x[k] = XPos + ((x * cs + y * sn) >> 9);
         q.y[k] = YPos + ((y * cs - x * sn) >> 9);
     }
+    q.x[3] = q.x[1] + q.x[2] - q.x[0];
+    q.y[3] = q.y[1] + q.y[2] - q.y[0];
     return q;
 }
 
