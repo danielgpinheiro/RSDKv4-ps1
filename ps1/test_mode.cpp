@@ -26,7 +26,7 @@ extern "C" const char g_ps1TestBuild[] = "TEST"; // marks a TEST=1 build (make d
 #define SCN_MAGIC   0x4C455354u // "TSEL"
 #define SCN_VERSION 1
 enum : uint16_t { F_RECORD = 1, F_NOHASH = 2, F_SELFTEST_CRASH = 4, F_SELFTEST_HANG = 8 };
-enum : uint32_t { C_WATCH = 1, C_ARRAYS = 2, C_DUMPS = 4, C_STACK = 32 };
+enum : uint32_t { C_WATCH = 1, C_ARRAYS = 2, C_DUMPS = 4, C_VRAM = 16, C_STACK = 32 };
 
 struct ScnHeader {
     uint32_t magic;
@@ -63,6 +63,13 @@ struct PS1TestScenario {
     bool ended;
 };
 PS1TestScenario *g_ps1Test = nullptr;
+
+// Stack / heap gap (checkpoint kind `stack`): with a stack checkpoint in the scenario, the RAM between the heap's
+// high-water mark and the stack is painted at boot; a checkpoint then finds the lowest word the stack has written
+// (scanning up from the heap's high-water mark) and the gap between the two. Scenarios read the results as cwatches.
+volatile uint32_t g_ps1TestHeapHigh = 0, g_ps1TestStackLow = 0, g_ps1TestStackGap = 0;
+#define STACK_PAINT 0x5AFE5AFEu
+static uint32_t s_paintLo = 0;
 
 // ---- TTY (PCSX expansion region: putc at 1F802080h, exit at 1F802082h) -------------------------------------------
 static inline void ttyc(char c) { *(volatile char *)0xBF802080 = c; }
@@ -213,6 +220,15 @@ void PS1TestInit() {
     s_lastVbl = s_vbl;
     syscall_sysEnqIntRP(0, &s_watchdog);
     ((uint32_t *)0x80000200)[0x40] = (uint32_t)&PS1TestUnresolved; // A0 table (RAM, 200h)
+    for (int i = 0; i < h.nCheck; i++) {
+        if (s->check[i].kinds & C_STACK) { // paint the free RAM between the heap and the stack (see stackGap)
+            uint32_t sp;
+            __asm__ volatile("move %0, $sp" : "=r"(sp));
+            s_paintLo = (((uint32_t)psyqo_heap_end() + 3) & ~3u) + 64;
+            for (uint32_t a = s_paintLo; a < sp - 512; a += 4) *(volatile uint32_t *)a = STACK_PAINT;
+            break;
+        }
+    }
     if (h.flags & F_SELFTEST_CRASH) { // jump to a misaligned PC: address error on fetch -> the CRASH path
         void (*bad)() = (void (*)())0x80010002;
         bad();
@@ -255,7 +271,54 @@ void PS1TestPreFrame() {
         }
 }
 
+static void stackGap() {
+    uint32_t hh = ((uint32_t)psyqo_heap_end() + 3) & ~3u;
+    // the allocator keeps the last free block's header (next, size) right at the high-water mark: skip it
+    uint32_t a = hh + 16 > s_paintLo ? hh + 16 : s_paintLo;
+    uint32_t sp;
+    __asm__ volatile("move %0, $sp" : "=r"(sp));
+    while (a < sp && *(volatile uint32_t *)a == STACK_PAINT) a += 4;
+    g_ps1TestHeapHigh = hh;
+    g_ps1TestStackLow = a;
+    g_ps1TestStackGap = a - hh;
+}
+
+// VRAM CRC (checkpoint kind `vram`): CRC-32 of both 320x240 framebuffers (y 0 and y 256) read back through GP0(C0h) /
+// GPUREAD (psx-spx graphicsprocessingunitgpu.md "VRAM to CPU blitting"), after the previous frame's chain is drawn.
+static uint32_t crc32w(uint32_t c, uint32_t w) {
+    for (int k = 0; k < 32; k++) {
+        uint32_t b = (c ^ w) & 1;
+        c = (c >> 1) ^ (b ? 0xEDB88320u : 0);
+        w >>= 1;
+    }
+    return c;
+}
+static uint32_t vramCrc(uint32_t y) {
+    volatile uint32_t *gp0 = (volatile uint32_t *)0xBF801810, *gpustat = (volatile uint32_t *)0xBF801814;
+    while (!(*gpustat & (1u << 26))) {
+    }
+    *gp0 = 0xC0000000u;
+    *gp0 = y << 16;
+    *gp0 = (240u << 16) | 320u;
+    while (!(*gpustat & (1u << 27))) {
+    }
+    uint32_t c = 0xFFFFFFFFu;
+    for (uint32_t n = 320 * 240 / 2; n; n--) c = crc32w(c, *gp0);
+    return ~c;
+}
+
 static void checkpoint(PS1TestScenario *s, uint32_t fr, uint32_t kinds) {
+    if (kinds & C_VRAM) {
+        g_ps1GPU->waitChainIdle();
+        tty("C ");
+        ttyx(fr);
+        tty(" V");
+        ttysx(vramCrc(0));
+        ttysx(vramCrc(256));
+        ttyc('\n');
+    }
+    if ((kinds & C_STACK) && s_paintLo)
+        stackGap();
     if (kinds & C_WATCH) {
         tty("C ");
         ttyx(fr);
