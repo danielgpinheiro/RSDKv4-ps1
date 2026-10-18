@@ -19,6 +19,7 @@
 // rotated / rotozoom / ink), HScroll tile layers from the packed chunk table (Scene.hpp Tiles128x128::ps1Tile) and
 // BG line strips, text menus (phase 4: the level select's DrawMenu, upstream's code). Not yet (counted in
 // g_ps1DrawTodo): tint, VScroll layers, 3D faces (phase 7). Sonic 2 has no 3D floor / sky layer.
+#include "sprite_quad.hh"
 #include "RetroEngine.hpp"
 
 #include <psyqo/gte-kernels.hh>
@@ -796,18 +797,10 @@ static void PS1ChainPieceRect(const PS1Piece &p, int x, int y, int w, int h, boo
         PS1ChainPieceSprite(p, x, y);
         return;
     }
-    int u0 = p.u, u1 = p.u + p.w, v0 = p.v, v1 = p.v + p.h;
-    if (flipX) {
-        u0 = p.u + p.w - 1;
-        u1 = w == p.w ? p.u - 1 : p.u;
-    }
-    if (flipY) {
-        v0 = p.v + p.h - 1;
-        v1 = h == p.h ? p.v - 1 : p.v;
-    }
+    PS1QuadUV uv  = PS1RectUV(p.u, p.v, p.w, p.h, w, h, flipX, flipY); // ps1/sprite_quad.hh
     int16_t xs[4] = { (int16_t)x, (int16_t)(x + w), (int16_t)x, (int16_t)(x + w) };
     int16_t ys[4] = { (int16_t)y, (int16_t)y, (int16_t)(y + h), (int16_t)(y + h) };
-    PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
+    PS1ChainPieceQuad(p, xs, ys, uv.u0, uv.u1, uv.v0, uv.v1);
 }
 
 // GPU limits (psx-spx GPU "Vertex"): coordinates are 11-bit signed (-1024..1023, beyond that they wrap)
@@ -842,19 +835,10 @@ static void PS1ChainPieceRectClipped(const PS1Piece &p, int x, int y, int w, int
     int cy0 = y < 0 ? 0 : y, cy1 = y + h > SCREEN_YSIZE ? SCREEN_YSIZE : y + h;
     if (cx0 >= cx1 || cy0 >= cy1)
         return;
-    auto edge = [](int base, int texels, int pos, int len, bool flip) {
-        int t = (int)((int64_t)pos * texels / len);
-        return flip ? base + texels - t : base + t;
-    };
-    int u0 = edge(p.u, p.w, cx0 - x, w, flipX), u1 = edge(p.u, p.w, cx1 - x, w, flipX);
-    int v0 = edge(p.v, p.h, cy0 - y, h, flipY), v1 = edge(p.v, p.h, cy1 - y, h, flipY);
-    if (flipX && u0 > p.u + p.w - 1) // mirrored: never start at the far edge (PS1ChainPieceRect)
-        u0 = p.u + p.w - 1;
-    if (flipY && v0 > p.v + p.h - 1)
-        v0 = p.v + p.h - 1;
+    PS1QuadUV uv  = PS1ClipRectUV(p.u, p.v, p.w, p.h, x, y, w, h, cx0, cx1, cy0, cy1, flipX, flipY); // ps1/sprite_quad.hh
     int16_t xs[4] = { (int16_t)cx0, (int16_t)cx1, (int16_t)cx0, (int16_t)cx1 };
     int16_t ys[4] = { (int16_t)cy0, (int16_t)cy0, (int16_t)cy1, (int16_t)cy1 };
-    PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
+    PS1ChainPieceQuad(p, xs, ys, uv.u0, uv.u1, uv.v0, uv.v1);
 }
 
 // A convex polygon (screen coordinates, any size) cut to the screen (Sutherland-Hodgman) and chained as
@@ -2332,28 +2316,17 @@ volatile uint8_t g_ps1AffineCache = 1; // initialised data: GDB sets 0 for the u
 
 static void PS1AffinePieceMake(PS1AffinePiece &a, const PS1Piece &p, bool fx, int pivotX, int pivotY, int cs, int sn, bool right)
 {
-    a.p                = p;
-    const int lx[4]    = { p.ox, p.ox + p.w, p.ox, p.ox + p.w };
-    const int ly[4]    = { p.oy, p.oy, p.oy + p.h, p.oy + p.h };
+    a.p              = p;
+    PS1QuadCorners c = PS1AffineCorners(0, 0, pivotX, pivotY, sn, cs, fx, p.ox, p.oy, p.w, p.h); // ps1/sprite_quad.hh
     a.xmin = 0x7FFFFFFF, a.xmax = -0x7FFFFFFF, a.ymin = 0x7FFFFFFF, a.ymax = -0x7FFFFFFF;
     for (int k = 0; k < 4; ++k) {
-        int x   = fx ? pivotX - lx[k] : lx[k] - pivotX;
-        int y   = ly[k] - pivotY;
-        a.dx[k] = (x * cs + y * sn) >> 9;
-        a.dy[k] = (y * cs - x * sn) >> 9;
+        a.dx[k] = c.x[k];
+        a.dy[k] = c.y[k];
         a.xmin = a.dx[k] < a.xmin ? a.dx[k] : a.xmin, a.xmax = a.dx[k] > a.xmax ? a.dx[k] : a.xmax;
         a.ymin = a.dy[k] < a.ymin ? a.dy[k] : a.ymin, a.ymax = a.dy[k] > a.ymax ? a.dy[k] : a.ymax;
     }
-    a.u0 = p.u, a.u1 = p.u + p.w, a.v0 = p.v, a.v1 = p.v + p.h;
-    if (right) { // u runs from corner A to B, v from A to C
-        int ux = a.dx[1] - a.dx[0], uy = a.dy[1] - a.dy[0], vx = a.dx[2] - a.dx[0], vy = a.dy[2] - a.dy[0];
-        if (ux < 0 || (ux == 0 && uy < 0))
-            --a.u0, --a.u1;
-        if (vx < 0 || (vx == 0 && vy < 0))
-            --a.v0, --a.v1;
-    }
-    else
-        --a.u1, --a.v1;
+    PS1QuadUV uv = PS1AffineUV(c, p.u, p.v, p.w, p.h, right); // texel edges (0a3f95f)
+    a.u0 = uv.u0, a.u1 = uv.u1, a.v0 = uv.v0, a.v1 = uv.v1;
     static const int16_t zero[4] = { 0, 0, 0, 0 };
     psyqo::Prim::TexturedQuad q = PS1PieceQuad(p, zero, zero, a.u0, a.u1, a.v0, a.v1, false);
     static_assert(sizeof(q) == sizeof(a.qw), "quad words");
@@ -2477,15 +2450,10 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
     // no pixel reads a neighbouring piece.
     const bool right = scale == 0x200 && !(rotation & 0x7F);
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
-        int qx[4], qy[4];
-        const int lx[4] = { p.ox, p.ox + p.w, p.ox, p.ox + p.w };
-        const int ly[4] = { p.oy, p.oy, p.oy + p.h, p.oy + p.h };
+        PS1QuadCorners q = PS1AffineCorners(XPos, YPos, pivotX, pivotY, sn, cs, fx, p.ox, p.oy, p.w, p.h); // ps1/sprite_quad.hh
+        const int *qx = q.x, *qy = q.y;
         int xmin = 0x7FFFFFFF, xmax = -0x7FFFFFFF, ymin = 0x7FFFFFFF, ymax = -0x7FFFFFFF;
         for (int k = 0; k < 4; ++k) {
-            int x = fx ? pivotX - lx[k] : lx[k] - pivotX;
-            int y = ly[k] - pivotY;
-            qx[k] = XPos + ((x * cs + y * sn) >> 9);
-            qy[k] = YPos + ((y * cs - x * sn) >> 9);
             xmin = qx[k] < xmin ? qx[k] : xmin, xmax = qx[k] > xmax ? qx[k] : xmax;
             ymin = qy[k] < ymin ? qy[k] : ymin, ymax = qy[k] > ymax ? qy[k] : ymax;
         }
@@ -2496,16 +2464,8 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
             if (g_ps1LimitFix)
                 return; // wholly off screen
         }
-        int u0 = p.u, u1 = p.u + p.w, v0 = p.v, v1 = p.v + p.h;
-        if (right) { // u runs from corner A to B, v from A to C
-            int ux = qx[1] - qx[0], uy = qy[1] - qy[0], vx = qx[2] - qx[0], vy = qy[2] - qy[0];
-            if (ux < 0 || (ux == 0 && uy < 0))
-                --u0, --u1;
-            if (vx < 0 || (vx == 0 && vy < 0))
-                --v0, --v1;
-        }
-        else
-            --u1, --v1;
+        PS1QuadUV uv = PS1AffineUV(q, p.u, p.v, p.w, p.h, right); // texel edges (0a3f95f)
+        int u0 = uv.u0, u1 = uv.u1, v0 = uv.v0, v1 = uv.v1;
         if (beyond && g_ps1LimitFix) { // zoomed past the GPU limits: cut to the screen
             PS1ChainPieceQuadClipped(p, qx, qy, u0, u1, v0, v1);
             return;
