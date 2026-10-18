@@ -984,6 +984,157 @@ static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int 
     ++s_ps1OTCaptured;
     return reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(first) | 1);
 }
+// The faded fast path of the pass below, per face, in assembly (docs/43 C1: RSDKv4/Scene3DOT.S; GCC's loop spilled ~10
+// values a face). The asm reads and writes this state; offsets are its S_* constants.
+struct PS1OTFastState {
+    const Face *fb;
+    PS1OTRec *rec;
+    const PS1ProjEntry *pj;
+    int count;
+    int lo, hi;
+    uint32_t cacheColor;
+    int cacheAlpha;
+    uint32_t cacheCmd;
+    uint32_t *w, *wEnd; // the open bulk run: next primitive, end of its capacity (both null: no run open)
+    int fogMax;
+    int skipAt; // draw ? 255 : INT_MIN: skipped when the clamped fog >= this (!draw || alpha < 1)
+    int qxn, qyn; // -(SCREEN_XSIZE + 1), -((SCREEN_YSIZE + 1) << 16)
+    uint32_t fogRB, fogG;
+    uint32_t culled;
+    int pending;    // returned with a face ready to write but no room: its five words in pw
+    uint32_t pw[5];
+    uint32_t c2Color, c2AlphaRGB; // the asm's second colour-cache entry: colour, alpha << 24 | command bits 0-23
+};
+static_assert(offsetof(PS1OTFastState, fb) == 0 && offsetof(PS1OTFastState, rec) == 4 && offsetof(PS1OTFastState, pj) == 8
+                  && offsetof(PS1OTFastState, count) == 12 && offsetof(PS1OTFastState, lo) == 16 && offsetof(PS1OTFastState, hi) == 20
+                  && offsetof(PS1OTFastState, cacheColor) == 24 && offsetof(PS1OTFastState, cacheAlpha) == 28
+                  && offsetof(PS1OTFastState, cacheCmd) == 32 && offsetof(PS1OTFastState, w) == 36 && offsetof(PS1OTFastState, wEnd) == 40
+                  && offsetof(PS1OTFastState, fogMax) == 44 && offsetof(PS1OTFastState, skipAt) == 48 && offsetof(PS1OTFastState, qxn) == 52
+                  && offsetof(PS1OTFastState, qyn) == 56 && offsetof(PS1OTFastState, fogRB) == 60 && offsetof(PS1OTFastState, fogG) == 64
+                  && offsetof(PS1OTFastState, culled) == 68 && offsetof(PS1OTFastState, pending) == 72 && offsetof(PS1OTFastState, pw) == 76
+                  && offsetof(PS1OTFastState, c2Color) == 96 && offsetof(PS1OTFastState, c2AlphaRGB) == 100,
+              "PS1OTFastState: RSDKv4/Scene3DOT.S's S_* offsets");
+static_assert(sizeof(Face) == 24 && offsetof(Face, color) == 16 && offsetof(Face, flag) == 20 && sizeof(PS1ProjEntry) == 8
+                  && sizeof(PS1OTRec) == 8 && FACE_FLAG_FADED == 4,
+              "Scene3DOT.S's face / projection / record layout");
+extern "C" int PS1OTFadedAsm(PS1OTFastState *s, int i);
+volatile uint32_t g_ps1OTAsmCalls = 0; // last frame: entries into the asm fast path (GDB)
+#if PS1_OT_CHECK
+// make OT_CHECK=1 (harness only; make dist refuses it): after every asm call, the C fast path as it was before the asm
+// (2d87dee's loop) replays the same faces from the state the asm started from and compares what the asm returned and
+// wrote: records, primitive words, lo / hi, the colour cache, w, culled, the pending face. Counters for GDB / the suite.
+volatile uint32_t g_ps1OTCheckFaces = 0, g_ps1OTCheckMismatch = 0, g_ps1OTCheckFirstFace = 0xFFFFFFFFu, g_ps1OTCheckFirstFrame = 0;
+// coverage: 0 drawn, 1 skipped (alpha / !draw), 2 culled all x < 0, 3 x > max, 4 y < 0, 5 y > max, 6 x equal, 7 y equal,
+// 8 order b a c d, 9 a b c d (second test), 10 b a d c, 11 a b c d (no test), 12 cache miss, 13 pending, 14 fogStr < 0
+// before the clamp, 15 alpha clamped to 255 (fogMax < 0), 16 other face (returned), 17 !draw
+volatile uint32_t g_ps1OTCheckCover[18];
+// GDB injection for the branches the stages never reach (check build only): a fogStrength override (alpha < 1 skips at
+// >= 255, the alpha clamp below 0) and a forced !draw
+volatile int g_ps1OTCheckFogMax = 0x7FFFFFFF, g_ps1OTCheckNoDraw = 0;
+extern volatile uint32_t g_ps1PerfFrames;
+static void PS1OTCheckFail(int i)
+{
+    g_ps1OTCheckMismatch = g_ps1OTCheckMismatch + 1;
+    if (g_ps1OTCheckFirstFace == 0xFFFFFFFFu) {
+        g_ps1OTCheckFirstFace  = i;
+        g_ps1OTCheckFirstFrame = g_ps1PerfFrames;
+    }
+}
+static void PS1OTCheck(const PS1OTFastState &s0, int i, const PS1OTFastState &out, int ret, bool draw)
+{
+    PS1OTFastState s = s0;
+    const Face *const fb = s.fb;
+    const PS1ProjEntry *const pj = s.pj;
+    const uint32_t qx = -s.qxn, qy = -s.qyn;
+    if (!draw)
+        g_ps1OTCheckCover[17] = g_ps1OTCheckCover[17] + 1;
+    for (; i < s.count; ++i) {
+        const Face &f = fb[i];
+        const PS1ProjEntry &A = pj[f.a], &B = pj[f.b], &C = pj[f.c], &D = pj[f.d];
+        const int depth = (D.v + C.v + B.v + A.v) >> 2;
+        uint32_t pa = A.u, pb = B.u, pc = C.u, pd = D.u;
+        if (f.flag != FACE_FLAG_FADED || (((pa + 1024) | (pb + 1024) | (pc + 1024) | (pd + 1024)) & 0xF800)) {
+            g_ps1OTCheckCover[16] = g_ps1OTCheckCover[16] + 1;
+            break;
+        }
+        g_ps1OTCheckFaces = g_ps1OTCheckFaces + 1;
+        s.lo = depth < s.lo ? depth : s.lo;
+        s.hi = depth > s.hi ? depth : s.hi;
+        if (s.rec[i].depth != depth)
+            PS1OTCheckFail(i);
+        int fogStr = (depth - 0x8000) >> 8;
+        if (fogStr < 0)
+            fogStr = 0, g_ps1OTCheckCover[14] = g_ps1OTCheckCover[14] + 1;
+        if (fogStr > s.fogMax)
+            fogStr = s.fogMax;
+        int alpha = 0xFF - fogStr;
+        if (!draw || alpha < 1) {
+            g_ps1OTCheckCover[1] = g_ps1OTCheckCover[1] + 1;
+            if (s.rec[i].first)
+                PS1OTCheckFail(i);
+            continue;
+        }
+        if (alpha > 0xFF)
+            alpha = 0xFF, g_ps1OTCheckCover[15] = g_ps1OTCheckCover[15] + 1;
+        int x0 = (int16_t)(pa & 0xFFFF), x1 = (int16_t)(pb & 0xFFFF), x2 = (int16_t)(pc & 0xFFFF), x3 = (int16_t)(pd & 0xFFFF);
+        int y0 = (int16_t)(pa >> 16), y1 = (int16_t)(pb >> 16), y2 = (int16_t)(pc >> 16), y3 = (int16_t)(pd >> 16);
+        const int xMax = (int)qx - 1, yMax = (int)(qy >> 16) - 1;
+        int cull = (x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) ? 2 : (x0 > xMax && x1 > xMax && x2 > xMax && x3 > xMax) ? 3
+                 : (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) ? 4 : (y0 > yMax && y1 > yMax && y2 > yMax && y3 > yMax) ? 5
+                 : (x0 == x1 && x1 == x2 && x2 == x3) ? 6 : (y0 == y1 && y1 == y2 && y2 == y3) ? 7 : 0;
+        // 2d87dee's packed tests decide, the unpacked ones only label the coverage
+        const uint32_t pn = pa & pb & pc & pd;
+        const uint32_t px = (pa - qx) | (pb - qx) | (pc - qx) | (pd - qx), py = (pa - qy) | (pb - qy) | (pc - qy) | (pd - qy);
+        const uint32_t eq = (pa ^ pb) | (pa ^ pc) | (pa ^ pd);
+        if ((pn & 0x80008000u) || !(px & 0x8000) || !(py & 0x80000000u) || !(eq & 0xFFFF) || !(eq & 0xFFFF0000u)) {
+            ++s.culled;
+            g_ps1OTCheckCover[cull] = g_ps1OTCheckCover[cull] + 1;
+            if (s.rec[i].first)
+                PS1OTCheckFail(i);
+            continue;
+        }
+        uint32_t w1 = pb, w2 = pa, w3 = pc, w4 = pd;
+        int path = 8;
+        int s1 = PS1Side(pa, pc, pb), s3 = PS1Side2(pd);
+        if (!((s1 < 0 && s3 > 0) || (s1 > 0 && s3 < 0))) {
+            int t0s = PS1Side(pb, pc, pa), t3 = PS1Side2(pd);
+            w1 = pa, w2 = pb, w3 = pc, w4 = pd, path = 9;
+            if (!((t0s < 0 && t3 > 0) || (t0s > 0 && t3 < 0))) {
+                int u1 = PS1Side(pa, pd, pb), u2 = PS1Side2(pc);
+                path = 11;
+                if ((u1 < 0 && u2 > 0) || (u1 > 0 && u2 < 0))
+                    w1 = pb, w2 = pa, w3 = pd, w4 = pc, path = 10;
+            }
+        }
+        g_ps1OTCheckCover[path] = g_ps1OTCheckCover[path] + 1;
+        if (f.color != s.cacheColor || alpha != s.cacheAlpha) {
+            uint32_t c = f.color, ia = 0xFF - alpha, a = alpha;
+            uint32_t cRB = ((c >> 19) & 0x1F) | ((c >> 3) & 0x1F) << 16, cG = (c >> 11) & 0x1F;
+            uint32_t rb = ((s.fogRB * ia) >> 8 & 0x001F001Fu) + ((cRB * a) >> 8 & 0x001F001Fu);
+            uint32_t g  = (s.fogG * ia >> 8) + (cG * a >> 8);
+            s.cacheColor = f.color, s.cacheAlpha = alpha;
+            s.cacheCmd   = 0x28000000u | rb << 3 | g << 11;
+            g_ps1OTCheckCover[12] = g_ps1OTCheckCover[12] + 1;
+        }
+        if (s.w == s.wEnd) { // the asm must stop here with this face pending
+            g_ps1OTCheckCover[13] = g_ps1OTCheckCover[13] + 1;
+            if (ret != i || !out.pending || out.pw[0] != s.cacheCmd || out.pw[1] != w1 || out.pw[2] != w2 || out.pw[3] != w3
+                || out.pw[4] != w4 || s.rec[i].first)
+                PS1OTCheckFail(i);
+            s.pending = 1;
+            break;
+        }
+        g_ps1OTCheckCover[0] = g_ps1OTCheckCover[0] + 1;
+        uint32_t *w = s.w;
+        if (w[0] != s.cacheCmd || w[1] != w1 || w[2] != w2 || w[3] != w3 || w[4] != w4 || s.rec[i].first != w - 1)
+            PS1OTCheckFail(i);
+        s.w = w + 6;
+    }
+    // (the asm's colour cache has two entries, the C loop's one: their contents differ, the words they give don't)
+    if (ret != i || (bool)out.pending != (bool)s.pending || out.lo != s.lo || out.hi != s.hi || out.w != s.w || out.culled != s.culled)
+        PS1OTCheckFail(i);
+}
+#endif
 void PS1Draw3DSceneOT(int spriteSheetID)
 {
     uint32_t t0        = PS1Hblanks();
@@ -993,101 +1144,92 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     for (int k = 0; k < 8; ++k) g_ps1Prof3DGenTicks[k] = g_ps1Prof3DGenCount[k] = 0;
     const int count = faceCount;
     PS1OTRec *rec   = reinterpret_cast<PS1OTRec *>(drawList3D);
+#if PS1_OT_CHECK
+    const bool draw = PS1Draw3DOpen() && !g_ps1OTCheckNoDraw;
+#else
     const bool draw = PS1Draw3DOpen();
-    uint32_t *run   = nullptr, *w = nullptr, *wEnd = nullptr; // the open bulk run: next primitive, end of its capacity
-    uint32_t cacheColor = 0, cacheCmd = 0;
-    int cacheAlpha = -1;
-    uint32_t fast = 0, culled = 0, drawn = 0;
-    const uint32_t fog = fogColor, fogRB = ((fog >> 19) & 0x1F) | ((fog >> 3) & 0x1F) << 16, fogG = (fog >> 11) & 0x1F;
-    const int fogMax = fogStrength;
-    const uint32_t qx = SCREEN_XSIZE + 1, qy = (uint32_t)(SCREEN_YSIZE + 1) << 16;
-    int lo = 0, hi = 0;
-    const Face *const fb        = faceBuffer; // locals: the record / chain stores could alias the globals
+#endif
+    uint32_t *run   = nullptr; // the open bulk run (its next primitive and end: st.w, st.wEnd)
+    uint32_t fast = 0, drawn = 0, calls = 0;
+    const uint32_t fog = fogColor;
+    PS1OTFastState st;
+    st.fb = faceBuffer; // the record / chain stores could alias the globals: the asm keeps its own copies
+    st.rec = rec;
+    st.pj  = g_ps1Proj;
+    st.count = count;
+    st.lo = 0x7FFFFFFF, st.hi = (int)0x80000000; // the first face sets both (the C loop's `if (!i) lo = hi = depth`)
+    st.cacheColor = 0, st.cacheAlpha = -1, st.cacheCmd = 0;
+    st.c2Color = 0, st.c2AlphaRGB = 0; // alpha 0: empty (a drawn face's alpha is 1..255)
+    st.w = st.wEnd = nullptr;
+    st.fogMax = fogStrength;
+#if PS1_OT_CHECK
+    if (g_ps1OTCheckFogMax != 0x7FFFFFFF)
+        st.fogMax = g_ps1OTCheckFogMax;
+#endif
+    st.skipAt = draw ? 0xFF : (int)0x80000000;
+    st.qxn    = -(SCREEN_XSIZE + 1);
+    st.qyn    = -((SCREEN_YSIZE + 1) << 16);
+    st.fogRB  = ((fog >> 19) & 0x1F) | ((fog >> 3) & 0x1F) << 16, st.fogG = (fog >> 11) & 0x1F;
+    st.culled = 0, st.pending = 0;
+    const Face *const fb        = faceBuffer;
     const PS1ProjEntry *const pj = g_ps1Proj;
     auto closeRun = [&]() {
         if (run) {
-            int used = (int)((w - run) / 6);
+            int used = (int)((st.w - run) / 6);
             PS1ChainBulkKeep(used);
             PS1FadeRecordRun(run, used, 6);
+            drawn += used;
             run = nullptr;
         }
-        w = wEnd = nullptr; // a new run opens at the next faded face (the arena after the closed run is the others')
+        st.w = st.wEnd = nullptr; // a new run opens at the next faded face (the arena after the closed run is the others')
     };
-    for (int i = 0; i < count; ++i) {
+    for (int i = 0; i < count;) {
+        const int i0 = i;
+#if PS1_OT_CHECK
+        const PS1OTFastState before = st;
+#endif
+        i = PS1OTFadedAsm(&st, i);
+        ++calls;
+#if PS1_OT_CHECK
+        PS1OTCheck(before, i0, st, i, draw);
+#endif
+        fast += i - i0;
+        if (st.pending) { // a faded face with no room: open a run (as the C loop did at w == wEnd) and write it
+            st.pending = 0;
+            ++fast;
+            closeRun();
+            run = PS1ChainBulkBegin(128, 5);
+            if (run) {
+                uint32_t *w = run;
+                st.wEnd     = run + 128 * 6;
+                w[0]        = st.pw[0];
+                w[1]        = st.pw[1];
+                w[2]        = st.pw[2];
+                w[3]        = st.pw[3];
+                w[4]        = st.pw[4];
+                rec[i].first = w - 1; // its DMA header, written by the second pass
+                st.w         = w + 6;
+            }
+            ++i;
+            continue;
+        }
+        if (i >= count)
+            break;
+        // any other face: its depth and record (the asm returned before touching it), then the general paths
         const Face &f = fb[i];
         const PS1ProjEntry &A = pj[f.a], &B = pj[f.b], &C = pj[f.c], &D = pj[f.d];
         const int depth = (D.v + C.v + B.v + A.v) >> 2; // Sort3DDrawList's
-        if (!i)
-            lo = hi = depth;
-        lo            = depth < lo ? depth : lo;
-        hi            = depth > hi ? depth : hi;
+        st.lo         = depth < st.lo ? depth : st.lo;
+        st.hi         = depth > st.hi ? depth : st.hi;
         rec[i].depth  = depth;
-        rec[i].first  = nullptr;
-        uint32_t pa = A.u, pb = B.u, pc = C.u, pd = D.u;
-        if (f.flag != FACE_FLAG_FADED || (((pa + 1024) | (pb + 1024) | (pc + 1024) | (pd + 1024)) & 0xF800)) {
-            closeRun(); // what the other paths allocate goes after the run in the arena
-            rec[i].first = PS1OTOtherFace(i, depth, spriteSheetID, draw);
-            continue;
-        }
-        ++fast; // PS1FadedFaces' fast path, per face
-        int fogStr = (depth - 0x8000) >> 8;
-        if (fogStr < 0)
-            fogStr = 0;
-        if (fogStr > fogMax)
-            fogStr = fogMax;
-        int alpha = 0xFF - fogStr;
-        if (!draw || alpha < 1)
-            continue;
-        if (alpha > 0xFF)
-            alpha = 0xFF;
-        // off-screen / degenerate tests on the packed corners: x and y are -1024..1023 here (the GTE's saturation; x
-        // tested above), so x < 0 is bit 15, y < 0 bit 31, x > xMax the sign of the low half of p - (xMax + 1) (no wrap:
-        // -1345..702), y > yMax the sign of the high half of p - ((yMax + 1) << 16)
-        const uint32_t pn = pa & pb & pc & pd;
-        const uint32_t px = (pa - qx) | (pb - qx) | (pc - qx) | (pd - qx), py = (pa - qy) | (pb - qy) | (pc - qy) | (pd - qy);
-        const uint32_t eq = (pa ^ pb) | (pa ^ pc) | (pa ^ pd);
-        if ((pn & 0x80008000u) || !(px & 0x8000) || !(py & 0x80000000u) || !(eq & 0xFFFF) || !(eq & 0xFFFF0000u)) {
-            ++culled;
-            continue;
-        }
-        uint32_t w1 = pb, w2 = pa, w3 = pc, w4 = pd; // strip order: as PS1FadedFaces
-        int s1 = PS1Side(pa, pc, pb), s3 = PS1Side2(pd);
-        if (!((s1 < 0 && s3 > 0) || (s1 > 0 && s3 < 0))) {
-            int t0s = PS1Side(pb, pc, pa), t3 = PS1Side2(pd);
-            w1 = pa, w2 = pb, w3 = pc, w4 = pd;
-            if (!((t0s < 0 && t3 > 0) || (t0s > 0 && t3 < 0))) {
-                int u1 = PS1Side(pa, pd, pb), u2 = PS1Side2(pc);
-                if ((u1 < 0 && u2 > 0) || (u1 > 0 && u2 < 0))
-                    w1 = pb, w2 = pa, w3 = pd, w4 = pc;
-            }
-        }
-        if (f.color != cacheColor || alpha != cacheAlpha) {
-            uint32_t c = f.color, ia = 0xFF - alpha, a = alpha;
-            uint32_t cRB = ((c >> 19) & 0x1F) | ((c >> 3) & 0x1F) << 16, cG = (c >> 11) & 0x1F;
-            uint32_t rb = ((fogRB * ia) >> 8 & 0x001F001Fu) + ((cRB * a) >> 8 & 0x001F001Fu);
-            uint32_t g  = (fogG * ia >> 8) + (cG * a >> 8);
-            cacheColor = f.color, cacheAlpha = alpha;
-            cacheCmd   = 0x28000000u | rb << 3 | g << 11;
-        }
-        if (w == wEnd) {
-            closeRun();
-            run = PS1ChainBulkBegin(128, 5);
-            if (!run) {
-                w = wEnd = nullptr;
-                continue;
-            }
-            w = run, wEnd = run + 128 * 6;
-        }
-        w[0]         = cacheCmd;
-        w[1]         = w1;
-        w[2]         = w2;
-        w[3]         = w3;
-        w[4]         = w4;
-        rec[i].first = w - 1; // its DMA header, written by the second pass
-        w += 6;
-        ++drawn;
+        closeRun(); // what the other paths allocate goes after the run in the arena
+        rec[i].first = PS1OTOtherFace(i, depth, spriteSheetID, draw);
+        ++i;
     }
     closeRun();
+    g_ps1OTAsmCalls = calls;
+    const uint32_t culled = st.culled;
+    const int lo = st.lo, hi = st.hi;
     g_ps1DrawOrder = drawList3D;
     uint32_t t1    = PS1Hblanks();
     const DrawListEntry3D *subLast = g_ps1Scene3DScratch;

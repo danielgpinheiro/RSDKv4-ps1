@@ -5,7 +5,9 @@ the fill and VRAM copy costs; GPU ticks, 2 per CPU cycle; one NTSC hblank = 2152
 drawing times (dmachannels.md "DMA Transfer Rates"), so this is a model, not a measurement. The chain is walked from
 its head in a 2 MB RAM dump taken where the frame's chain is complete, as psyqo sends it at the next flip (tools/perf_gpu.sh).
 
-Usage: gpu_cost.py RAM.bin HEAD [TAIL TAILCOUNT HEADOVERSIZED] [--base 0x80000000] [--top N]
+Usage: gpu_cost.py RAM.bin HEAD [TAIL TAILCOUNT HEADOVERSIZED] [--base 0x80000000] [--top N] [--dump-words FILE]
+--dump-words FILE: also write the walked payload words (link words left out) as little-endian u32 to FILE, for exact
+chain comparisons between builds whose node addresses differ (tools/chain_cmp.py).
 The chain is walked as psyqo's sendChain() will send it (nugget/psyqo/src/gpu.cpp): the end marker is only written
 into the tail node at send time, so the walk stops at psyqo's m_chainTail (TAIL, its size word TAILCOUNT =
 m_chainTailCount); link words carry flags (bit 23: a big node, bit 0: the next node is oversized, its size >> 4),
@@ -60,6 +62,8 @@ while nodes < 200000:
     node = nxt & 0x7FFFFC
 if tail is not None and node != tail:
     print('warning: the walk ended at %06x, not at the tail %06x' % (node, tail))
+if '--dump-words' in opts:
+    open(opts[opts.index('--dump-words') + 1], 'wb').write(struct.pack('<%dI' % len(words), *words))
 
 # GP0 state
 e1 = 0                # the last GP0(E1h) word (texpage, flip bits)

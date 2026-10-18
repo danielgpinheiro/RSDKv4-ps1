@@ -118,10 +118,20 @@ CPPFLAGS += -DPS1_TEST=1
 SRCS += ps1/test_mode.cpp
 endif
 
+# Sonic 2's special stage: the ordering table's faded fast path in assembly (RSDKv4/Scene3DOT.S, docs/43 C1; Sonic 1
+# doesn't use the ordering-table pass). `make OT_CHECK=1`: every asm call is replayed by the C fast path and compared
+# (g_ps1OTCheck* counters; harness only, make dist refuses it).
+ifneq ($(GAME),1)
+SRCS += RSDKv4/Scene3DOT.S
+endif
+ifeq ($(OT_CHECK),1)
+CPPFLAGS += -DPS1_OT_CHECK=1
+endif
+
 # Build-flag stamp: every object depends on build/flags.txt, rewritten only when PROFILE / BOOT / BOOT_ID /
 # BOOT_PLAYER / GAME change, so switching them rebuilds everything (make only sees source timestamps otherwise: a
 # PROFILE=1 build once kept a non-profile Object.o).
-BUILD_FLAGS := PROFILE=$(PROFILE) SAMPLER=$(SAMPLER) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER) GAME=$(GAME) COMBO=$(COMBO) GAP=$(GAP) PERF_SPLIT=$(PERF_SPLIT) TEST=$(TEST)
+BUILD_FLAGS := PROFILE=$(PROFILE) SAMPLER=$(SAMPLER) BOOT=$(BOOT) BOOT_ID=$(BOOT_ID) BOOT_PLAYER=$(BOOT_PLAYER) GAME=$(GAME) COMBO=$(COMBO) GAP=$(GAP) PERF_SPLIT=$(PERF_SPLIT) TEST=$(TEST) OT_CHECK=$(OT_CHECK)
 # The objects are deleted too: macOS's make 3.81 compares timestamps to the second, and an object built in the same second
 # as the rewrite (a GAME=2 build followed at once by GAME=1) looked up to date and kept the other game's code.
 $(shell mkdir -p build; echo '$(BUILD_FLAGS)' | cmp -s - build/flags.txt || { echo '$(BUILD_FLAGS)' > build/flags.txt; \
@@ -156,6 +166,12 @@ build/gen/trig_tables.inc: tools/trig/gen_trig.c
 	build/gen/gen_trig > $@
 RSDKv4/Math.o RSDKv4/Math.dep: build/gen/trig_tables.inc
 
+# Preprocessed assembly (nugget's common.mk only has a %.s rule).
+%.o: %.S
+	$(CC) $(ARCHFLAGS) -msoft-float -x assembler-with-cpp -I$(ROOTDIR) -g -c -o $@ $<
+%.dep: %.S
+	echo "$*.o: $<" > $@
+
 # The FMV Huffman (VLC) decoder is the hot loop of video playback: optimise it for speed.
 ps1/mdec.o: CPPFLAGS += -O2
 ps1/gpu_chain.o: CPPFLAGS += -O2
@@ -189,6 +205,7 @@ dist:
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1PcSamples; then echo "dist: rsdkv4.ps-exe is a SAMPLER build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1TestBuild; then echo "dist: rsdkv4.ps-exe is a TEST=1 build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1PerfGpuTail; then echo "dist: rsdkv4.ps-exe is a PERF_SPLIT build"; exit 1; fi
+	@if mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1OTCheckMismatch; then echo "dist: rsdkv4.ps-exe is an OT_CHECK build"; exit 1; fi
 	@if ! mipsel-none-elf-nm rsdkv4.elf | grep -q g_ps1InitDone; then echo "dist: rsdkv4.ps-exe is not the game (PLATFORM_TEST?)"; exit 1; fi
 	@if ! grep -q "^PROFILE= " build/flags.txt; then echo "dist: rsdkv4.ps-exe is a PROFILE build"; exit 1; fi
 	@if ! grep -qE " GAME=$(GAME)( |$$)" build/flags.txt; then echo "dist: rsdkv4.ps-exe was built for another GAME"; exit 1; fi
