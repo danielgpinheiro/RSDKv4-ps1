@@ -45,7 +45,7 @@ static_assert(sizeof(ScnHeader) == 96, "scn.py header layout");
 struct ScnInput { uint32_t frame, mask; };
 struct ScnCheck { uint32_t frame, kinds; };
 struct ScnPoke { uint32_t frame, addr, value; uint8_t size, pad[3]; };
-struct ScnWatch { uint32_t addr; uint8_t size, sign, pad[2]; };
+struct ScnWatch { uint32_t addr; uint8_t size, sign; uint16_t count; }; // count > 1: the sum of count u32 words
 struct ScnRange { uint32_t addr, len; };
 struct ScnArrField { uint16_t off; uint8_t size, pad; };
 struct ScnArr { uint32_t base; uint16_t stride, count, filterOff; uint8_t filterSize, nFields; };
@@ -88,6 +88,15 @@ static void testExit(uint32_t status) {
     *(volatile int16_t *)0xBF802082 = (int16_t)status;
     for (;;) {
     }
+}
+
+static uint32_t readMem(uint32_t addr, uint8_t size, uint8_t sign);
+static uint32_t readWatch(const ScnWatch &w) {
+    if (w.count <= 1)
+        return readMem(w.addr, w.size, w.sign);
+    uint32_t sum = 0; // e.g. the per-object-type call counts of a frame
+    for (uint32_t k = 0; k < w.count; k++) sum += ((volatile uint32_t *)w.addr)[k];
+    return sum;
 }
 
 static uint32_t readMem(uint32_t addr, uint8_t size, uint8_t sign) {
@@ -323,7 +332,7 @@ static void checkpoint(PS1TestScenario *s, uint32_t fr, uint32_t kinds) {
         tty("C ");
         ttyx(fr);
         tty(" W");
-        for (int i = 0; i < s->h.nWatchC; i++) ttysx(readMem(s->watchC[i].addr, s->watchC[i].size, s->watchC[i].sign));
+        for (int i = 0; i < s->h.nWatchC; i++) ttysx(readWatch(s->watchC[i]));
         ttyc('\n');
     }
     if (kinds & C_ARRAYS) {
@@ -385,7 +394,7 @@ void PS1TestPostFrame() {
     ttysx(h);
     ttysx(g_ps1PerfLastHbl);
     ttysx(g_ps1PerfLastFrameVsyncs);
-    for (int i = 0; i < s->h.nWatchF; i++) ttysx(readMem(s->watchF[i].addr, s->watchF[i].size, s->watchF[i].sign));
+    for (int i = 0; i < s->h.nWatchF; i++) ttysx(readWatch(s->watchF[i]));
     ttyc('\n');
     if ((s->h.flags & F_RECORD) && g_ps1PadButtons != s->lastPad) {
         s->lastPad = g_ps1PadButtons;
