@@ -293,6 +293,17 @@ void PS1TestPreFrame() {
         }
 }
 
+#if PS1_SEPARATE_STACK
+// The main stack is a .bss array (ps1/stack.hh): the heap never meets it. StackLow = the lowest word the stack wrote,
+// StackGap = the stack bytes never used, HeapHigh = the heap's high-water mark (its own ceiling is __stack_start).
+uint32_t PS1StackLowWater();
+extern uint32_t g_ps1Stack[];
+static void stackGap() {
+    g_ps1TestHeapHigh = ((uint32_t)psyqo_heap_end() + 3) & ~3u;
+    g_ps1TestStackLow = PS1StackLowWater();
+    g_ps1TestStackGap = g_ps1TestStackLow - (uint32_t)(uintptr_t)g_ps1Stack;
+}
+#else
 static void stackGap() {
     uint32_t hh = ((uint32_t)psyqo_heap_end() + 3) & ~3u;
     // the allocator keeps the last free block's header (next, size) right at the high-water mark: skip it
@@ -304,6 +315,7 @@ static void stackGap() {
     g_ps1TestStackLow = a;
     g_ps1TestStackGap = a - hh;
 }
+#endif
 
 // VRAM CRC (checkpoint kind `vram`): CRC-32 of both 320x240 framebuffers (y 0 and y 256) read back through GP0(C0h) /
 // GPUREAD (psx-spx graphicsprocessingunitgpu.md "VRAM to CPU blitting"), after the previous frame's chain is drawn.
