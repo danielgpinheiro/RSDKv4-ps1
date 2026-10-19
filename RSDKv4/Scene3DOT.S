@@ -3,14 +3,13 @@
 # loads, 11 stores for a drawn face). This keeps the pass's state in registers. Model: GTA3-ps1 ps1/re3/tripass.S.
 #
 #   int PS1OTFadedAsm(PS1OTFastState *s, int i)   (layout: Scene3D.cpp, PS1OTFastState; offsets below)
-# From face i, every face that takes the fast path (flag FACE_FLAG_FADED, all four corners projected by the GTE) is
-# done exactly as the C code did it: its depth (the sum of the four .v >> 2) into the draw list's record and lo / hi,
-# upstream's fog and DrawFadedFace early-outs, the off-screen / degenerate tests on the packed corners, the strip order
-# from the same NCLIP side tests, the fog colour, the flat quad written at s->w (unlinked; record .first = its header
-# word). Returns the index of the first face it did not take: a face that isn't fast (untouched: the C code does it) or
-# count. A face that is ready to write while s->w == s->wEnd (no open bulk run, or a full one) is returned with
-# s->pending = 1 and its five words in s->pw[]: the C code opens the run and writes it (rec .first is left 0 here).
-# Writes back lo, hi, the colour cache, w and the culled count.
+# From face i to the last (returns count): every face that takes the fast path (flag FACE_FLAG_FADED, all four corners
+# projected by the GTE) is done exactly as the C code did it: its depth (the sum of the four .v >> 2) into the draw
+# list's record and lo / hi, upstream's fog and DrawFadedFace early-outs, the degenerate test, the strip order from the
+# same NCLIP side tests, the fog colour, the flat quad written at s->w (unlinked; record .first = its header word). Any
+# other face gets its depth, lo / hi and record here and goes to C (PS1OTOtherC: closes the open run, the general
+# paths); a quad ready to write while s->w == s->wEnd (no open run, or a full one) has PS1OTOpenRun open one first.
+# Writes back lo, hi, the colour cache, w and the culled count. Also here: PS1OTLinkAsm, the second pass.
 #
 # Exact shortcuts over the C loop (same results):
 # - the fog colour is a pure function of (colour, alpha): two cache entries instead of one (the pipe alternates two
@@ -54,6 +53,8 @@ S_PENDING   = 72
 S_PW        = 76    # 5 words: command, then the strip's four corners
 S_C2COLOR   = 96    # colour cache entry 2: colour, alpha << 24 | the command's low 24 bits (alpha 0: empty)
 S_C2AR      = 100
+S_RUN       = 104   # C only (PS1OTOpenRun / PS1OTOtherC): the open bulk run, the quads written in closed runs, the
+S_DRAWN     = 108   # sheet and draw flag PS1OTOtherFace takes
 QYN_HI      = 0xFF0F    # -(241 << 16) >> 16
 
 # registers: s0 state, s1 face, s2 face end, s3 record, s4 g_ps1Proj, s5 lo, s6 hi, s7 / fp / t8 cache entry 1 (colour,
@@ -63,17 +64,17 @@ QYN_HI      = 0xFF0F    # -(241 << 16) >> 16
 # orders swap registers.
 
 PS1OTFadedAsm:
-    addiu   $sp, $sp, -40
-    sw      $s0, 0($sp)
-    sw      $s1, 4($sp)
-    sw      $s2, 8($sp)
-    sw      $s3, 12($sp)
-    sw      $s4, 16($sp)
-    sw      $s5, 20($sp)
-    sw      $s6, 24($sp)
-    sw      $s7, 28($sp)
-    sw      $fp, 32($sp)
-    sw      $ra, 36($sp)
+    addiu   $sp, $sp, -88
+    sw      $s0, 16($sp)
+    sw      $s1, 20($sp)
+    sw      $s2, 24($sp)
+    sw      $s3, 28($sp)
+    sw      $s4, 32($sp)
+    sw      $s5, 36($sp)
+    sw      $s6, 40($sp)
+    sw      $s7, 44($sp)
+    sw      $fp, 48($sp)
+    sw      $ra, 52($sp)
     move    $s0, $a0
     lw      $s1, S_FB($s0)
     lw      $s3, S_REC($s0)
@@ -143,7 +144,7 @@ L_face:
     andi    $t6, $t6, 0xF800
     addiu   $t5, $t5, -4            # FACE_FLAG_FADED
     or      $t6, $t6, $t5
-    bnez    $t6, L_ret              # not fast: the C code does this face
+    bnez    $t6, L_other            # not fast: the C code does this face (PS1OTOtherC)
     sra     $t4, $t4, 2             # depth (Sort3DDrawList's)
     mtc2    $t0, $12                # SXY0 = pa
     mtc2    $t2, $13                # SXY1 = pc
@@ -200,7 +201,7 @@ L_ccheck:
     bne     $t7, $fp, L_c2
     nop
 L_write:
-    beq     $t9, $v1, L_pending     # no open run / the run is full: the C code opens one
+    beq     $t9, $v1, L_pending     # no open run / the run is full: PS1OTOpenRun opens one
     addiu   $t6, $t9, -4            # the primitive's header word
     sw      $t4, 0($t9)
     sw      $t1, 4($t9)
@@ -227,19 +228,19 @@ L_ret:
     sw      $t9, S_W($s0)
     sw      $v0, S_CULLED($s0)
     sra     $v0, $t0, 3
-    lw      $s0, 0($sp)
-    lw      $s1, 4($sp)
-    lw      $s2, 8($sp)
-    lw      $s3, 12($sp)
-    lw      $s4, 16($sp)
-    lw      $s5, 20($sp)
-    lw      $s6, 24($sp)
-    lw      $s7, 28($sp)
-    lw      $fp, 32($sp)
-    lw      $ra, 36($sp)
+    lw      $s0, 16($sp)
+    lw      $s1, 20($sp)
+    lw      $s2, 24($sp)
+    lw      $s3, 28($sp)
+    lw      $s4, 32($sp)
+    lw      $s5, 36($sp)
+    lw      $s6, 40($sp)
+    lw      $s7, 44($sp)
+    lw      $fp, 48($sp)
+    lw      $ra, 52($sp)
     nop
     jr      $ra
-    addiu   $sp, $sp, 40
+    addiu   $sp, $sp, 88
 
 L_skip:                             # !draw or alpha < 1: not drawn, not counted as culled
     b       L_next
@@ -254,16 +255,74 @@ L_neg:
     b       L_alpha
     li      $t7, 255
 
-L_pending:
-    sw      $t4, S_PW($s0)
-    sw      $t1, S_PW+4($s0)
-    sw      $t0, S_PW+8($s0)
-    sw      $t2, S_PW+12($s0)
-    sw      $t3, S_PW+16($s0)
-    li      $at, 1
-    sw      $at, S_PENDING($s0)
-    b       L_ret
+# Calls into C keep the loop's state: s0-s7 / fp survive them; the caller-saved t8 (entry 1's command), a1 / a2 (fog
+# max / skipAt), a3 / ra (entry 2) and v0 (culled) are kept at 56-76($sp) (a0, qxn, is no longer read). 0-15($sp) is the
+# o32 argument home area a C callee may write (the saved registers sit above it).
+L_pending:                          # a quad ready to write (t4, t1, t0, t2, t3) and no room: PS1OTOpenRun opens a run
+    sw      $t0, 0+S_PW($s0)        # the corners and the command survive the call in the state's pending words
+    sw      $t1, 4+S_PW($s0)
+    sw      $t2, 8+S_PW($s0)
+    sw      $t3, 12+S_PW($s0)
+    sw      $t4, 16+S_PW($s0)
+    sw      $t9, S_W($s0)
+    sw      $t8, 56($sp)
+    sw      $a1, 60($sp)
+    sw      $a2, 64($sp)
+    sw      $a3, 68($sp)
+    sw      $v0, 72($sp)
+    sw      $ra, 76($sp)
+    jal     PS1OTOpenRun            # (s): closes the open run, opens one (s->w / s->wEnd, null when the arena is full)
+    move    $a0, $s0
+    lw      $t8, 56($sp)
+    lw      $a1, 60($sp)
+    lw      $a2, 64($sp)
+    lw      $a3, 68($sp)
+    lw      $v0, 72($sp)
+    lw      $ra, 76($sp)
+    lw      $t9, S_W($s0)
+    lw      $v1, S_WEND($s0)
+    lw      $t0, 0+S_PW($s0)
+    lw      $t1, 4+S_PW($s0)
+    lw      $t2, 8+S_PW($s0)
+    lw      $t3, 12+S_PW($s0)
+    lw      $t4, 16+S_PW($s0)
+    bnez    $t9, L_write            # a run: write the quad
+    nop
+    b       L_next                  # no arena: not drawn (record .first stays 0)
     sw      $zero, 4($s3)
+
+L_other:                            # not fast: depth, lo / hi and the record here, the face in C (PS1OTOtherC)
+    slt     $at, $t4, $s5
+    beqz    $at, 1f
+    sw      $t4, 0($s3)             # rec.depth
+    move    $s5, $t4                # lo
+1:  slt     $at, $s6, $t4
+    beqz    $at, 2f
+    nop
+    move    $s6, $t4                # hi
+2:  sw      $t9, S_W($s0)           # the open run's end (PS1OTOtherC closes it)
+    sw      $t8, 56($sp)
+    sw      $a1, 60($sp)
+    sw      $a2, 64($sp)
+    sw      $a3, 68($sp)
+    sw      $v0, 72($sp)
+    sw      $ra, 76($sp)
+    lw      $t0, S_REC($s0)
+    move    $a2, $t4                # depth
+    subu    $t0, $s3, $t0
+    sra     $a1, $t0, 3             # face index
+    jal     PS1OTOtherC             # (s, i, depth) -> the record's .first (tagged) or null
+    move    $a0, $s0
+    sw      $v0, 4($s3)             # rec.first
+    lw      $t8, 56($sp)
+    lw      $a1, 60($sp)
+    lw      $a2, 64($sp)
+    lw      $a3, 68($sp)
+    lw      $v0, 72($sp)
+    lw      $ra, 76($sp)
+    move    $t9, $zero              # the run was closed: the next faded face opens one
+    b       L_next
+    move    $v1, $zero
 
 L_c2:                               # entry 1 missed: entry 2?
     bne     $t5, $a3, L_miss
@@ -382,3 +441,67 @@ L_miss:
     b       L_write
     move    $t4, $t8
     .size   PS1OTFadedAsm, .-PS1OTFadedAsm
+
+# void PS1OTLinkAsm(PS1OTRec *rec, int count, uint32_t *ot, unsigned hi, int shift, const DrawListEntry3D *subLast)
+# PS1Draw3DSceneOT's second pass (the C loop it replaces, same order and words):
+#   for (i = count - 1; i >= 0; --i) { p = rec[i].first; if (!p) continue; slot = &ot[(hi - rec[i].depth) >> shift];
+#     link = *slot; tag = p & 3;
+#     tag 1 (a captured sub-list): p &= ~1; *(uint32_t *)subLast[i].faceID = subLast[i].depth | link;
+#     tag 2 (a textured quad): p &= ~3; *p = 9 << 24 | link;   tag 0 (a faded quad): *p = 5 << 24 | link;
+#     *slot = p & 0xffffff; }
+    .globl  PS1OTLinkAsm
+    .type   PS1OTLinkAsm, @function
+PS1OTLinkAsm:
+    lw      $t8, 16($sp)            # shift
+    lw      $t9, 20($sp)            # subLast
+    lui     $t7, 0x0500             # 5 << 24
+    lui     $t6, 0x00FF
+    ori     $t6, $t6, 0xFFFF        # 0xffffff
+    sll     $t0, $a1, 3
+    addu    $t0, $a0, $t0           # one past the record being linked
+    beq     $t0, $a0, K_done
+    nop
+    .balign 16
+K_loop:
+    addiu   $t0, $t0, -8
+    lw      $t1, 4($t0)             # first
+    lw      $t2, 0($t0)             # depth
+    beqz    $t1, K_next
+    andi    $t3, $t1, 3             # tag
+    subu    $t2, $a3, $t2
+    srlv    $t2, $t2, $t8
+    sll     $t2, $t2, 2
+    addu    $t2, $a2, $t2           # the bucket's slot
+    lw      $t4, 0($t2)             # link
+    bnez    $t3, K_tag
+    and     $t5, $t1, $t6           # p & 0xffffff
+    or      $t4, $t4, $t7           # 5 << 24 | link
+    sw      $t4, 0($t1)
+    sw      $t5, 0($t2)
+K_next:
+    bne     $t0, $a0, K_loop
+    nop
+K_done:
+    jr      $ra
+    nop
+K_tag:
+    addiu   $at, $t3, -1
+    bnez    $at, K_tex
+    subu    $t1, $t1, $t3           # p without its tag (delay: both tags)
+    subu    $at, $t0, $a0           # tag 1: subLast[i] (8 bytes an entry, as the records)
+    addu    $at, $t9, $at
+    lw      $t3, 0($at)             # .faceID = the sub-list's last node
+    lw      $t5, 4($at)             # .depth = that node's size word
+    and     $t1, $t1, $t6           # p & 0xffffff (t1 has no tag now)
+    or      $t5, $t5, $t4
+    sw      $t5, 0($t3)
+    b       K_next
+    sw      $t1, 0($t2)
+K_tex:
+    lui     $at, 0x0900             # tag 2: 9 << 24 | link
+    or      $t4, $t4, $at
+    sw      $t4, 0($t1)
+    and     $t1, $t1, $t6
+    b       K_next
+    sw      $t1, 0($t2)
+    .size   PS1OTLinkAsm, .-PS1OTLinkAsm
