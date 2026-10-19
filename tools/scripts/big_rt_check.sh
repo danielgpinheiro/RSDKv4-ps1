@@ -18,7 +18,7 @@ cat > "$T/t.cpp" <<'CPP'
 #include <cstring>
 typedef unsigned int uint;
 typedef unsigned short ushort;
-#define SCRIPTCODE_COUNT    (0x30000)
+#define SCRIPTCODE_COUNT    (0x18C00) // RSDKv4/Script.hpp (PS1)
 #define PS1_SCRIPTBIG_COUNT (0x1400)
 #define PS1_SCRIPT_BIG      (-0x8000)
 struct Code {
@@ -41,7 +41,7 @@ Code scriptCode;
 #include "big.inc"
 #undef PS1_GAME
 int val(int i) { return scriptCode.slot[i] != PS1_SCRIPT_BIG ? scriptCode.slot[i] : PS1ScriptBigValue(i); }
-void reset() { memset(&scriptCode, 0, sizeof(scriptCode)), s_ps1ScriptBigCount = 0, s_ps1BigRtCount = 0, PS1ScriptBigChanged(); }
+void reset() { memset(&scriptCode, 0, sizeof(scriptCode)), s_ps1ScriptBigCount = 0, PS1BigRtReset(), PS1ScriptBigChanged(); }
 } // namespace B
 static int rv()
 {

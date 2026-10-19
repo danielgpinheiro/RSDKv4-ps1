@@ -262,9 +262,17 @@ void ProcessObjects()
     // A blank slot does nothing below (see the #else), nor does an inactive one (the switch below leaves its flag false;
     // objectEntityPos is set again before any script runs): the special stage's ~700 rings and bombs the pipe hasn't
     // reached (docs/43 C7). Each next slot is read after the previous one's script ran, as before.
+    // A live slot is tested here (most of a zone's typed slots); a blank or inactive one starts the asm scan, and the
+    // index is worked out once per run it skips.
     Entity *const ps1End = objectEntityList + ENTITY_COUNT;
-    for (Entity *entity = PS1ScanLive(objectEntityList, ps1End); entity != ps1End; entity = PS1ScanLive(entity + 1, ps1End)) {
-        const int pos = entity - objectEntityList;
+    Entity *entity       = objectEntityList;
+    for (int pos = 0; pos < ENTITY_COUNT; ++pos, ++entity) {
+        if (entity->type == OBJ_TYPE_BLANKOBJECT || entity->priority == PRIORITY_INACTIVE) {
+            entity = PS1ScanLive(entity + 1, ps1End);
+            if (entity == ps1End)
+                break;
+            pos = entity - objectEntityList;
+        }
 #else
     Entity *entity = objectEntityList;
     for (int pos = 0; pos < ENTITY_COUNT; ++pos, ++entity) {
@@ -308,7 +316,8 @@ void ProcessObjects()
 #if PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
                 if (!PS1S1TopSub(scriptInfo->eventUpdate.scriptCodePtr)) // one native opcode: no ProcessScript (Script.cpp)
 #elif !defined(RETRO_PS1_HOST_TOOL)
-                if (!PS1S2TopSub(scriptInfo->eventUpdate.scriptCodePtr))
+                if (scriptCode.raw(scriptInfo->eventUpdate.scriptCodePtr + 1) != 0 // not `op End` (FUNC_END = 0): no call
+                    || !PS1S2TopSub(scriptInfo->eventUpdate.scriptCodePtr))
 #endif
                 ProcessScript(scriptInfo->eventUpdate.scriptCodePtr, scriptInfo->eventUpdate.jumpTablePtr, EVENT_MAIN);
                 bounds();

@@ -42,21 +42,54 @@ static ushort s_ps1BigBucket[PS1_BIGBUCKET_COUNT];
 static bool s_ps1BigBucketDirty = true;
 #if PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
 // Sonic 2: the scripts' runtime insertions go to a second sorted run at the top of the same array, growing down
-// (s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1 - rtCount ...]): an insertion moved the loaded table's tail (up to ~40 KB: the
+// (logical index L, ascending by slot, at s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT - L]: the largest slot lowest, so the
+// common ascending insertions and a load's truncation move nothing): an insertion moved the loaded table's tail (up to ~40 KB: the
 // special stage's segment build fills six 40-entry tables near the code's start, ~50 hblanks on every 4th frame early
 // in a stage, docs/43) and rebuilt the bucket index. The two runs hold what the one table held, with the same capacity
 // (an insertion or a load's append fails when count + rtCount reaches PS1_SCRIPTBIG_COUNT, as count did), and a load
 // drops the entries at or past its position from both: every read gives the same value.
 #define PS1_BIG_RT 1
 static int s_ps1BigRtCount = 0;
-static inline PS1ScriptBig *PS1BigRt() { return &s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1 - s_ps1BigRtCount]; }
+static inline PS1ScriptBig &PS1BigRtAt(int L) { return s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT - L]; }
+// The runtime run's bucket index: s_ps1BigRtBucket[b] = the first runtime entry with .pos >= b << 10 (a zone reads its
+// runtime slots every frame: a binary search over the whole run cost ~1 % of a frame). An insertion adds 1 to the
+// buckets after its own, a load's truncation clamps them, a reset zeroes them.
+#define PS1_RTB_SHIFT 10
+#define PS1_RTB_COUNT ((SCRIPTCODE_COUNT >> PS1_RTB_SHIFT) + 2)
+static ushort s_ps1BigRtBucket[PS1_RTB_COUNT];
+// Code slot -> runtime index for the slots read lately (a zone reads the same ~250 runtime slots every frame). Each
+// entry's key is the slot with the cache's generation above bit 17 (slots < 2^17); whenever runtime indices move (an
+// insertion, a load's truncation, a reset) the generation moves on, so a hit is always the slot's current entry (a
+// load's insertions cost one store each, not a clear).
+#define PS1_RTC_N 128
+static_assert(SCRIPTCODE_COUNT <= (1 << 17), "PS1BigRtCached keys: slot | generation << 17");
+struct PS1BigRtCached {
+    uint key;
+    int idx;
+};
+static PS1BigRtCached s_ps1BigRtCache[PS1_RTC_N];
+static uint s_ps1BigRtGen = 1u << 17; // never 0 above bit 17: the zeroed entries never match
+static void PS1BigRtCacheClear()
+{
+    s_ps1BigRtGen += 1u << 17;
+    if (s_ps1BigRtGen == 0) { // wrapped (every 32,768 moves): the old keys could match again
+        for (int i = 0; i < PS1_RTC_N; ++i) s_ps1BigRtCache[i].key = 0;
+        s_ps1BigRtGen = 1u << 17;
+    }
+}
+static void PS1BigRtReset()
+{
+    s_ps1BigRtCount = 0;
+    memset(s_ps1BigRtBucket, 0, sizeof(s_ps1BigRtBucket));
+    PS1BigRtCacheClear();
+}
 static int PS1BigRtFind(int pos) // the first runtime entry with .pos >= pos
 {
-    const PS1ScriptBig *r = PS1BigRt();
-    int lo = 0, hi = s_ps1BigRtCount;
+    const int b = pos >> PS1_RTB_SHIFT;
+    int lo = s_ps1BigRtBucket[b], hi = s_ps1BigRtBucket[b + 1];
     while (lo < hi) {
         int m = (lo + hi) >> 1;
-        if (r[m].pos < pos)
+        if (PS1BigRtAt(m).pos < pos)
             lo = m + 1;
         else
             hi = m;
@@ -93,12 +126,19 @@ static inline int PS1ScriptBigFind(int pos) // index of the first entry with .po
 }
 int PS1ScriptBigValue(int pos)
 {
+#ifdef PS1_BIG_RT
+    PS1BigRtCached &c = s_ps1BigRtCache[pos & (PS1_RTC_N - 1)];
+    if (c.key == ((uint)pos | s_ps1BigRtGen))
+        return PS1BigRtAt(c.idx).value;
+#endif
     int k = PS1ScriptBigFind(pos);
 #ifdef PS1_BIG_RT
     if (s_ps1ScriptBig[k].pos != pos && s_ps1BigRtCount) {
         int j = PS1BigRtFind(pos);
-        if (j < s_ps1BigRtCount && PS1BigRt()[j].pos == pos)
-            return PS1BigRt()[j].value;
+        if (j < s_ps1BigRtCount && PS1BigRtAt(j).pos == pos) {
+            c.key = (uint)pos | s_ps1BigRtGen, c.idx = j;
+            return PS1BigRtAt(j).value;
+        }
     }
 #endif
     return s_ps1ScriptBig[k].pos == pos ? s_ps1ScriptBig[k].value : PS1_SCRIPT_BIG; // not stored: the literal value
@@ -117,12 +157,14 @@ __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
             return;
         }
 #ifdef PS1_BIG_RT
-        int j = PS1BigRtFind(pos);
-        PS1ScriptBig *r = PS1BigRt();
-        memmove(r - 1, r, j * sizeof(PS1ScriptBig)); // the entries below pos one down, the new one under the rest
-        r[j - 1].pos   = pos;
-        r[j - 1].value = value;
+        const int j = PS1BigRtFind(pos), n = s_ps1BigRtCount;
+        PS1ScriptBig *low = &PS1BigRtAt(n - 1); // the entries past pos (logical j .. n - 1) one down, the new one at j
+        memmove(low - 1, low, (n - j) * sizeof(PS1ScriptBig));
+        PS1BigRtAt(j).pos   = pos;
+        PS1BigRtAt(j).value = value;
         ++s_ps1BigRtCount;
+        for (int b = (pos >> PS1_RTB_SHIFT) + 1; b < PS1_RTB_COUNT; ++b) ++s_ps1BigRtBucket[b];
+        PS1BigRtCacheClear(); // the indices at or past j moved
         g_ps1ScriptBigCount  = PS1_BIG_TOTAL;
         scriptCode.slot[pos] = PS1_SCRIPT_BIG;
         return;
@@ -136,6 +178,13 @@ __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
         scriptCode.slot[pos] = PS1_SCRIPT_BIG;
         return;
     }
+#ifdef PS1_BIG_RT
+    PS1BigRtCached &c = s_ps1BigRtCache[pos & (PS1_RTC_N - 1)];
+    if (c.key == ((uint)pos | s_ps1BigRtGen)) {
+        PS1BigRtAt(c.idx).value = value;
+        return;
+    }
+#endif
     int k = PS1ScriptBigFind(pos);
     if (s_ps1ScriptBig[k].pos == pos) {
         s_ps1ScriptBig[k].value = value;
@@ -143,17 +192,20 @@ __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
     }
 #ifdef PS1_BIG_RT
     int j = PS1BigRtFind(pos);
-    if (j < s_ps1BigRtCount && PS1BigRt()[j].pos == pos)
-        PS1BigRt()[j].value = value;
+    if (j < s_ps1BigRtCount && PS1BigRtAt(j).pos == pos)
+        PS1BigRtAt(j).value = value;
 #endif
 }
 static bool PS1ScriptStore(int pos, int value)
 {
 #ifdef PS1_BIG_RT
-    if (s_ps1BigRtCount && PS1BigRt()[s_ps1BigRtCount - 1].pos >= pos) { // the runtime run's entries at or past pos too
-        int j = PS1BigRtFind(pos);
-        memmove(&s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1 - j], PS1BigRt(), j * sizeof(PS1ScriptBig));
+    if (s_ps1BigRtCount && PS1BigRtAt(s_ps1BigRtCount - 1).pos >= pos) { // the runtime run's entries at or past pos too
+        const int j     = PS1BigRtFind(pos); // the ones under pos stay where they are
         s_ps1BigRtCount = j;
+        for (int b = 0; b < PS1_RTB_COUNT; ++b)
+            if (s_ps1BigRtBucket[b] > j)
+                s_ps1BigRtBucket[b] = (ushort)j;
+        PS1BigRtCacheClear();
         g_ps1ScriptBigCount = PS1_BIG_TOTAL;
     }
 #endif
@@ -3626,7 +3678,7 @@ static bool PS1LoadScriptImage()
     jumpTablePos        = jumpPos;
     s_ps1ScriptBigCount = bigCount;
 #ifdef PS1_BIG_RT
-    s_ps1BigRtCount = 0; // the image replaces every entry
+    PS1BigRtReset(); // the image replaces every entry
 #endif
     PS1ScriptBigChanged();
     s_ps1ScriptEnd   = scripts + 1;
@@ -3928,7 +3980,7 @@ void ClearScriptData()
     memset(&scriptCode, 0, sizeof(scriptCode));
     s_ps1ScriptBigCount = 0;
 #ifdef PS1_BIG_RT
-    s_ps1BigRtCount = 0;
+    PS1BigRtReset();
 #endif
     PS1ScriptBigChanged();
     s_ps1ScriptEnd   = 1;
@@ -11459,6 +11511,7 @@ static bool PS1S2FastSub(int p)
 }
 // The same before ProcessScript is entered (ProcessObjects, DrawObjectList): the stacks reset as ProcessScript resets
 // them for a top-level run; false = run ProcessScript as before
+static_assert(FUNC_END == 0, "Object.cpp / Drawing.cpp test `op End` before calling PS1S2TopSub");
 bool PS1S2TopSub(int p)
 {
     if (s_ps1CallNested)
