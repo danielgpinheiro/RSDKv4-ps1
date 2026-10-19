@@ -223,6 +223,14 @@ struct ScriptVariableInfo {
     char value[0x20];
 };
 
+#if RETRO_PLATFORM == RETRO_PS1 && !RETRO_USE_COMPILER && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+// Without the compiler only the operand counts are read (s_ps1OpSize): a constant byte each, not a 36-byte entry built
+// at boot (11 KB of .bss + 5 KB of start-up code, the zones' load-peak headroom)
+struct FunctionInfo {
+    constexpr FunctionInfo(const char *, int opSize) : opcodeSize(opSize) {}
+    byte opcodeSize;
+};
+#else
 struct FunctionInfo {
     FunctionInfo()
     {
@@ -242,6 +250,7 @@ struct FunctionInfo {
 #endif
     int opcodeSize;
 };
+#endif
 
 #if RETRO_USE_COMPILER
 const char variableNames[][0x20] = {
