@@ -17,9 +17,9 @@ branch `ps1`: **Sonic 2** and **Sonic 1** (`GAME=1`, docs/37). Remotes: `origin`
 `fork` = github.com/danielgpinheiro/RSDKv4-ps1 (public on GitHub as of 2026-10-16; push here).
 
 **Status (2026-10-16): both done**, both run on a PSone from a CD-R (Sonic 2 2026-09-28, Sonic 1 2026-09-29). Public
-builders: https://github.com/danielgpinheiro/Sonic-2-PS1-ISO-Builder (head `1c19b5f`) and
-https://github.com/danielgpinheiro/Sonic-1-PS1-ISO-Builder (head `6af4a21`); both executables from `08e0a87` (the
-docs/43 fix pass), update notes in each `CHANGELOG.md`. The discs boot `SONIC2.EXE` / `SONIC1.EXE` (`9a45d1d`): `PS1_EXE_NAME` from the Makefile
+builders: https://github.com/danielgpinheiro/Sonic-2-PS1-ISO-Builder (head `95f3833`) and
+https://github.com/danielgpinheiro/Sonic-1-PS1-ISO-Builder (head `a3e0be8`); both executables from `2e8a04c` (the
+title screen's build stamp), update notes in each `CHANGELOG.md`. The discs boot `SONIC2.EXE` / `SONIC1.EXE` (`9a45d1d`): `PS1_EXE_NAME` from the Makefile
 for `GAME=1`, else `tools/disc/exe_name.txt` (written into each builder by the exporter), else `SONIC2.EXE`.
 
 ## First checks (every session)
