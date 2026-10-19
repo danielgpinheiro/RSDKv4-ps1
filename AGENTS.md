@@ -130,8 +130,14 @@ offsets. Hand-scheduling rules (comments at the top of each file): no load resul
 or GTE instruction in a branch delay slot, two instructions between mtc2 and the command, two between mflo / mfhi and
 the next mult. Verify a change with `OT_CHECK=1`, `perf_scene.sh SHOTS= GPU= KEEP_RAM=1` + `shots_cmp.py` /
 `chain_cmp.py` against a saved reference EXE (`RUN_EXE` / `RUN_ELF`), and `../tests/tools/ab.py
-s2-release-ss-frames-ssN --ref <commit> [--cur <worktree>]` (stages 1-6 and ss1-jump are deterministic; 7 and 8 are not
-in release mode yet).
+s2-release-ss-frames-ssN --ref <commit> [--cur <worktree>]` (all 8 stages and the two -jump runs; add `--data` when the
+bytecode patcher changed). Later steps (2026-10-19, `docs/30` "Sonic 2 special stage to 60 fps"): the CPU vertices' exact
+screen positions by list slot after the transform (`PS1ExactXYPass`, the slot in `.u`'s upper half), the textured quads
+through `PS1OTTexFace` / `PS1TexturedRectOT`, Sonic 2's one-native-sub fast path (`PS1S2FastSub`), the integer rotation
+inverse (`tools/scene3d/inverse_check.sh`), the runtime big-value run (`tools/scripts/big_rt_check.sh`). **RAM at the
+special stage's load is the limit**: watch `perf_scene.sh`'s `headroom=` (17,184 B after these) and run
+`tools/special_entry_test.sh`; -O2 on the special-stage natives (+9 KB) left the stage without its sprites. Keep
+`PS1HalfpipeSegment` and the other big natives -Os.
 
 ## Layout
 | Path | Role |
