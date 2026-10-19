@@ -53,16 +53,17 @@ const DrawListEntry3D *g_ps1DrawOrder = s_ps1DummyDraw;
 volatile uint32_t g_ps1Scene3DAllocs = 0, g_ps1Scene3DFrees = 0, g_ps1Scene3DAllocFail = 0; // GDB
 static void *s_ps1Scene3DBlock = nullptr;
 #if PS1_GAME != 1
-// PS1ProjectedExact's cache (docs/43: near-camera faces, worst frames): vertex, the g_ps1ExactFrame it was made in, x, y
-struct PS1ProjCacheEntry {
-    int idx;
-    uint frame;
+// A vertex left to the CPU: its exact screen position, made once a frame right after the transform (docs/43: the worst
+// frames read ~500 such corners of ~250 vertices, through a cache and the exact transform each). The transform lists the
+// vertices it leaves to the CPU (s_ps1CpuList); s_ps1ExactXY is indexed by vertex. In the Scene3D block (16 KB).
+struct PS1ExactXY {
     int x, y;
 };
-#define PS1_PROJCACHE_N 64
-static PS1ProjCacheEntry s_ps1DummyProjCache[1]; // no block: one entry (mask 0), not 1 KB of .bss in every zone
-static PS1ProjCacheEntry *s_ps1ProjCache = s_ps1DummyProjCache;
-static int s_ps1ProjMask = 0;
+static PS1ExactXY s_ps1DummyXY[1]; // no block: the 1-entry dummies (vertex counts are clamped to them)
+static uint16_t s_ps1DummyCpuList[1];
+static PS1ExactXY *s_ps1ExactXY = s_ps1DummyXY;
+static uint16_t *s_ps1CpuList = s_ps1DummyCpuList, *s_ps1CpuListEnd = s_ps1DummyCpuList;
+static int s_ps1XYCount = 0; // the vertices the last transform did (a mark past them is stale: the exact transform then)
 #endif
 static char s_ps1Scene3DStages[8][24];
 static int s_ps1Scene3DStageCount = -1; // -1: Data/Game/PS1Scene3D.bin not read yet
@@ -71,7 +72,7 @@ static void PS1Scene3DPoint(uint8_t *b)
     if (!b) {
         faceBuffer = s_ps1DummyFace, vertexBuffer = s_ps1DummyVertex, g_ps1Proj = s_ps1DummyProj, g_ps1ExactT = s_ps1DummyExact;
 #if PS1_GAME != 1
-        s_ps1ProjCache = s_ps1DummyProjCache, s_ps1ProjMask = 0;
+        s_ps1ExactXY = s_ps1DummyXY, s_ps1CpuList = s_ps1CpuListEnd = s_ps1DummyCpuList, s_ps1XYCount = 0;
 #endif
         drawList3D = s_ps1DummyDraw, g_ps1Scene3DScratch = s_ps1DummyScratch;
         g_ps1VtxCap = g_ps1FaceCap = 0;
@@ -85,8 +86,8 @@ static void PS1Scene3DPoint(uint8_t *b)
         g_ps1ExactT = (PS1ExactEntry *)b;
 #if PS1_GAME != 1
         b += 256 * sizeof(PS1ExactEntry);
-        s_ps1ProjCache = (PS1ProjCacheEntry *)b, s_ps1ProjMask = PS1_PROJCACHE_N - 1; // zeroed: frame 0 never matches (a
-                                                                                  // transform bumps g_ps1ExactFrame first)
+        s_ps1ExactXY = (PS1ExactXY *)b, b += VERTEXBUFFER_SIZE * sizeof(PS1ExactXY);
+        s_ps1CpuList = s_ps1CpuListEnd = (uint16_t *)b, s_ps1XYCount = 0;
 #endif
         g_ps1VtxCap = VERTEXBUFFER_SIZE, g_ps1FaceCap = FACEBUFFER_SIZE;
     }
@@ -139,7 +140,7 @@ void PS1Scene3DPrepare(const char *folder)
     const size_t size = FACEBUFFER_SIZE * (sizeof(Face) + 2 * sizeof(DrawListEntry3D))
                         + VERTEXBUFFER_SIZE * (sizeof(Vertex) + sizeof(PS1ProjEntry)) + 256 * sizeof(PS1ExactEntry)
 #if PS1_GAME != 1
-                        + PS1_PROJCACHE_N * sizeof(PS1ProjCacheEntry)
+                        + VERTEXBUFFER_SIZE * (sizeof(PS1ExactXY) + sizeof(uint16_t))
 #endif
         ;
     s_ps1Scene3DBlock = psyqo_malloc(size);
@@ -618,6 +619,9 @@ static void PS1CpuVertexT(int v)
     // only the exact z (the sort's depth, PS1ExactTSlow's formula): x and y come from PS1ExactT if a face drawn by the
     // general path reads them (docs/43 C4: 3 multiplies instead of 9 for the ~85 vertices a frame left to the CPU)
     const Vertex &q = vertexBuffer[v];
+#if PS1_GAME != 1
+    *s_ps1CpuListEnd++ = (uint16_t)v; // its exact screen position after the transform (PS1ExactXYPass)
+#endif
     g_ps1Proj[v].u  = 0x8000u;
     g_ps1Proj[v].v  = (q.x * matFinal.values[0][2] >> 8) + (q.y * matFinal.values[1][2] >> 8) + (q.z * matFinal.values[2][2] >> 8) + matFinal.values[3][2];
 }
@@ -629,12 +633,38 @@ struct PS1TfState { // RSDKv4/Scene3DTf.S's T_* offsets
     int ox, oy, oz;
     int m02, m12, m22, m32; // matFinal's column 2 (PS1CpuVertexT)
     uint32_t nearN, flaggedN, lastFlag, cpuN;
+    uint16_t *list; // s_ps1CpuList's end (the asm lists the vertices it leaves to the CPU)
 };
 static_assert(offsetof(PS1TfState, pj) == 4 && offsetof(PS1TfState, end) == 8 && offsetof(PS1TfState, ox) == 12
                   && offsetof(PS1TfState, oz) == 20 && offsetof(PS1TfState, m02) == 24 && offsetof(PS1TfState, m32) == 36
-                  && offsetof(PS1TfState, nearN) == 40 && offsetof(PS1TfState, cpuN) == 52 && sizeof(Vertex) == 20,
+                  && offsetof(PS1TfState, nearN) == 40 && offsetof(PS1TfState, cpuN) == 52 && offsetof(PS1TfState, list) == 56
+                  && sizeof(Vertex) == 20,
               "Scene3DTf.S's layout");
 extern "C" int PS1TransformAsm(PS1TfState *s, int v);
+// The listed vertices' exact screen positions (PS1ProjectedExact's former on-demand math: PS1ExactTSlow's T with its z,
+// already in .v, SCREEN_CENTER +- projection * T / T.z); a vertex behind the camera (z <= 0) is never projected
+static void PS1ExactXYPass(int count)
+{
+    const Matrix &m = matFinal;
+    const int m00 = m.values[0][0], m10 = m.values[1][0], m20 = m.values[2][0], m30 = m.values[3][0];
+    const int m01 = m.values[0][1], m11 = m.values[1][1], m21 = m.values[2][1], m31 = m.values[3][1];
+    const int px = projectionX, py = projectionY;
+    const PS1ProjEntry *const pj = g_ps1Proj; // locals: the stores below would make GCC reload the globals each vertex
+    const Vertex *const vb       = vertexBuffer;
+    PS1ExactXY *const xy         = s_ps1ExactXY;
+    for (const uint16_t *p = s_ps1CpuList, *e = s_ps1CpuListEnd; p != e; ++p) {
+        const int v = *p, z = pj[v].v;
+        if (z <= 0)
+            continue;
+        const Vertex &q = vb[v];
+        const int x = q.x, y = q.y, w = q.z;
+        const int tx = (x * m00 >> 8) + (y * m10 >> 8) + (w * m20 >> 8) + m30;
+        const int ty = (x * m01 >> 8) + (y * m11 >> 8) + (w * m21 >> 8) + m31;
+        xy[v].x      = SCREEN_CENTERX + px * tx / z;
+        xy[v].y      = SCREEN_CENTERY - py * ty / z;
+    }
+    s_ps1XYCount = count;
+}
 #endif
 PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Scene3DTf.S
 {
@@ -648,9 +678,15 @@ PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Sc
         r[2][k] = m.values[k][2] * 16;
         for (int j = 0; j < 3; ++j) fits = fits && r[j][k] >= -32768 && r[j][k] <= 32767;
     }
+#if PS1_GAME != 1
+    s_ps1CpuListEnd = s_ps1CpuList;
+#endif
     if (!fits) {
         g_ps1GteMatrixCPU = g_ps1GteMatrixCPU + 1;
         for (int v = 0; v < count; ++v) PS1CpuVertexT(v);
+#if PS1_GAME != 1
+        PS1ExactXYPass(count);
+#endif
         return;
     }
     auto pack = [](int lo, int hi) { return (uint32_t)(uint16_t)lo | ((uint32_t)(uint16_t)hi << 16); };
@@ -687,7 +723,9 @@ PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Sc
 #endif
     for (; v + 3 <= count; v += 3) {
 #if PS1_GAME != 1
-        v = PS1TransformAsm(&ts, v);
+        ts.list         = s_ps1CpuListEnd;
+        v               = PS1TransformAsm(&ts, v);
+        s_ps1CpuListEnd = ts.list;
         if (v + 3 > count)
             break;
 #endif
@@ -748,6 +786,7 @@ PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Sc
     g_ps1GteNear      = g_ps1GteNear + ts.nearN;
     g_ps1GteFlagged   = g_ps1GteFlagged + ts.flaggedN;
     g_ps1GteLastFlag  = ts.lastFlag;
+    PS1ExactXYPass(count);
 #endif
     g_ps1GteVertices  = g_ps1GteVertices + count;
     g_ps1GteFallbacks = g_ps1GteFallbacks + cpu;
@@ -1078,17 +1117,20 @@ void Sort3DDrawList()
 // T is computed: PS1VertexT before the face is drawn).
 #define PS1_PROJ_MARK (0x8000u)
 #if PS1_GAME != 1
-// a vertex left to the CPU, out of line (Sonic 2: PS1OTOtherFace and PS1Draw3DList inlined it at every corner)
-__attribute__((noinline)) static void PS1ProjectedExact(int i, int *x, int *y)
+// a vertex left to the CPU: made by PS1ExactXYPass (a stale mark past the transformed vertices: the exact transform)
+__attribute__((noinline)) static void PS1ProjectedExactStale(int i, int *x, int *y)
 {
-    PS1ProjCacheEntry &e = s_ps1ProjCache[i & s_ps1ProjMask]; // once a frame (each corner serves up to 4 faces)
-    if (e.idx != i || e.frame != g_ps1ExactFrame) {
-        PS1VertexXYZ t = PS1ExactT(i);
-        e.x            = SCREEN_CENTERX + projectionX * t.x / t.z;
-        e.y            = SCREEN_CENTERY - projectionY * t.y / t.z;
-        e.idx = i, e.frame = g_ps1ExactFrame;
+    PS1VertexXYZ t = PS1ExactT(i);
+    *x             = SCREEN_CENTERX + projectionX * t.x / t.z;
+    *y             = SCREEN_CENTERY - projectionY * t.y / t.z;
+}
+static inline void PS1ProjectedExact(int i, int *x, int *y)
+{
+    if (i < s_ps1XYCount) {
+        *x = s_ps1ExactXY[i].x, *y = s_ps1ExactXY[i].y;
+        return;
     }
-    *x = e.x, *y = e.y;
+    PS1ProjectedExactStale(i, x, y);
 }
 #endif
 static inline void PS1ProjectedVertex(int i, int *x, int *y)
