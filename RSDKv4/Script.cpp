@@ -942,6 +942,7 @@ const FunctionInfo functions[] = {
 #if PS1_GAME != 1 || RETRO_USE_COMPILER
     FunctionInfo("PS1TextMsgUpdate", 0),
     FunctionInfo("PS1TextMsgDraw", 0),
+    FunctionInfo("PS1SpecialHUDDraw", 0),
 #endif
 #endif
 };
@@ -1516,6 +1517,7 @@ enum ScrFunc {
 #if PS1_GAME != 1 || RETRO_USE_COMPILER
     FUNC_PS1TEXTMSGUPDATE,
     FUNC_PS1TEXTMSGDRAW,
+    FUNC_PS1SPECIALHUDDRAW,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -11140,6 +11142,135 @@ __attribute__((optimize("Os"))) static void PS1TextMsgUpdate()
             break;
     }
 }
+#if PS1_GAME != 1
+// The special stage's HUD draw sub (every frame: each player's ring counter, function 10, and with Sonic & Tails their
+// total; in a 2-player game the counters and the win icons), natively: one statement per script instruction, in order
+// (t = temps, ap = array positions, G = globals, me = the HUD; function 10 inline: its listing is checked with the
+// sub's). Patched in only when the sub, its jump-table entries and function 10 match SPHUD_DRAW_SIG / SPHUD_FN10_SIG
+// (docs/43: ~10 hblanks a frame in the VM with Sonic & Tails).
+static void PS1SpecialHUDDraw()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition, *G = globalVariables;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    auto counter = [&]() { // function 10: the icon (OBJECTFRAME) at OBJECTVALUE2, the rings of player ARRAYPOS6
+        PS1DrawSpriteScreenXY(me.frame, v[2], 20);
+        v[2] += 44;
+        if (PS1_OBJ(ap[6]).values[0] > 99) {
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] /= 100;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            v[2] += 8;
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] %= 100;
+            t[1] /= 10;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            v[2] += 8;
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] %= 10;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+        }
+        else if (PS1_OBJ(ap[6]).values[0] > 9) {
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] /= 10;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            v[2] += 8;
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] %= 10;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+        }
+        else {
+            PS1DrawSpriteScreenXY(PS1_OBJ(ap[6]).values[0], v[2], 29);
+        }
+    };
+    if (G[13] == 0) {
+        if (G[50] == 0) {
+            ap[6] = 2;
+            v[2]  = SCREEN_CENTERX;
+            v[2] -= 24;
+            me.frame = playerListPos;
+            me.frame += 10;
+            counter();
+        }
+        else {
+            ap[6] = 2;
+            v[2]  = SCREEN_CENTERX;
+            v[2] -= 104;
+            me.frame = playerListPos;
+            me.frame += 10;
+            counter();
+            ap[6] = 3;
+            v[2]  = SCREEN_CENTERX;
+            v[2] += 48;
+            me.frame = 11;
+            counter();
+            v[1] = PS1_OBJ(2).values[0];
+            v[1] += PS1_OBJ(3).values[0];
+            PS1DrawSpriteScreenXY(13, SCREEN_CENTERX, 21);
+            v[2] = SCREEN_CENTERX;
+            if (v[1] > 99) {
+                v[2] -= 12;
+                t[1] = v[1];
+                t[1] /= 100;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+                v[2] += 8;
+                t[1] = v[1];
+                t[1] %= 100;
+                t[1] /= 10;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+                v[2] += 8;
+                t[1] = v[1];
+                t[1] %= 10;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            }
+            else if (v[1] > 9) {
+                v[2] -= 8;
+                t[1] = v[1];
+                t[1] /= 10;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+                v[2] += 8;
+                t[1] = v[1];
+                t[1] %= 10;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            }
+            else {
+                v[2] -= 4;
+                PS1DrawSpriteScreenXY(v[1], v[2], 29);
+            }
+        }
+    }
+    else {
+        ap[6] = 2;
+        v[2]  = SCREEN_CENTERX;
+        v[2] -= 104;
+        me.frame = playerListPos;
+        me.frame += 10;
+        counter();
+        t[0] = 0;
+        v[2] = SCREEN_CENTERX;
+        v[2] -= 96;
+        while (t[0] < PS1_OBJ(2).values[19]) {
+            PS1DrawSpriteScreenXY(14, v[2], 45);
+            v[2] += 16;
+            t[0]++;
+        }
+        ap[6] = 3;
+        v[2]  = SCREEN_CENTERX;
+        v[2] += 48;
+        me.frame = G[109];
+        me.frame += 10;
+        counter();
+        t[0] = 0;
+        v[2] = SCREEN_CENTERX;
+        v[2] += 56;
+        while (t[0] < PS1_OBJ(3).values[19]) {
+            PS1DrawSpriteScreenXY(14, v[2], 45);
+            v[2] += 16;
+            t[0]++;
+        }
+    }
+}
+#endif
 __attribute__((optimize("Os"))) static void PS1TextMsgDraw()
 {
     int *t    = scriptEng.temp;
@@ -11509,6 +11640,7 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1SPECIALBOMB: scriptText[0] = '\0'; PS1SpecialBombUpdate(); break;
         case FUNC_PS1TEXTMSGUPDATE: scriptText[0] = '\0'; PS1TextMsgUpdate(); break;
         case FUNC_PS1TEXTMSGDRAW: scriptText[0] = '\0'; PS1TextMsgDraw(); break;
+        case FUNC_PS1SPECIALHUDDRAW: scriptText[0] = '\0'; PS1SpecialHUDDraw(); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -13861,6 +13993,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1TEXTMSGDRAW:
                 opcodeSize = 0;
                 PS1TextMsgDraw();
+                break;
+            case FUNC_PS1SPECIALHUDDRAW:
+                opcodeSize = 0;
+                PS1SpecialHUDDraw();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;
