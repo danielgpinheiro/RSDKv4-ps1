@@ -183,7 +183,7 @@ T_slow:                             # as the C loop's slow path: counted as flag
     bltz    $a0, 1f
     sw      $a0, T_LASTFLAG($s0)
     lw      $at, T_NEAR($s0)
-    nop
+    srl     $a1, $a1, 5             # SZ1 (the near branch's delay slot shifted it)
     addiu   $at, $at, 1
     b       2f
     sw      $at, T_NEAR($s0)
@@ -197,11 +197,20 @@ T_slow:                             # as the C loop's slow path: counted as flag
     sw      $t5, 52($sp)
     sw      $t6, 56($sp)
     sw      $t8, 60($sp)
+    # t0 / t2 / t7: the RTPT's SZ of the vertices to come (SZ1-3 are each vertex's own: RTPT is the RTPS core run on
+    # V0, V1, V2, psx-spx "GTE Coordinate Calculation Commands"): one under 256 goes to the CPU whatever its RTPS
+    # gives (T_sv's near test on the same SZ), so it gets no RTPS (docs/43: most vertices of a flagged triple)
+    move    $t0, $a1
+    move    $t2, $a2
+    move    $t7, $a3
     addiu   $t9, $sp, 40            # the next vertex's inputs
     addiu   $t1, $sp, 64            # their end
     move    $v1, $s1                # the vertex
     move    $t4, $s3                # its projection entry
 T_sv:
+    sltiu   $at, $t0, 256
+    bnez    $at, T_scpu             # near the camera: the CPU, without the RTPS
+    nop
     lw      $a0, 0($t9)
     lw      $a1, 4($t9)
     nop
@@ -264,6 +273,8 @@ T_scpu:                             # PS1CpuVertexT: .u = 0x8000, .v = the exact
     sw      $a1, 0($t4)
     sw      $v0, 4($t4)
 T_snext:
+    move    $t0, $t2                # the next vertex's SZ
+    move    $t2, $t7
     addiu   $t9, $t9, 8
     addiu   $v1, $v1, 20
     bne     $t9, $t1, T_sv
