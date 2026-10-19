@@ -9251,6 +9251,15 @@ static void PS1InvisibleBlockUpdate()
 // the special-stage natives touch them in many places (code size, docs/30 phase 7.2b).
 __attribute__((noinline)) static Vertex &PS1Vertex(int i) { return vertexBuffer[PS1_VTX(i)]; }
 __attribute__((noinline)) static Face &PS1Face(int i) { return faceBuffer[PS1_FACE(i)]; }
+// n consecutive vertices from i as PS1Vertex gives them, with one call when all are plain in-range indices (the last
+// one's: the high-water marks only grow, so they end the same; below 0xF00 nothing is remapped); otherwise null, and
+// the caller takes PS1Vertex for each (docs/43: the special stage's rings and bombs, ~300 calls a frame)
+static inline Vertex *PS1VertexRun(int i, int n)
+{
+    if (i >= 0 && i + n <= g_ps1VtxCap && i + n <= 0xF00)
+        return &PS1Vertex(i + n - 1) - (n - 1);
+    return nullptr;
+}
 // Scene3D counts as the VM writes them (VAR_SCENE3DVERTEXCOUNT / FACECOUNT: high-water marks, then mapped/clamped).
 static inline void PS1SetVertexCount(int n)
 {
@@ -10580,7 +10589,8 @@ static void PS1SpecialRingUpdate()
         Face &f = PS1Face(ap[1]);
         f.flag  = 6;
         f.a     = ap[0];
-        Vertex *q = &PS1Vertex(ap[0]);
+        Vertex *const run = PS1VertexRun(ap[0], 4);
+        Vertex *q         = run ? run : &PS1Vertex(ap[0]);
         q->x    = v[11];
         q->y    = v[12];
         q->z    = v[13];
@@ -10588,7 +10598,7 @@ static void PS1SpecialRingUpdate()
         q->v    = 50;
         ap[0]++;
         f.b  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 1 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10597,7 +10607,7 @@ static void PS1SpecialRingUpdate()
         q->v = me.scale;
         ap[0]++;
         f.c  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 2 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10605,7 +10615,7 @@ static void PS1SpecialRingUpdate()
         q->v = 16;
         ap[0]++;
         f.d  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 3 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10617,7 +10627,8 @@ static void PS1SpecialRingUpdate()
     Face &f = PS1Face(ap[1]);
     f.flag  = 5;
     f.a     = ap[0];
-    Vertex *q = &PS1Vertex(ap[0]);
+    Vertex *const run = PS1VertexRun(ap[0], 4);
+    Vertex *q         = run ? run : &PS1Vertex(ap[0]);
     q->x    = v[4];
     q->y    = v[5];
     q->z    = v[6];
@@ -10627,7 +10638,7 @@ static void PS1SpecialRingUpdate()
         q->v = scriptCode[13802 + G[19] + 1];
     ap[0]++;
     f.b  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 1 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10636,7 +10647,7 @@ static void PS1SpecialRingUpdate()
     q->v = me.scale;
     ap[0]++;
     f.c  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 2 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10644,7 +10655,7 @@ static void PS1SpecialRingUpdate()
     q->v = 16;
     ap[0]++;
     f.d  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 3 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10717,7 +10728,8 @@ static void PS1SpecialBombUpdate()
         Face &f = PS1Face(ap[1]);
         f.flag  = 6;
         f.a     = ap[0];
-        Vertex *q = &PS1Vertex(ap[0]);
+        Vertex *const run = PS1VertexRun(ap[0], 4);
+        Vertex *q         = run ? run : &PS1Vertex(ap[0]);
         q->x    = v[11];
         q->y    = v[12];
         q->z    = v[13];
@@ -10725,7 +10737,7 @@ static void PS1SpecialBombUpdate()
         q->v    = 50;
         ap[0]++;
         f.b  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 1 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10743,7 +10755,7 @@ static void PS1SpecialBombUpdate()
         q->v = me.scale;
         ap[0]++;
         f.c  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 2 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10751,7 +10763,7 @@ static void PS1SpecialBombUpdate()
         q->v = 16;
         ap[0]++;
         f.d  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 3 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10763,7 +10775,8 @@ static void PS1SpecialBombUpdate()
     Face &f = PS1Face(ap[1]);
     f.flag  = 5;
     f.a     = ap[0];
-    Vertex *q = &PS1Vertex(ap[0]);
+    Vertex *const run = PS1VertexRun(ap[0], 4);
+    Vertex *q         = run ? run : &PS1Vertex(ap[0]);
     q->x    = v[4];
     q->y    = v[5];
     q->z    = v[6];
@@ -10771,7 +10784,7 @@ static void PS1SpecialBombUpdate()
     q->v    = 50;
     ap[0]++;
     f.b  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 1 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10789,7 +10802,7 @@ static void PS1SpecialBombUpdate()
     q->v = t[1];
     ap[0]++;
     f.c  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 2 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10797,7 +10810,7 @@ static void PS1SpecialBombUpdate()
     q->v = 16;
     ap[0]++;
     f.d  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 3 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
