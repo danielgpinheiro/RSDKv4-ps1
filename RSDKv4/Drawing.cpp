@@ -994,6 +994,9 @@ void SetFullScreen(bool fs)
     Engine.isFullScreen = fs;
 }
 
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+bool PS1S2TopSub(int ptr); // Script.cpp: a sub that is one native opcode, run without ProcessScript
+#endif
 void DrawObjectList(int Layer)
 {
     int size = drawListEntries[Layer].listSize;
@@ -1002,6 +1005,9 @@ void DrawObjectList(int Layer)
         int type        = objectEntityList[objectEntityPos].type;
         if (type) {
             if (scriptCode[objectScriptList[type].eventDraw.scriptCodePtr] > 0)
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+                if (!PS1S2TopSub(objectScriptList[type].eventDraw.scriptCodePtr)) // one native opcode (Script.cpp, docs/43)
+#endif
                 ProcessScript(objectScriptList[type].eventDraw.scriptCodePtr, objectScriptList[type].eventDraw.jumpTablePtr, EVENT_DRAW);
         }
     }

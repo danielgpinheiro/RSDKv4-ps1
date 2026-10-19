@@ -93,6 +93,8 @@ static void PS1BuildTypeGroups()
 // entities in the same order as the full walk, which only ever finds flagged slots.
 #if PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
 bool PS1S1TopSub(int ptr); // Script.cpp: a sub that is one native opcode, run without ProcessScript
+#elif !defined(RETRO_PS1_HOST_TOOL)
+bool PS1S2TopSub(int ptr); // Script.cpp: Sonic 2's (docs/43)
 #endif
 static void PS1BuildTypeGroupsFrom(const short *cand, int n)
 {
@@ -260,6 +262,8 @@ void ProcessObjects()
             if (scriptCode[scriptInfo->eventUpdate.scriptCodePtr] > 0) {
 #if PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
                 if (!PS1S1TopSub(scriptInfo->eventUpdate.scriptCodePtr)) // one native opcode: no ProcessScript (Script.cpp)
+#elif !defined(RETRO_PS1_HOST_TOOL)
+                if (!PS1S2TopSub(scriptInfo->eventUpdate.scriptCodePtr))
 #endif
                 ProcessScript(scriptInfo->eventUpdate.scriptCodePtr, scriptInfo->eventUpdate.jumpTablePtr, EVENT_MAIN);
                 bounds();

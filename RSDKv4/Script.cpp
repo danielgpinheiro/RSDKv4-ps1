@@ -11329,6 +11329,68 @@ static inline uint8_t *PS1DirectAt(const short *c)
 }
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+// Sonic 2's subs that are one native opcode and End (tools/scripts/patch_bytecode.py: the rings, bombs, Halfpipe, Special
+// Setup, the player, the zones' objects; docs/43, as Sonic 1's PS1S1FastSub): the native runs without the VM's per-sub
+// work (the instruction loop, dispatch, then End), leaving what the VM would (scriptText cleared by each instruction).
+// Only natives that take no operands and use none of ProcessScript's locals; anything else takes the VM.
+static bool PS1S2FastSub(int p)
+{
+    if (PS1_RAW(p + 1) != FUNC_END)
+        return false;
+    switch (PS1_RAW(p)) {
+        case FUNC_PS1RING: scriptText[0] = '\0'; PS1RingUpdate(); break;
+        case FUNC_PS1LOSERING: scriptText[0] = '\0'; PS1LoseRingUpdate(); break;
+        case FUNC_PS1BUTTONBRIDGE: scriptText[0] = '\0'; PS1ButtonBridgeUpdate(); break;
+        case FUNC_PS1PLANESWITCHV: scriptText[0] = '\0'; PS1PlaneSwitchUpdate(true); break;
+        case FUNC_PS1PLANESWITCHH: scriptText[0] = '\0'; PS1PlaneSwitchUpdate(false); break;
+        case FUNC_PS1ROTATEPLATFORM: scriptText[0] = '\0'; PS1RotatePlatformUpdate(); break;
+        case FUNC_PS1ROTATEPLATFORMDRAW: scriptText[0] = '\0'; PS1RotatePlatformDraw(); break;
+        case FUNC_PS1HPZBRIDGE: scriptText[0] = '\0'; PS1HPZBridgeUpdate(); break;
+        case FUNC_PS1HPZBRIDGEDRAW: scriptText[0] = '\0'; PS1HPZBridgeDraw(); break;
+        case FUNC_PS1STAGESETUP: scriptText[0] = '\0'; PS1StageSetupUpdate(); break;
+        case FUNC_PS1HUDDRAW: scriptText[0] = '\0'; PS1HUDDraw(); break;
+        case FUNC_PS1TURRETPLATFORM: scriptText[0] = '\0'; PS1TurretPlatformUpdate(); break;
+        case FUNC_PS1BELTPLATFORM: scriptText[0] = '\0'; PS1BeltPlatformUpdate(); break;
+        case FUNC_PS1HFLIPPER: scriptText[0] = '\0'; PS1HFlipperUpdate(); break;
+        case FUNC_PS1EARTHQUAKE: scriptText[0] = '\0'; PS1EarthquakeUpdate(); break;
+        case FUNC_PS1SPIKES: scriptText[0] = '\0'; PS1SpikesUpdate(); break;
+        case FUNC_PS1CLEDGE: scriptText[0] = '\0'; PS1CLedgeUpdate(); break;
+        case FUNC_PS1STEAMPISTON: scriptText[0] = '\0'; PS1SteamPistonUpdate(); break;
+        case FUNC_PS1MPZSETUP: scriptText[0] = '\0'; PS1MPZSetupUpdate(); break;
+        case FUNC_PS1MONITOR: scriptText[0] = '\0'; PS1MonitorUpdate(); break;
+        case FUNC_PS1INVISIBLEBLOCK: scriptText[0] = '\0'; PS1InvisibleBlockUpdate(); break;
+        case FUNC_PS1SPECIALRING: scriptText[0] = '\0'; PS1SpecialRingUpdate(); break;
+        case FUNC_PS1SPECIALBOMB: scriptText[0] = '\0'; PS1SpecialBombUpdate(); break;
+        case FUNC_PS1TEXTMSGUPDATE: scriptText[0] = '\0'; PS1TextMsgUpdate(); break;
+        case FUNC_PS1TEXTMSGDRAW: scriptText[0] = '\0'; PS1TextMsgDraw(); break;
+        case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
+        case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
+        case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
+        case FUNC_PS1RINGSPARKLE: scriptText[0] = '\0'; PS1RingSparkleUpdate(); break;
+        case FUNC_PS1HPZSETUP: scriptText[0] = '\0'; PS1HPZSetupUpdate(); break;
+        case FUNC_PS1SPECIALPLAYER: scriptText[0] = '\0'; PS1SpecialPlayerUpdate(); break;
+        case FUNC_PS1ARZWATER: scriptText[0] = '\0'; PS1WaterUpdate(0); break;
+        case FUNC_PS1CPZWATER: scriptText[0] = '\0'; PS1WaterUpdate(1); break;
+        case FUNC_PS1HPZWATER: scriptText[0] = '\0'; PS1WaterUpdate(2); break;
+        default: return false;
+    }
+    scriptText[0] = '\0'; // End
+    return true;
+}
+// The same before ProcessScript is entered (ProcessObjects, DrawObjectList): the stacks reset as ProcessScript resets
+// them for a top-level run; false = run ProcessScript as before
+bool PS1S2TopSub(int p)
+{
+    if (s_ps1CallNested)
+        return false;
+    jumpTableStackPos = 0;
+    functionStackPos  = 0;
+    foreachStackPos   = 0;
+    return PS1S2FastSub(p);
+}
+#endif
+
 void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 {
     bool running      = true;
@@ -11354,6 +11416,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 #endif
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
     if (!ps1FuncBase && PS1S1FastSub(scriptCodePtr))
+        return;
+#endif
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+    if (!ps1FuncBase && PS1S2FastSub(scriptCodePtr))
         return;
 #endif
 
