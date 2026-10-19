@@ -178,6 +178,11 @@ ps1/mdec.o: CPPFLAGS += -O2
 ps1/gpu_chain.o: CPPFLAGS += -O2
 # The script VM and the object / collision loops are the CPU hot path (as in the Sonic CD port).
 RSDKv4/Script.o RSDKv4/Object.o RSDKv4/Collision.o RSDKv4/Scene3D.o: CPPFLAGS += -O2
+# Sonic 2's 3D: no divide-by-zero trap after each division (2 instructions each; docs/43: the exact screen positions and the
+# textured quads divide by a depth already tested > 0, MatrixInverse by a determinant tested != 0). Sonic 1 as it was.
+ifneq ($(GAME),1)
+RSDKv4/Scene3D.o: CPPFLAGS += -mno-check-zero-division
+endif
 
 $(OBJS): build/flags.txt
 
