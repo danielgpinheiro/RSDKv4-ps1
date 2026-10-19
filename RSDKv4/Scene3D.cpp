@@ -1437,6 +1437,10 @@ struct PS1OTFastState {
     int sheet;       // PS1OTOtherFace's sprite sheet and draw flag
     int draw;
     uint32_t others; // faces given to PS1OTOtherC
+    uint32_t rej;    // faded faces the asm rejected off screen / degenerate (PS1OTOtherC's s_ps1OTFadedGen[0])
+    const void *xy;  // s_ps1ExactXY, s_ps1XYCount, s_ps1CpuCap (PS1ProjectedExact, for the asm's rejects)
+    int xyCount, xyCap;
+    int fadedFast; // g_ps1Draw3DFadedFast
 };
 static_assert(offsetof(PS1OTFastState, fb) == 0 && offsetof(PS1OTFastState, rec) == 4 && offsetof(PS1OTFastState, pj) == 8
                   && offsetof(PS1OTFastState, count) == 12 && offsetof(PS1OTFastState, lo) == 16 && offsetof(PS1OTFastState, hi) == 20
@@ -1446,7 +1450,10 @@ static_assert(offsetof(PS1OTFastState, fb) == 0 && offsetof(PS1OTFastState, rec)
                   && offsetof(PS1OTFastState, qyn) == 56 && offsetof(PS1OTFastState, fogRB) == 60 && offsetof(PS1OTFastState, fogG) == 64
                   && offsetof(PS1OTFastState, culled) == 68 && offsetof(PS1OTFastState, pending) == 72 && offsetof(PS1OTFastState, pw) == 76
                   && offsetof(PS1OTFastState, c2Color) == 96 && offsetof(PS1OTFastState, c2AlphaRGB) == 100
-                  && offsetof(PS1OTFastState, run) == 104,
+                  && offsetof(PS1OTFastState, run) == 104 && offsetof(PS1OTFastState, others) == 120
+                  && offsetof(PS1OTFastState, rej) == 124 && offsetof(PS1OTFastState, xy) == 128
+                  && offsetof(PS1OTFastState, xyCount) == 132 && offsetof(PS1OTFastState, xyCap) == 136
+                  && offsetof(PS1OTFastState, fadedFast) == 140 && sizeof(PS1ExactXY) == 8,
               "PS1OTFastState: RSDKv4/Scene3DOT.S's S_* offsets");
 static_assert(sizeof(Face) == 24 && offsetof(Face, color) == 16 && offsetof(Face, flag) == 20 && sizeof(PS1ProjEntry) == 8
                   && sizeof(PS1OTRec) == 8 && FACE_FLAG_FADED == 4,
@@ -1677,6 +1684,7 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     st.fogRB  = ((fog >> 19) & 0x1F) | ((fog >> 3) & 0x1F) << 16, st.fogG = (fog >> 11) & 0x1F;
     st.culled = 0, st.pending = 0;
     st.run = nullptr, st.drawn = 0, st.sheet = spriteSheetID, st.draw = draw, st.others = 0;
+    st.rej = 0, st.xy = s_ps1ExactXY, st.xyCount = s_ps1XYCount, st.xyCap = s_ps1CpuCap, st.fadedFast = g_ps1Draw3DFadedFast;
 #if PS1_OT_CHECK
     const PS1OTFastState before = st;
 #endif
@@ -1708,6 +1716,7 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     g_ps1FadedCulled    = g_ps1FadedCulled + culled;
     g_ps1OTCaptured     = s_ps1OTCaptured;
     g_ps1OTTexFast      = s_ps1OTTex;
+    s_ps1OTFadedGen[0] += st.rej; // the asm's rejects (PS1OTOtherC's count)
     for (int k = 0; k < 3; ++k) g_ps1OTFadedGen[k] = s_ps1OTFadedGen[k];
     g_ps1Prof3DSort     = PS1HblanksSince(t1); // the second pass (linking)
     g_ps1Prof3DFaces    = count;

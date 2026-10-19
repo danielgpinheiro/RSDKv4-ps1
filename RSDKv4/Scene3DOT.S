@@ -55,6 +55,12 @@ S_C2COLOR   = 96    # colour cache entry 2: colour, alpha << 24 | the command's 
 S_C2AR      = 100
 S_RUN       = 104   # C only (PS1OTOpenRun / PS1OTOtherC): the open bulk run, the quads written in closed runs, the
 S_DRAWN     = 108   # sheet and draw flag PS1OTOtherFace takes
+S_OTHERS    = 120   # faces given to PS1OTOtherC (or rejected here as it would)
+S_REJ       = 124   # faded faces rejected here off screen / degenerate (C adds them to s_ps1OTFadedGen[0])
+S_XY        = 128   # s_ps1ExactXY, s_ps1XYCount, s_ps1CpuCap: the CPU vertices' exact positions (PS1ProjectedExact)
+S_XYN       = 132
+S_XYCAP     = 136
+S_FFAST     = 140   # g_ps1Draw3DFadedFast (the frame's)
 QYN_HI      = 0xFF0F    # -(241 << 16) >> 16
 
 # registers: s0 state, s1 face, s2 face end, s3 record, s4 g_ps1Proj, s5 lo, s6 hi, s7 / fp / t8 cache entry 1 (colour,
@@ -290,7 +296,80 @@ L_other:                            # not fast: depth, lo / hi and the record he
     beqz    $at, 2f
     nop
     move    $s6, $t4                # hi
-2:  sw      $t9, S_W($s0)           # the open run's end (PS1OTOtherC closes it)
+2:  lw      $t6, S_FFAST($s0)
+    bnez    $t5, L_ocall            # not a faded face (t5 = flag - FADED): C
+    nop
+    beqz    $t6, L_ocall
+    nop
+    # PS1OTOtherC's rejects of a faded face, here without the call (docs/43: ~180 near faces a frame at the stage's
+    # start): a corner behind the camera; or, on the corners PS1ProjectedVertex gives (a CPU corner's exact position by
+    # its list slot; a stale one goes to C), all x < 0, all x > SCREEN_XSIZE, all y < 0, all y > 240, all x equal or all
+    # y equal. The record's .first is 0 and the open run stays open, as PS1OTOtherC's PS1_OT_REJECT. Anything else: C.
+    # t0 / t2 = and of x / y (all < 0: sign set), t1 / t3 = or of x - SCREEN_XSIZE - 1 / y - 241 (all past: sign clear),
+    # t5 / t6 = or of x ^ x0 / y ^ y0 (all equal: 0), a0 / a1 = x0 / y0, a2 / ra = x / y, t7 the corner, v0 / at scratch
+    sw      $ra, 80($sp)
+    sw      $v0, 84($sp)
+    li      $t0, -1
+    move    $t1, $zero
+    li      $t2, -1
+    move    $t3, $zero
+    move    $t5, $zero
+    move    $t6, $zero
+    move    $t7, $s1
+L_rc:
+    lw      $v0, 0($t7)             # the corner's vertex
+    nop
+    sll     $at, $v0, 3
+    addu    $at, $s4, $at
+    lw      $a2, 4($at)             # .v
+    lw      $ra, 0($at)             # .u
+    nop
+    blez    $a2, L_rzrej            # behind the camera (PS1_ZPOS)
+    andi    $at, $ra, 0xFFFF
+    xori    $at, $at, 0x8000
+    beqz    $at, L_rcpu             # a CPU corner
+    sll     $a2, $ra, 16
+    sra     $a2, $a2, 16            # x = (int16)(u & 0xFFFF)
+    sra     $ra, $ra, 16            # y = (int16)(u >> 16)
+L_rxy:
+    and     $t0, $t0, $a2
+    lw      $at, S_QXN($s0)
+    and     $t2, $t2, $ra
+    addu    $at, $a2, $at           # x - SCREEN_XSIZE - 1
+    or      $t1, $t1, $at
+    addiu   $at, $ra, -241          # y - SCREEN_YSIZE - 1
+    or      $t3, $t3, $at
+    bne     $t7, $s1, 1f
+    nop
+    move    $a0, $a2                # corner 0: x0, y0
+    move    $a1, $ra
+1:  xor     $at, $a2, $a0
+    or      $t5, $t5, $at
+    xor     $at, $ra, $a1
+    or      $t6, $t6, $at
+    addiu   $t7, $t7, 4
+    addiu   $at, $s1, 16
+    bne     $t7, $at, L_rc
+    nop
+    bltz    $t0, L_rrej             # all x < 0
+    nop
+    bgez    $t1, L_rrej             # all x > SCREEN_XSIZE
+    nop
+    bltz    $t2, L_rrej             # all y < 0
+    nop
+    bgez    $t3, L_rrej             # all y > SCREEN_YSIZE
+    nop
+    beqz    $t5, L_rrej             # all x equal
+    nop
+    beqz    $t6, L_rrej             # all y equal
+    nop
+L_rbail:                            # the face draws: C, as before
+    lw      $ra, 80($sp)
+    lw      $v0, 84($sp)
+    lw      $a1, S_FOGMAX($s0)
+    lw      $a2, S_SKIPAT($s0)
+L_ocall:
+    sw      $t9, S_W($s0)           # the open run's end (PS1OTOtherC closes it)
     sw      $t8, 56($sp)
     sw      $a1, 60($sp)
     sw      $a2, 64($sp)
@@ -316,6 +395,41 @@ L_other:                            # not fast: depth, lo / hi and the record he
     move    $t9, $zero              # the run was closed: the next faded face opens one
     b       L_next
     move    $v1, $zero
+L_rcpu:                             # .u = slot << 16 | 0x8000 (PS1ProjectedExact): v0 = the vertex
+    lw      $a2, S_XYN($s0)
+    srl     $ra, $ra, 16            # the slot
+    slt     $at, $v0, $a2
+    beqz    $at, L_rbail            # past the transformed vertices (stale): C
+    nop
+    lw      $a2, S_XYCAP($s0)
+    nop
+    slt     $at, $ra, $a2
+    beqz    $at, L_rbail            # no slot: C
+    nop
+    lw      $at, S_XY($s0)
+    sll     $ra, $ra, 3
+    addu    $at, $at, $ra
+    lw      $a2, 0($at)             # x
+    lw      $ra, 4($at)             # y
+    b       L_rxy
+    nop
+L_rrej:                             # off screen / degenerate: counted (s_ps1OTFadedGen[0])
+    lw      $at, S_REJ($s0)
+    nop
+    addiu   $at, $at, 1
+    sw      $at, S_REJ($s0)
+L_rzrej:                            # (behind the camera: not counted)
+    lw      $at, S_OTHERS($s0)
+    nop
+    addiu   $at, $at, 1
+    sw      $at, S_OTHERS($s0)
+    sw      $zero, 4($s3)           # rec.first
+    lw      $ra, 80($sp)
+    lw      $v0, 84($sp)
+    lw      $a1, S_FOGMAX($s0)
+    lw      $a2, S_SKIPAT($s0)
+    b       L_next
+    nop
 L_orej:                             # nothing drawn, the run still open: w as saved, its end as the state has it
     sw      $zero, 4($s3)           # rec.first
     lw      $t8, 56($sp)
