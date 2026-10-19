@@ -2961,6 +2961,39 @@ __attribute__((optimize("Os"))) bool PS1TexturedRectFast(int x0, int y0, int x1,
     w[8] = e.d;
     return true;
 }
+// PS1TexturedRectFast + PS1ChainOTRaw(9) for the ordering table's textured quads (docs/43): on a cache hit the words go
+// straight into the arena (no copy); the same tests, cache and words. Null: nothing drawn, or no room.
+uint32_t *PS1TexturedRectOT(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended)
+{
+    if (!s_frameOpen || PS1ObjectsHidden())
+        return nullptr;
+    const int xmin = x0 < x1 ? x0 : x1, xmax = x0 < x1 ? x1 : x0, ymin = y0 < y1 ? y0 : y1, ymax = y0 < y1 ? y1 : y0;
+    const uint32_t key = (uint32_t)sheetID | (uint32_t)blended << 8 | 1u << 16, frame = g_ps1PerfFrames;
+    PS1TexWordCache *e = nullptr;
+    if (!PS1BeyondGpuLimits(xmin, ymin, xmax, ymax) && xmax > 0 && ymax > 0 && xmin < SCREEN_XSIZE && ymin < SCREEN_YSIZE
+        && xmin != xmax && ymin != ymax) {
+        e = &s_texWordCache[((uint32_t)u0 * 7 + (uint32_t)v0 * 13 + (uint32_t)u1 * 3 + (uint32_t)v1 + key) & (PS1_TEXWORD_N - 1)];
+        if (e->frame != frame || e->key != key || e->u0 != u0 || e->v0 != v0 || e->u1 != u1 || e->v1 != v1)
+            e = nullptr;
+        else {
+            uint32_t *h = PS1ChainOTRaw(9);
+            if (!h)
+                return nullptr;
+            auto xy = [](int x, int y) { return (uint32_t)(uint16_t)x | ((uint32_t)(uint16_t)y << 16); };
+            h[1] = e->w0, h[2] = xy(x0, y0), h[3] = e->a, h[4] = xy(x1, y0), h[5] = e->b;
+            h[6] = xy(x0, y1), h[7] = e->c, h[8] = xy(x1, y1), h[9] = e->d;
+            return h;
+        }
+    }
+    uint32_t w[9]; // a miss, beyond the limits, off screen: PS1TexturedRectFast as it is
+    if (!PS1TexturedRectFast(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, w))
+        return nullptr;
+    uint32_t *h = PS1ChainOTRaw(9);
+    if (!h)
+        return nullptr;
+    for (int k = 0; k < 9; ++k) h[1 + k] = w[k];
+    return h;
+}
 #endif
 PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended)
 {

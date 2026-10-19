@@ -1237,6 +1237,17 @@ static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int 
         PS1ProjectedVertex(f.b, &quad[1].x, &quad[1].y);
         PS1ProjectedVertex(f.c, &quad[2].x, &quad[2].y);
         PS1ProjectedVertex(f.d, &quad[3].x, &quad[3].y);
+        { // PS1FadedFaceWords' off-screen and degenerate tests here (each returns 0 there, as its other early-outs do):
+          // the worst frames have ~140 such near faces (docs/43)
+            const int x0 = quad[0].x, x1 = quad[1].x, x2 = quad[2].x, x3 = quad[3].x;
+            const int y0 = quad[0].y, y1 = quad[1].y, y2 = quad[2].y, y3 = quad[3].y;
+            if ((x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) || (x0 > SCREEN_XSIZE && x1 > SCREEN_XSIZE && x2 > SCREEN_XSIZE && x3 > SCREEN_XSIZE)
+                || (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) || (y0 > SCREEN_YSIZE && y1 > SCREEN_YSIZE && y2 > SCREEN_YSIZE && y3 > SCREEN_YSIZE)
+                || (x0 == x1 && x1 == x2 && x2 == x3) || (y0 == y1 && y1 == y2 && y2 == y3)) {
+                ++s_ps1OTFadedGen[0];
+                return nullptr;
+            }
+        }
         int fogStr = 0;
         if ((depth - 0x8000) >> 8 >= 0)
             fogStr = (depth - 0x8000) >> 8;
@@ -1340,10 +1351,38 @@ extern "C" void PS1OTOpenRun(PS1OTFastState *s)
         s->w = s->run, s->wEnd = s->run + 128 * 6;
 }
 static uint32_t *PS1OTOtherFace(int i, int depth, int spriteSheetID, bool draw);
+uint32_t *PS1TexturedRectOT(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended); // render.cpp
+// The rings', bombs' and shadows' textured quads (~30-70 a frame): PS1OTOtherFace's first case out of its large frame,
+// the centre's exact transform (PS1ExactTSlow's formula) inline and the words written straight into the arena
+static __attribute__((noinline)) uint32_t *PS1OTTexFace(const Face &f, int spriteSheetID, bool draw)
+{
+    if (!draw)
+        return nullptr;
+    const Matrix &m  = matFinal;
+    const Vertex &va = vertexBuffer[f.a];
+    const int x = va.x, y = va.y, z = va.z;
+    const int tz = (x * m.values[0][2] >> 8) + (y * m.values[1][2] >> 8) + (z * m.values[2][2] >> 8) + m.values[3][2];
+    if (tz <= 0)
+        return nullptr;
+    const int tx = (x * m.values[0][0] >> 8) + (y * m.values[1][0] >> 8) + (z * m.values[2][0] >> 8) + m.values[3][0];
+    const int ty = (x * m.values[0][1] >> 8) + (y * m.values[1][1] >> 8) + (z * m.values[2][1] >> 8) + m.values[3][1];
+    const Vertex &vb = vertexBuffer[f.b], &vc = vertexBuffer[f.c];
+    uint32_t *h = PS1TexturedRectOT(SCREEN_CENTERX + projectionX * (tx - vb.u) / tz, SCREEN_CENTERY - projectionY * (ty + vb.v) / tz,
+                                    SCREEN_CENTERX + projectionX * (tx + vb.u) / tz, SCREEN_CENTERY - projectionY * (ty - vb.v) / tz,
+                                    va.u - vc.u, va.v - vc.v, va.u + vc.u, va.v + vc.v, spriteSheetID, f.flag == FACE_FLAG_TEXTURED_C_BLEND);
+    if (!h)
+        return nullptr;
+    ++s_ps1OTTex;
+    g_ps1Faces = g_ps1Faces + 1;
+    return reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(h) | 2);
+}
 extern "C" uint32_t *PS1OTOtherC(PS1OTFastState *s, int i, int depth)
 {
     PS1OTCloseRun(s); // what the other paths allocate goes after the run in the arena
     ++s->others;
+    const Face &f = faceBuffer[i];
+    if ((f.flag == FACE_FLAG_TEXTURED_C || f.flag == FACE_FLAG_TEXTURED_C_BLEND) && g_ps1Draw3DTexFast)
+        return PS1OTTexFace(f, s->sheet, s->draw);
     return PS1OTOtherFace(i, depth, s->sheet, s->draw);
 }
 volatile uint32_t g_ps1OTAsmCalls = 0; // last frame: entries into the asm fast path (GDB)
