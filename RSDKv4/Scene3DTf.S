@@ -30,7 +30,9 @@ T_NEAR      = 40    # counters the C code adds to g_ps1GteNear / Flagged / LastF
 T_FLAGGED   = 44
 T_LASTFLAG  = 48
 T_CPU       = 52
-T_LIST      = 56    # uint16_t *: where the next vertex left to the CPU is listed (its exact screen position: C, after)
+T_LIST      = 56    # uint16_t *: the list of the vertices left to the CPU (their exact screen positions: C, after)
+T_LISTN     = 60    # vertices listed (a slot past T_LISTCAP: none, slot 0xFFFF in the mark)
+T_LISTCAP   = 64
 
 # registers: s0 state, s1 vertex, s2 vertex end, s3 projection entry, s4 / s5 / s6 origin x / y / z, s7 2^20, fp index;
 # per triple t0-t8 the nine coordinates (then their offsets), a0-a3 / v0 / v1 / t9 / at scratch.
@@ -242,15 +244,24 @@ T_scpu:                             # PS1CpuVertexT: .u = 0x8000, .v = the exact
     sra     $a3, $a3, 8
     addu    $v0, $v0, $a3
     addu    $v0, $v0, $t8
-    subu    $t3, $t4, $s3           # listed: the vertex index fp + (entry - the triple's entry) / 8
-    srl     $t3, $t3, 3
-    addu    $t3, $t3, $fp
-    lw      $t5, T_LIST($s0)
-    li      $at, 0x8000
-    sh      $t3, 0($t5)
-    addiu   $t5, $t5, 2
-    sw      $t5, T_LIST($s0)
-    sw      $at, 0($t4)
+    lw      $t5, T_LISTN($s0)       # listed (slot n while n < cap): .u = slot << 16 | 0x8000
+    lw      $t3, T_LISTCAP($s0)
+    addiu   $a0, $t5, 1
+    sltu    $at, $t5, $t3
+    sw      $a0, T_LISTN($s0)
+    beqz    $at, 1f
+    ori     $a1, $zero, 0xFFFF      # no slot
+    lw      $a2, T_LIST($s0)
+    subu    $a3, $t4, $s3           # the vertex index fp + (entry - the triple's entry) / 8
+    srl     $a3, $a3, 3
+    addu    $a3, $a3, $fp
+    sll     $a1, $t5, 1
+    addu    $a2, $a2, $a1
+    sh      $a3, 0($a2)
+    move    $a1, $t5
+1:  sll     $a1, $a1, 16
+    ori     $a1, $a1, 0x8000
+    sw      $a1, 0($t4)
     sw      $v0, 4($t4)
 T_snext:
     addiu   $t9, $t9, 8

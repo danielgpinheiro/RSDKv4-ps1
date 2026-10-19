@@ -54,15 +54,19 @@ volatile uint32_t g_ps1Scene3DAllocs = 0, g_ps1Scene3DFrees = 0, g_ps1Scene3DAll
 static void *s_ps1Scene3DBlock = nullptr;
 #if PS1_GAME != 1
 // A vertex left to the CPU: its exact screen position, made once a frame right after the transform (docs/43: the worst
-// frames read ~500 such corners of ~250 vertices, through a cache and the exact transform each). The transform lists the
-// vertices it leaves to the CPU (s_ps1CpuList); s_ps1ExactXY is indexed by vertex. In the Scene3D block (16 KB).
+// frames read ~500 such corners of ~340 vertices, through a cache and the exact transform each). The transform lists the
+// vertices it leaves to the CPU (s_ps1CpuList) and puts the list slot in the mark's upper half (.u = slot << 16 |
+// 0x8000; the tests read only the lower half); s_ps1ExactXY by slot. PS1_XY_N slots in the Scene3D block (5 KB): a
+// vertex past them (slot 0xFFFF; only when the matrix leaves every vertex to the CPU) gets the exact transform.
+#define PS1_XY_N 512
 struct PS1ExactXY {
     int x, y;
 };
-static PS1ExactXY s_ps1DummyXY[1]; // no block: the 1-entry dummies (vertex counts are clamped to them)
+static PS1ExactXY s_ps1DummyXY[1];
 static uint16_t s_ps1DummyCpuList[1];
 static PS1ExactXY *s_ps1ExactXY = s_ps1DummyXY;
-static uint16_t *s_ps1CpuList = s_ps1DummyCpuList, *s_ps1CpuListEnd = s_ps1DummyCpuList;
+static uint16_t *s_ps1CpuList = s_ps1DummyCpuList;
+static int s_ps1CpuN = 0, s_ps1CpuCap = 0; // listed this frame, slots (0 without the block: every vertex the exact way)
 static int s_ps1XYCount = 0; // the vertices the last transform did (a mark past them is stale: the exact transform then)
 #endif
 static char s_ps1Scene3DStages[8][24];
@@ -72,7 +76,7 @@ static void PS1Scene3DPoint(uint8_t *b)
     if (!b) {
         faceBuffer = s_ps1DummyFace, vertexBuffer = s_ps1DummyVertex, g_ps1Proj = s_ps1DummyProj, g_ps1ExactT = s_ps1DummyExact;
 #if PS1_GAME != 1
-        s_ps1ExactXY = s_ps1DummyXY, s_ps1CpuList = s_ps1CpuListEnd = s_ps1DummyCpuList, s_ps1XYCount = 0;
+        s_ps1ExactXY = s_ps1DummyXY, s_ps1CpuList = s_ps1DummyCpuList, s_ps1CpuN = s_ps1CpuCap = s_ps1XYCount = 0;
 #endif
         drawList3D = s_ps1DummyDraw, g_ps1Scene3DScratch = s_ps1DummyScratch;
         g_ps1VtxCap = g_ps1FaceCap = 0;
@@ -86,8 +90,8 @@ static void PS1Scene3DPoint(uint8_t *b)
         g_ps1ExactT = (PS1ExactEntry *)b;
 #if PS1_GAME != 1
         b += 256 * sizeof(PS1ExactEntry);
-        s_ps1ExactXY = (PS1ExactXY *)b, b += VERTEXBUFFER_SIZE * sizeof(PS1ExactXY);
-        s_ps1CpuList = s_ps1CpuListEnd = (uint16_t *)b, s_ps1XYCount = 0;
+        s_ps1ExactXY = (PS1ExactXY *)b, b += PS1_XY_N * sizeof(PS1ExactXY);
+        s_ps1CpuList = (uint16_t *)b, s_ps1CpuN = s_ps1XYCount = 0, s_ps1CpuCap = PS1_XY_N;
 #endif
         g_ps1VtxCap = VERTEXBUFFER_SIZE, g_ps1FaceCap = FACEBUFFER_SIZE;
     }
@@ -140,7 +144,7 @@ void PS1Scene3DPrepare(const char *folder)
     const size_t size = FACEBUFFER_SIZE * (sizeof(Face) + 2 * sizeof(DrawListEntry3D))
                         + VERTEXBUFFER_SIZE * (sizeof(Vertex) + sizeof(PS1ProjEntry)) + 256 * sizeof(PS1ExactEntry)
 #if PS1_GAME != 1
-                        + VERTEXBUFFER_SIZE * (sizeof(PS1ExactXY) + sizeof(uint16_t))
+                        + PS1_XY_N * (sizeof(PS1ExactXY) + sizeof(uint16_t))
 #endif
         ;
     s_ps1Scene3DBlock = psyqo_malloc(size);
@@ -620,9 +624,14 @@ static void PS1CpuVertexT(int v)
     // general path reads them (docs/43 C4: 3 multiplies instead of 9 for the ~85 vertices a frame left to the CPU)
     const Vertex &q = vertexBuffer[v];
 #if PS1_GAME != 1
-    *s_ps1CpuListEnd++ = (uint16_t)v; // its exact screen position after the transform (PS1ExactXYPass)
-#endif
+    uint32_t k = 0xFFFF; // listed: its exact screen position after the transform (PS1ExactXYPass)
+    if (s_ps1CpuN < s_ps1CpuCap)
+        k = s_ps1CpuN, s_ps1CpuList[k] = (uint16_t)v;
+    ++s_ps1CpuN;
+    g_ps1Proj[v].u = 0x8000u | k << 16;
+#else
     g_ps1Proj[v].u  = 0x8000u;
+#endif
     g_ps1Proj[v].v  = (q.x * matFinal.values[0][2] >> 8) + (q.y * matFinal.values[1][2] >> 8) + (q.z * matFinal.values[2][2] >> 8) + matFinal.values[3][2];
 }
 #if PS1_GAME != 1
@@ -633,11 +642,13 @@ struct PS1TfState { // RSDKv4/Scene3DTf.S's T_* offsets
     int ox, oy, oz;
     int m02, m12, m22, m32; // matFinal's column 2 (PS1CpuVertexT)
     uint32_t nearN, flaggedN, lastFlag, cpuN;
-    uint16_t *list; // s_ps1CpuList's end (the asm lists the vertices it leaves to the CPU)
+    uint16_t *list; // s_ps1CpuList: the asm lists the vertices it leaves to the CPU (listN of listCap slots)
+    int listN, listCap;
 };
 static_assert(offsetof(PS1TfState, pj) == 4 && offsetof(PS1TfState, end) == 8 && offsetof(PS1TfState, ox) == 12
                   && offsetof(PS1TfState, oz) == 20 && offsetof(PS1TfState, m02) == 24 && offsetof(PS1TfState, m32) == 36
-                  && offsetof(PS1TfState, nearN) == 40 && offsetof(PS1TfState, cpuN) == 52 && offsetof(PS1TfState, list) == 56
+                  && offsetof(PS1TfState, nearN) == 40 && offsetof(PS1TfState, cpuN) == 52 && offsetof(PS1TfState, list) == 56 && offsetof(PS1TfState, listN) == 60
+                  && offsetof(PS1TfState, listCap) == 64
                   && sizeof(Vertex) == 20,
               "Scene3DTf.S's layout");
 extern "C" int PS1TransformAsm(PS1TfState *s, int v);
@@ -651,8 +662,9 @@ static void PS1ExactXYPass(int count)
     const int px = projectionX, py = projectionY;
     const PS1ProjEntry *const pj = g_ps1Proj; // locals: the stores below would make GCC reload the globals each vertex
     const Vertex *const vb       = vertexBuffer;
-    PS1ExactXY *const xy         = s_ps1ExactXY;
-    for (const uint16_t *p = s_ps1CpuList, *e = s_ps1CpuListEnd; p != e; ++p) {
+    PS1ExactXY *xy               = s_ps1ExactXY;
+    const int n                  = s_ps1CpuN < s_ps1CpuCap ? s_ps1CpuN : s_ps1CpuCap;
+    for (const uint16_t *p = s_ps1CpuList, *e = s_ps1CpuList + n; p != e; ++p, ++xy) {
         const int v = *p, z = pj[v].v;
         if (z <= 0)
             continue;
@@ -660,8 +672,8 @@ static void PS1ExactXYPass(int count)
         const int x = q.x, y = q.y, w = q.z;
         const int tx = (x * m00 >> 8) + (y * m10 >> 8) + (w * m20 >> 8) + m30;
         const int ty = (x * m01 >> 8) + (y * m11 >> 8) + (w * m21 >> 8) + m31;
-        xy[v].x      = SCREEN_CENTERX + px * tx / z;
-        xy[v].y      = SCREEN_CENTERY - py * ty / z;
+        xy->x        = SCREEN_CENTERX + px * tx / z;
+        xy->y        = SCREEN_CENTERY - py * ty / z;
     }
     s_ps1XYCount = count;
 }
@@ -679,7 +691,7 @@ PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Sc
         for (int j = 0; j < 3; ++j) fits = fits && r[j][k] >= -32768 && r[j][k] <= 32767;
     }
 #if PS1_GAME != 1
-    s_ps1CpuListEnd = s_ps1CpuList;
+    s_ps1CpuN = 0;
 #endif
     if (!fits) {
         g_ps1GteMatrixCPU = g_ps1GteMatrixCPU + 1;
@@ -720,12 +732,13 @@ PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Sc
     ts.vb = vb, ts.pj = pj, ts.end = count - count % 3, ts.ox = ox, ts.oy = oy, ts.oz = oz;
     ts.m02 = m.values[0][2], ts.m12 = m.values[1][2], ts.m22 = m.values[2][2], ts.m32 = m.values[3][2];
     ts.nearN = ts.flaggedN = ts.cpuN = 0, ts.lastFlag = g_ps1GteLastFlag;
+    ts.list = s_ps1CpuList, ts.listCap = s_ps1CpuCap;
 #endif
     for (; v + 3 <= count; v += 3) {
 #if PS1_GAME != 1
-        ts.list         = s_ps1CpuListEnd;
-        v               = PS1TransformAsm(&ts, v);
-        s_ps1CpuListEnd = ts.list;
+        ts.listN  = s_ps1CpuN;
+        v         = PS1TransformAsm(&ts, v);
+        s_ps1CpuN = ts.listN;
         if (v + 3 > count)
             break;
 #endif
@@ -1124,10 +1137,11 @@ __attribute__((noinline)) static void PS1ProjectedExactStale(int i, int *x, int 
     *x             = SCREEN_CENTERX + projectionX * t.x / t.z;
     *y             = SCREEN_CENTERY - projectionY * t.y / t.z;
 }
-static inline void PS1ProjectedExact(int i, int *x, int *y)
+static inline void PS1ProjectedExact(int i, uint32_t mark, int *x, int *y)
 {
-    if (i < s_ps1XYCount) {
-        *x = s_ps1ExactXY[i].x, *y = s_ps1ExactXY[i].y;
+    const uint32_t k = mark >> 16; // the list slot (0xFFFF: none)
+    if (i < s_ps1XYCount && (int)k < s_ps1CpuCap) {
+        *x = s_ps1ExactXY[k].x, *y = s_ps1ExactXY[k].y;
         return;
     }
     PS1ProjectedExactStale(i, x, y);
@@ -1142,7 +1156,7 @@ static inline void PS1ProjectedVertex(int i, int *x, int *y)
     }
     else {
 #if PS1_GAME != 1
-        PS1ProjectedExact(i, x, y);
+        PS1ProjectedExact(i, p, x, y);
 #else
         PS1VertexXYZ t = PS1ExactT(i);
         *x = SCREEN_CENTERX + projectionX * t.x / t.z;
