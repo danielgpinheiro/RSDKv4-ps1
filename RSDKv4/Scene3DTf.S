@@ -3,9 +3,10 @@
 # past +-2^20 from the origin, a GTE flag (bit 31) or a depth under 256 (units of 32) is left to the C code.
 #
 #   int PS1TransformAsm(PS1TfState *s, int v)   (layout: Scene3D.cpp, PS1TfState; offsets below)
-# From vertex v (a multiple of 3), every triple whose three vertices the GTE can do gets .u = SXY, .v = SZ << 5 in
-# g_ps1Proj, exactly as the C loop. Returns the index of the first triple it did not do (the C code does it, then calls
-# back) or end (the last whole triple's end). The GTE's matrix, translation, offset and H are set by the caller.
+# From vertex v (a multiple of 3), every triple gets .u = SXY, .v = SZ << 5 in g_ps1Proj exactly as the C loop: RTPT,
+# and a triple with a GTE flag or a vertex near the camera one vertex at a time (RTPS; a bad vertex left to the CPU with
+# only its exact z, PS1CpuVertexT). Returns at a triple with an offset past 2^20 (the C code does it, then calls back)
+# or at end (the last whole triple's end). The GTE's matrix, translation, offset and H are set by the caller.
 # MIPS I rules as Scene3DOT.S: no load result used by the next instruction, mfc2 / cfc2 the same, two instructions
 # between an mtc2 and the command, no GTE instruction or load in a delay slot.
 
@@ -21,12 +22,20 @@ T_END       = 8     # the last whole triple's end (count - count % 3)
 T_OX        = 12    # the origin (vertex 0's position)
 T_OY        = 16
 T_OZ        = 20
+T_M02       = 24    # matFinal's column 2 (a vertex left to the CPU: only its exact z, PS1CpuVertexT)
+T_M12       = 28
+T_M22       = 32
+T_M32       = 36
+T_NEAR      = 40    # counters the C code adds to g_ps1GteNear / Flagged / LastFlag / Fallbacks
+T_FLAGGED   = 44
+T_LASTFLAG  = 48
+T_CPU       = 52
 
 # registers: s0 state, s1 vertex, s2 vertex end, s3 projection entry, s4 / s5 / s6 origin x / y / z, s7 2^20, fp index;
 # per triple t0-t8 the nine coordinates (then their offsets), a0-a3 / v0 / v1 / t9 / at scratch.
 
 PS1TransformAsm:
-    addiu   $sp, $sp, -40
+    addiu   $sp, $sp, -64
     sw      $s0, 0($sp)
     sw      $s1, 4($sp)
     sw      $s2, 8($sp)
@@ -132,13 +141,13 @@ T_tri:
     mfc2    $a1, $17                # SZ1
     mfc2    $a2, $18                # SZ2
     mfc2    $a3, $19                # SZ3
-    bltz    $a0, T_ret              # a GTE flag: the C code redoes the triple one vertex at a time
-    sltiu   $t0, $a1, 256
-    sltiu   $t1, $a2, 256
-    sltiu   $t2, $a3, 256
-    or      $t0, $t0, $t1
-    or      $t0, $t0, $t2
-    bnez    $t0, T_ret              # a vertex near the camera: the same
+    bltz    $a0, T_slow             # a GTE flag: the triple one vertex at a time (T_slow)
+    sltiu   $t1, $a1, 256           # (t0 / t2, t3 / t5, t6 / t8 keep the packed inputs for T_slow)
+    sltiu   $t4, $a2, 256
+    sltiu   $t7, $a3, 256
+    or      $t1, $t1, $t4
+    or      $t1, $t1, $t7
+    bnez    $t1, T_slow             # a vertex near the camera: the same
     sll     $a1, $a1, 5
     swc2    $12, 0($s3)             # .u = SXY0
     swc2    $13, 8($s3)
@@ -148,6 +157,7 @@ T_tri:
     sw      $a1, 4($s3)             # .v = SZ << 5
     sw      $a2, 12($s3)
     sw      $a3, 20($s3)
+T_next:
     addiu   $s1, $s1, 60
     addiu   $s3, $s3, 24
     bne     $s1, $s2, T_tri
@@ -164,5 +174,81 @@ T_ret:
     lw      $s7, 28($sp)
     lw      $fp, 32($sp)
     jr      $ra
-    addiu   $sp, $sp, 40
+    addiu   $sp, $sp, 64
+
+T_slow:                             # as the C loop's slow path: counted as flagged (FLAG < 0) or near, then RTPS a vertex
+    bltz    $a0, 1f
+    sw      $a0, T_LASTFLAG($s0)
+    lw      $at, T_NEAR($s0)
+    nop
+    addiu   $at, $at, 1
+    b       2f
+    sw      $at, T_NEAR($s0)
+1:  lw      $at, T_FLAGGED($s0)
+    nop
+    addiu   $at, $at, 1
+    sw      $at, T_FLAGGED($s0)
+2:  sw      $t0, 40($sp)            # the three vertices' packed inputs (VXY, VZ) at 40-60($sp)
+    sw      $t2, 44($sp)
+    sw      $t3, 48($sp)
+    sw      $t5, 52($sp)
+    sw      $t6, 56($sp)
+    sw      $t8, 60($sp)
+    addiu   $t9, $sp, 40            # the next vertex's inputs
+    addiu   $t1, $sp, 64            # their end
+    move    $v1, $s1                # the vertex
+    move    $t4, $s3                # its projection entry
+T_sv:
+    lw      $a0, 0($t9)
+    lw      $a1, 4($t9)
+    nop
+    mtc2    $a0, $0                 # VXY0
+    mtc2    $a1, $1                 # VZ0
+    nop
+    nop
+    cop2    0x0180001               # RTPS
+    cfc2    $a0, $31                # FLAG
+    mfc2    $a1, $19                # SZ3
+    nop
+    bltz    $a0, T_scpu
+    sltiu   $at, $a1, 256
+    bnez    $at, T_scpu
+    sll     $a1, $a1, 5
+    swc2    $14, 0($t4)             # .u = SXY2
+    b       T_snext
+    sw      $a1, 4($t4)             # .v = SZ << 5
+T_scpu:                             # PS1CpuVertexT: .u = 0x8000, .v = the exact z
+    lw      $a0, 0($v1)
+    lw      $t3, T_M02($s0)
+    lw      $a1, 4($v1)
+    mult    $a0, $t3                # x * m02
+    lw      $t5, T_M12($s0)
+    lw      $a2, 8($v1)
+    lw      $t6, T_M22($s0)
+    mflo    $v0
+    sra     $v0, $v0, 8
+    lw      $t8, T_M32($s0)
+    mult    $a1, $t5                # y * m12
+    lw      $at, T_CPU($s0)
+    nop
+    mflo    $a3
+    sra     $a3, $a3, 8
+    addu    $v0, $v0, $a3
+    mult    $a2, $t6                # z * m22
+    addiu   $at, $at, 1
+    sw      $at, T_CPU($s0)
+    mflo    $a3
+    sra     $a3, $a3, 8
+    addu    $v0, $v0, $a3
+    addu    $v0, $v0, $t8
+    li      $at, 0x8000
+    sw      $at, 0($t4)
+    sw      $v0, 4($t4)
+T_snext:
+    addiu   $t9, $t9, 8
+    addiu   $v1, $v1, 20
+    bne     $t9, $t1, T_sv
+    addiu   $t4, $t4, 8
+    b       T_next
+    nop
     .size   PS1TransformAsm, .-PS1TransformAsm

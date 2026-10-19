@@ -291,6 +291,46 @@ static const uint16_t *PS1PaletteFor(int bank)
 }
 #endif
 
+#if PS1_GAME != 1
+// Sonic 2 (docs/43: ~4 hblanks a frame converted all 255 colours): s_pal kept with the RGB565 colours it came from, as
+// Sonic 1's slots but one (s_pal itself). A fill of the same bank, atlas load and CLUT count converts only the entries
+// that changed and redoes the CLUT maps if any did; anything else, or a fade in progress, builds it whole.
+static uint16_t s_palSrc[256];
+static int s_palSrcBank = -1, s_palSrcCluts = -1;
+static uint32_t s_palSrcAtlas = 0;
+__attribute__((noinline, optimize("Os"))) static void PS1BuildPaletteCached(int bank)
+{
+    if (s_fadePending || bank != s_palSrcBank || g_ps1AtlasLoads != s_palSrcAtlas || g_ps1AtlasClutCount != s_palSrcCluts) {
+        PS1BuildPalette(bank);
+        if (s_fadePending) {
+            s_palSrcBank = -1;
+            return;
+        }
+        memcpy(s_palSrc, fullPalette[bank], sizeof(s_palSrc));
+        s_palSrcBank = bank, s_palSrcAtlas = g_ps1AtlasLoads, s_palSrcCluts = g_ps1AtlasClutCount;
+        return;
+    }
+    const ushort *p565 = fullPalette[bank];
+    bool changed       = false;
+    for (int i = 1; i < 256; ++i) {
+        uint32_t c = p565[i];
+        if (c == s_palSrc[i])
+            continue;
+        s_palSrc[i] = (uint16_t)c;
+        s_pal[i]    = (uint16_t)(0x8000 | (c >> 11) | ((c >> 1) & 0x3E0) | ((c & 0x1F) << 10)); // PS1BuildPalette's
+        changed     = true;
+    }
+    if (!changed)
+        return;
+    for (int k = 0; k < g_ps1AtlasClutCount; ++k) {
+        const uint8_t *map = g_ps1AtlasCluts[k].map;
+        uint16_t *dst      = &s_pal[256 + k * 16];
+        dst[0]             = 0x0000;
+        for (int i = 1; i < 16; ++i) dst[i] = s_pal[map[i]];
+    }
+}
+#endif
+
 // Fills chunks [first, end) (end < 0: up to s_palChunkCount) with `bank`'s palette.
 static void PS1FillPalette(int bank, int first = 0, int end = -1)
 {
@@ -300,7 +340,7 @@ static void PS1FillPalette(int bank, int first = 0, int end = -1)
         end = s_palChunkCount;
     for (int i = first; i < end; ++i) memcpy(s_palChunks[i].dst, &pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
 #else
-    PS1BuildPalette(bank);
+    PS1BuildPaletteCached(bank);
     if (end < 0)
         end = s_palChunkCount;
     for (int i = first; i < end; ++i) memcpy(s_palChunks[i].dst, &s_pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
@@ -2873,6 +2913,54 @@ PS1_HOT3D bool PS1TexturedRectWords(int x0, int y0, int x1, int y1, int u0, int 
     w[8] = tu(u1) | tv(v1);
     return true;
 }
+#if PS1_GAME != 1 // Sonic 1 has no 3D stage (its EXE stays as it was)
+// PS1TexturedRectWords for the special stage's ring / bomb / shadow quads (docs/43 C1: 45-70 a frame): the texture part
+// of the words (command, CLUT / texpage, UVs) depends only on the sprite's UV box, the sheet and the blend, so it is
+// kept for the frame in a small cache; the position tests and words are the full function's. A quad beyond the GPU
+// limits (its UVs are cut with it) or a picture cluster takes the full function.
+struct PS1TexWordCache {
+    uint32_t frame, key; // key: sheetID | blended << 8 | 1 << 16 (0: empty)
+    int u0, v0, u1, v1;
+    uint32_t w0, a, b, c, d;
+};
+static PS1TexWordCache s_texWordCache[8];
+extern volatile uint32_t g_ps1PerfFrames;
+__attribute__((optimize("Os"))) bool PS1TexturedRectFast(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended, uint32_t *w)
+{
+    if (!s_frameOpen || PS1ObjectsHidden())
+        return false;
+    int xmin = x0 < x1 ? x0 : x1, xmax = x0 < x1 ? x1 : x0, ymin = y0 < y1 ? y0 : y1, ymax = y0 < y1 ? y1 : y0;
+    bool beyond = PS1BeyondGpuLimits(xmin, ymin, xmax, ymax);
+    if (beyond || xmax <= 0 || ymax <= 0 || xmin >= SCREEN_XSIZE || ymin >= SCREEN_YSIZE || xmin == xmax || ymin == ymax)
+        return PS1TexturedRectWords(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, w); // its counters and clipping
+    const uint32_t key = (uint32_t)sheetID | (uint32_t)blended << 8 | 1u << 16, frame = g_ps1PerfFrames;
+    PS1TexWordCache &e = s_texWordCache[((uint32_t)u0 * 7 + (uint32_t)v0 * 13 + (uint32_t)u1 * 3 + (uint32_t)v1 + key) & 7];
+    if (e.frame != frame || e.key != key || e.u0 != u0 || e.v0 != v0 || e.u1 != u1 || e.v1 != v1) {
+        uint32_t t[9];
+        if (!PS1TexturedRectWords(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, t))
+            return false;
+        int umin = u0 < u1 ? u0 : u1, vmin = v0 < v1 ? v0 : v1;
+        const PS1AtlasCluster *c = PS1FindCluster(PS1SurfaceSheet(sheetID), umin, vmin); // the one the words came from
+        for (int k = 0; k < 9; ++k) w[k] = t[k];
+        if (c && !c->picture) {
+            e.frame = frame, e.key = key, e.u0 = u0, e.v0 = v0, e.u1 = u1, e.v1 = v1;
+            e.w0 = t[0], e.a = t[2], e.b = t[4], e.c = t[6], e.d = t[8];
+        }
+        return true;
+    }
+    auto xy = [](int x, int y) { return (uint32_t)(uint16_t)x | ((uint32_t)(uint16_t)y << 16); };
+    w[0] = e.w0;
+    w[1] = xy(x0, y0);
+    w[2] = e.a;
+    w[3] = xy(x1, y0);
+    w[4] = e.b;
+    w[5] = xy(x0, y1);
+    w[6] = e.c;
+    w[7] = xy(x1, y1);
+    w[8] = e.d;
+    return true;
+}
+#endif
 PS1_HOT3D void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended)
 {
     uint32_t w[9];

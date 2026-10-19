@@ -52,12 +52,27 @@ const DrawListEntry3D *g_ps1DrawOrder = s_ps1DummyDraw;
 
 volatile uint32_t g_ps1Scene3DAllocs = 0, g_ps1Scene3DFrees = 0, g_ps1Scene3DAllocFail = 0; // GDB
 static void *s_ps1Scene3DBlock = nullptr;
+#if PS1_GAME != 1
+// PS1ProjectedExact's cache (docs/43: near-camera faces, worst frames): vertex, the g_ps1ExactFrame it was made in, x, y
+struct PS1ProjCacheEntry {
+    int idx;
+    uint frame;
+    int x, y;
+};
+#define PS1_PROJCACHE_N 64
+static PS1ProjCacheEntry s_ps1DummyProjCache[1]; // no block: one entry (mask 0), not 1 KB of .bss in every zone
+static PS1ProjCacheEntry *s_ps1ProjCache = s_ps1DummyProjCache;
+static int s_ps1ProjMask = 0;
+#endif
 static char s_ps1Scene3DStages[8][24];
 static int s_ps1Scene3DStageCount = -1; // -1: Data/Game/PS1Scene3D.bin not read yet
 static void PS1Scene3DPoint(uint8_t *b)
 {
     if (!b) {
         faceBuffer = s_ps1DummyFace, vertexBuffer = s_ps1DummyVertex, g_ps1Proj = s_ps1DummyProj, g_ps1ExactT = s_ps1DummyExact;
+#if PS1_GAME != 1
+        s_ps1ProjCache = s_ps1DummyProjCache, s_ps1ProjMask = 0;
+#endif
         drawList3D = s_ps1DummyDraw, g_ps1Scene3DScratch = s_ps1DummyScratch;
         g_ps1VtxCap = g_ps1FaceCap = 0;
     }
@@ -68,6 +83,11 @@ static void PS1Scene3DPoint(uint8_t *b)
         vertexBuffer = (Vertex *)b, b += VERTEXBUFFER_SIZE * sizeof(Vertex);
         g_ps1Proj = (PS1ProjEntry *)b, b += VERTEXBUFFER_SIZE * sizeof(PS1ProjEntry);
         g_ps1ExactT = (PS1ExactEntry *)b;
+#if PS1_GAME != 1
+        b += 256 * sizeof(PS1ExactEntry);
+        s_ps1ProjCache = (PS1ProjCacheEntry *)b, s_ps1ProjMask = PS1_PROJCACHE_N - 1; // zeroed: frame 0 never matches (a
+                                                                                  // transform bumps g_ps1ExactFrame first)
+#endif
         g_ps1VtxCap = VERTEXBUFFER_SIZE, g_ps1FaceCap = FACEBUFFER_SIZE;
     }
     g_ps1DrawOrder = drawList3D;
@@ -117,7 +137,11 @@ void PS1Scene3DPrepare(const char *folder)
         return;
     }
     const size_t size = FACEBUFFER_SIZE * (sizeof(Face) + 2 * sizeof(DrawListEntry3D))
-                        + VERTEXBUFFER_SIZE * (sizeof(Vertex) + sizeof(PS1ProjEntry)) + 256 * sizeof(PS1ExactEntry);
+                        + VERTEXBUFFER_SIZE * (sizeof(Vertex) + sizeof(PS1ProjEntry)) + 256 * sizeof(PS1ExactEntry)
+#if PS1_GAME != 1
+                        + PS1_PROJCACHE_N * sizeof(PS1ProjCacheEntry)
+#endif
+        ;
     s_ps1Scene3DBlock = psyqo_malloc(size);
     if (!s_ps1Scene3DBlock) {
         g_ps1Scene3DAllocFail = g_ps1Scene3DAllocFail + 1;
@@ -172,6 +196,24 @@ void SetIdentityMatrix(Matrix *matrix)
 }
 void MatrixMultiply(Matrix *matrixA, Matrix *matrixB)
 {
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+    // a row of A in registers, written back once its four entries are done (each output row reads only its own A row):
+    // upstream's terms in upstream's order, without the loop's i / 4, i % 4 and the output copy (docs/43: several calls a
+    // frame in the special stage). A == B (in place) keeps upstream's loop below.
+    if (matrixA != matrixB) {
+        const int(*b)[4] = matrixB->values;
+        for (int r = 0; r < 4; ++r) {
+            int *a = matrixA->values[r];
+            const int a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+            const int o0 = (a3 * b[3][0] >> 8) + (a2 * b[2][0] >> 8) + (a1 * b[1][0] >> 8) + (a0 * b[0][0] >> 8);
+            const int o1 = (a3 * b[3][1] >> 8) + (a2 * b[2][1] >> 8) + (a1 * b[1][1] >> 8) + (a0 * b[0][1] >> 8);
+            const int o2 = (a3 * b[3][2] >> 8) + (a2 * b[2][2] >> 8) + (a1 * b[1][2] >> 8) + (a0 * b[0][2] >> 8);
+            const int o3 = (a3 * b[3][3] >> 8) + (a2 * b[2][3] >> 8) + (a1 * b[1][3] >> 8) + (a0 * b[0][3] >> 8);
+            a[0] = o0, a[1] = o1, a[2] = o2, a[3] = o3;
+        }
+        return;
+    }
+#endif
     int output[16];
 
     for (int i = 0; i < 0x10; ++i) {
@@ -488,9 +530,12 @@ struct PS1TfState { // RSDKv4/Scene3DTf.S's T_* offsets
     PS1ProjEntry *pj;
     int end; // the last whole triple's end
     int ox, oy, oz;
+    int m02, m12, m22, m32; // matFinal's column 2 (PS1CpuVertexT)
+    uint32_t nearN, flaggedN, lastFlag, cpuN;
 };
 static_assert(offsetof(PS1TfState, pj) == 4 && offsetof(PS1TfState, end) == 8 && offsetof(PS1TfState, ox) == 12
-                  && offsetof(PS1TfState, oz) == 20 && sizeof(Vertex) == 20,
+                  && offsetof(PS1TfState, oz) == 20 && offsetof(PS1TfState, m02) == 24 && offsetof(PS1TfState, m32) == 36
+                  && offsetof(PS1TfState, nearN) == 40 && offsetof(PS1TfState, cpuN) == 52 && sizeof(Vertex) == 20,
               "Scene3DTf.S's layout");
 extern "C" int PS1TransformAsm(PS1TfState *s, int v);
 #endif
@@ -540,6 +585,8 @@ PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Sc
     // the triples the GTE can do in assembly (docs/43 C4: RSDKv4/Scene3DTf.S); it returns at a triple for the code below
     PS1TfState ts;
     ts.vb = vb, ts.pj = pj, ts.end = count - count % 3, ts.ox = ox, ts.oy = oy, ts.oz = oz;
+    ts.m02 = m.values[0][2], ts.m12 = m.values[1][2], ts.m22 = m.values[2][2], ts.m32 = m.values[3][2];
+    ts.nearN = ts.flaggedN = ts.cpuN = 0, ts.lastFlag = g_ps1GteLastFlag;
 #endif
     for (; v + 3 <= count; v += 3) {
 #if PS1_GAME != 1
@@ -599,6 +646,12 @@ PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Sc
         t[2].v    = (int)(z2 << 5);
     }
     for (; v < count; ++v, ++cpu) PS1CpuVertexT(v);
+#if PS1_GAME != 1
+    cpu += ts.cpuN;
+    g_ps1GteNear      = g_ps1GteNear + ts.nearN;
+    g_ps1GteFlagged   = g_ps1GteFlagged + ts.flaggedN;
+    g_ps1GteLastFlag  = ts.lastFlag;
+#endif
     g_ps1GteVertices  = g_ps1GteVertices + count;
     g_ps1GteFallbacks = g_ps1GteFallbacks + cpu;
 }
@@ -931,9 +984,14 @@ void Sort3DDrawList()
 // a vertex left to the CPU, out of line (Sonic 2: PS1OTOtherFace and PS1Draw3DList inlined it at every corner)
 __attribute__((noinline)) static void PS1ProjectedExact(int i, int *x, int *y)
 {
-    PS1VertexXYZ t = PS1ExactT(i);
-    *x             = SCREEN_CENTERX + projectionX * t.x / t.z;
-    *y             = SCREEN_CENTERY - projectionY * t.y / t.z;
+    PS1ProjCacheEntry &e = s_ps1ProjCache[i & s_ps1ProjMask]; // once a frame (each corner serves up to 4 faces)
+    if (e.idx != i || e.frame != g_ps1ExactFrame) {
+        PS1VertexXYZ t = PS1ExactT(i);
+        e.x            = SCREEN_CENTERX + projectionX * t.x / t.z;
+        e.y            = SCREEN_CENTERY - projectionY * t.y / t.z;
+        e.idx = i, e.frame = g_ps1ExactFrame;
+    }
+    *x = e.x, *y = e.y;
 }
 #endif
 static inline void PS1ProjectedVertex(int i, int *x, int *y)
@@ -956,6 +1014,7 @@ static inline void PS1ProjectedVertex(int i, int *x, int *y)
 int PS1FadedFaces(int i, int count); // above: a run of faded faces, returns where it stopped
 void PS1TexturedRect(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended); // ps1/render.cpp
 bool PS1TexturedRectWords(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended, uint32_t *w);
+bool PS1TexturedRectFast(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended, uint32_t *w); // render.cpp
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
 static uint32_t s_ps1FadedHbl = 0, s_ps1GeneralN = 0; // this Draw3DScene: faded runs' hblanks, general-path faces
@@ -1017,7 +1076,7 @@ static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int 
             return nullptr;
         const Vertex &vb = vertexBuffer[f.b], &va = vertexBuffer[f.a], &vc = vertexBuffer[f.c];
         uint32_t w9[9];
-        if (!PS1TexturedRectWords(SCREEN_CENTERX + projectionX * (ta.x - vb.u) / ta.z, SCREEN_CENTERY - projectionY * (ta.y + vb.v) / ta.z,
+        if (!PS1TexturedRectFast(SCREEN_CENTERX + projectionX * (ta.x - vb.u) / ta.z, SCREEN_CENTERY - projectionY * (ta.y + vb.v) / ta.z,
                                   SCREEN_CENTERX + projectionX * (ta.x + vb.u) / ta.z, SCREEN_CENTERY - projectionY * (ta.y - vb.v) / ta.z,
                                   va.u - vc.u, va.v - vc.v, va.u + vc.u, va.v + vc.v, spriteSheetID, f.flag == FACE_FLAG_TEXTURED_C_BLEND, w9))
             return nullptr;

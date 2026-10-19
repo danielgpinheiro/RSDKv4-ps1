@@ -539,8 +539,28 @@ void CheckKeyPress(InputData *input)
 #endif
 
 #if RETRO_REV03
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+    // SetGlobalVariableByName's linear StrComp search over every global, each frame (~3 hblanks, docs/43): the index is
+    // looked up once per game config (LoadGameConfig bumps g_ps1GameConfigGen)
+    static int s_pressID = -1, s_pressGen = -1;
+    extern int g_ps1GameConfigGen; // RetroEngine.cpp: bumped by every LoadGameConfig (the names' source)
+    if (s_pressGen != g_ps1GameConfigGen) {
+        s_pressGen = g_ps1GameConfigGen;
+        s_pressID  = -1;
+        for (int v = 0; v < globalVariablesCount; ++v) {
+            if (StrComp("input.pressButton", globalVariableNames[v])) {
+                s_pressID = v;
+                break;
+            }
+        }
+    }
+    if (s_pressID >= 0)
+        globalVariables[s_pressID] = input->A || input->B || input->C || input->X || input->Y || input->Z || input->L || input->R
+                                     || input->start || input->select;
+#else
     SetGlobalVariableByName("input.pressButton", input->A || input->B || input->C || input->X || input->Y || input->Z || input->L || input->R
                                                      || input->start || input->select);
+#endif
 #endif
 }
 

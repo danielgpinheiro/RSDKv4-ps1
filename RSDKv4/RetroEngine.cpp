@@ -1199,6 +1199,9 @@ void RetroEngine::LoadXMLStages(TextMenu *menu, int listNo)
 }
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+int g_ps1GameConfigGen = 0;
+#endif
 bool RetroEngine::LoadGameConfig(const char *filePath)
 {
     FileInfo info;
@@ -1208,6 +1211,9 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
     StrCopy(gameWindowText, "Retro-Engine"); // this is the default window name
 
     globalVariablesCount = 0;
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+    ++g_ps1GameConfigGen; // the global names change: CheckKeyPress looks its index up again (Input.cpp)
+#endif
 #if RETRO_USE_MOD_LOADER
     playerCount = 0;
 #endif

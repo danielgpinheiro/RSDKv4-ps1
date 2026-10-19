@@ -817,6 +817,11 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1CPZWater", 0),
     FunctionInfo("PS1HPZWater", 0),
     FunctionInfo("PS1SpecialBomb", 0),
+    // Sonic 2 only (Sonic 1's EXE stays as it was); the bytecode tools (RETRO_USE_COMPILER on) list them
+#if PS1_GAME != 1 || RETRO_USE_COMPILER
+    FunctionInfo("PS1TextMsgUpdate", 0),
+    FunctionInfo("PS1TextMsgDraw", 0),
+#endif
 #endif
 };
 
@@ -1387,6 +1392,10 @@ enum ScrFunc {
     FUNC_PS1CPZWATER,
     FUNC_PS1HPZWATER,
     FUNC_PS1SPECIALBOMB,
+#if PS1_GAME != 1 || RETRO_USE_COMPILER
+    FUNC_PS1TEXTMSGUPDATE,
+    FUNC_PS1TEXTMSGDRAW,
+#endif
 #endif
     FUNC_MAX_CNT
 };
@@ -10764,6 +10773,320 @@ static void PS1SpecialBombUpdate()
         }
     }
 }
+
+// The special stage's Text Message object (its messages: "GET n RINGS", "COOL!", the ring counts, and the letters
+// flying off when a message ends; docs/43: 11 letters were ~65 hblanks of VM a frame), natively: one statement per
+// script instruction, in order. Special function 12 (the text, one sprite a letter: every frame a message shows) is
+// transcribed inline; function 13 (spawns the letters: once a message) runs in the VM (PS1CallScriptFunction). Patched in
+// only when both subs, their jump-table entries and function 12 match TEXTMSG_* (tools/scripts/patch_bytecode.py).
+volatile uint32_t g_ps1TextMsgCover = 0; // GDB: update cases (bits 0-9), draw cases (10-19), text kinds (20 '!', 21-23 digits,
+                                         // 24 '&', 25 '.', 26 letter, 27 space / other)
+__attribute__((optimize("Os"))) static void PS1TextMsgReset(int pos) // ResetObjectEntity <pos> 0 0 0 0
+{
+    Entity *newEnt = &PS1_OBJ(pos);
+    memset(newEnt, 0, sizeof(Entity));
+    newEnt->type               = 0;
+    newEnt->propertyValue      = 0;
+    newEnt->xpos               = 0;
+    newEnt->ypos               = 0;
+    newEnt->direction          = FLIP_NONE;
+    newEnt->priority           = PRIORITY_BOUNDS;
+    newEnt->drawOrder          = 3;
+    newEnt->scale              = 512;
+    newEnt->inkEffect          = INK_NONE;
+    newEnt->objectInteractions = true;
+    newEnt->visible            = true;
+    newEnt->tileCollisions     = true;
+}
+__attribute__((optimize("Os"))) static void PS1TextMsgText(Entity &e) // CallFunction 12: the text of row OBJECTVALUE1 at OBJECTYPOS, centred
+{
+    int *t         = scriptEng.temp;
+    TextMenu *menu = &gameMenu[0];
+    e.values[3]    = menu->entrySize[e.values[1]]; // GetTextInfo OBJECTVALUE3 0 TEXTINFO_TEXTSIZE OBJECTVALUE1 0
+    e.values[2]    = e.values[3];
+    e.values[2] <<= 2;
+    e.values[2] = -e.values[2];
+    e.values[2] += SCREEN_CENTERX;
+    e.values[2] += 4;
+    t[0] = 0;
+    while (e.values[3] > 0) {
+        t[1] = menu->textData[menu->entryStart[e.values[1]] + t[0]]; // GetTextInfo TEMP1 0 TEXTINFO_TEXTDATA OBJECTVALUE1 TEMP0
+        g_ps1TextMsgCover = g_ps1TextMsgCover
+                            | (1u << (t[1] == 33 ? 20 : t[1] >= 35 && t[1] <= 37 ? 21 + t[1] - 35 : t[1] == 38 ? 24 : t[1] == 46 ? 25
+                                      : (t[1] > 64 && t[1] < 91) || (t[1] > 96 && t[1] < 123) ? 26 : 27));
+        switch (t[1]) {
+            case 33: // '!'
+                PS1DrawSpriteScreenXY(37, e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 35: // '#': hundreds
+                t[2] = e.values[4];
+                t[2] /= 100;
+                PS1DrawSpriteScreenXY(t[2], e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 36: // '$': tens
+                t[2] = e.values[4];
+                t[2] %= 100;
+                t[2] /= 10;
+                PS1DrawSpriteScreenXY(t[2], e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 37: // '%': units
+                t[2] = e.values[4];
+                t[2] %= 10;
+                PS1DrawSpriteScreenXY(t[2], e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 38: // '&'
+                PS1DrawSpriteScreenXY(38, e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 46: // '.'
+                PS1DrawSpriteScreenXY(36, e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            default: // a letter (A-Z / a-z -> frames 10-35), else a space
+                e.frame = 0;
+                if (t[1] > 64) {
+                    if (t[1] < 91) {
+                        e.frame = t[1];
+                        e.frame = e.frame - 55;
+                    }
+                }
+                if (t[1] > 96) {
+                    if (t[1] < 123) {
+                        e.frame = t[1];
+                        e.frame = e.frame - 87;
+                    }
+                }
+                if (e.frame > 0)
+                    PS1DrawSpriteScreenXY(e.frame, e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+        }
+        ++t[0];
+        --e.values[3];
+    }
+}
+__attribute__((optimize("Os"))) static void PS1TextMsgUpdate()
+{
+    int *t    = scriptEng.temp;
+    Entity &e = objectEntityList[objectEntityPos];
+    if (e.propertyValue < 10)
+        g_ps1TextMsgCover = g_ps1TextMsgCover | (1u << e.propertyValue);
+    switch (e.propertyValue) {
+        case 0:
+        case 4:
+            if (e.values[0] < 120)
+                ++e.values[0];
+            else {
+                e.angle = 96;
+                PS1CallScriptFunction(13, 0);
+                PS1TextMsgReset(objectEntityPos);
+            }
+            break;
+        case 1:
+            if (e.values[0] < 120)
+                ++e.values[0];
+            else {
+                e.values[8] = 0;
+                e.values[1] = 1;
+                e.ypos      = 116;
+                e.angle     = 96;
+                PS1CallScriptFunction(13, 0);
+                e.values[8] = 1;
+                e.ypos += 22;
+                e.values[1] = 2;
+                e.angle     = 96;
+                PS1CallScriptFunction(13, 0);
+                PS1TextMsgReset(objectEntityPos);
+            }
+            break;
+        case 2:
+        case 5:
+            if (e.values[0] < 90)
+                ++e.values[0];
+            else {
+                e.angle = 96;
+                PS1CallScriptFunction(13, 0);
+                PS1TextMsgReset(objectEntityPos);
+            }
+            break;
+        case 3: // the ring count still needed, blinking until reached (GLOBAL 50: the second player's rings count)
+            if (globalVariables[50] == 1) {
+                t[0] = PS1_OBJ(2).values[0];
+                t[0] += PS1_OBJ(3).values[0];
+            }
+            else
+                t[0] = PS1_OBJ(2).values[0];
+            { // GetTableValue TEMP1 LOCAL[3] LOCAL[4]
+                int arrPos = scriptCode[3];
+                if (arrPos >= 0) {
+                    int pos = scriptCode[4];
+                    if (arrPos < scriptCode[pos])
+                        t[1] = scriptCode[pos + arrPos + 1];
+                }
+            }
+            if (t[0] < t[1])
+                e.animationTimer = 0;
+            else {
+                if (e.animationTimer < 30)
+                    ++e.animationTimer;
+            }
+            scriptEng.checkResult = t[0] < t[1];
+            t[2]                  = scriptEng.checkResult;
+            scriptEng.checkResult = e.animationTimer < 30;
+            t[2] |= scriptEng.checkResult;
+            if (t[2] == 1) {
+                e.visible = (e.values[0] & (1 << 2)) >> 2; // GetBit OBJECTVISIBLE OBJECTVALUE0 2
+                ++e.values[0];
+                e.values[0] &= 7;
+                e.values[4] = t[1];
+                e.values[4] -= t[0];
+                if (e.values[4] < 0)
+                    e.values[4] = 0;
+            }
+            else
+                e.visible = 0;
+            break;
+        case 6:
+        case 7:
+        case 8:
+            if (e.values[0] < 90)
+                ++e.values[0];
+            else {
+                e.angle = 96;
+                PS1CallScriptFunction(13, 0);
+                PS1TextMsgReset(objectEntityPos);
+                if (scriptCode[3] < 3) {
+                    PS1_OBJ(2).values[0] = 0;
+                    PS1_OBJ(3).values[0] = 0;
+                }
+            }
+            break;
+        case 9: // a letter flying off
+            e.xpos += e.xvel;
+            e.ypos += e.yvel;
+            e.scale += e.values[6];
+            e.rotation += e.values[7];
+            e.rotation &= 511;
+            e.speed -= 32768;
+            ++e.values[6];
+            e.yvel = Cos512(e.angle);
+            e.yvel *= e.speed;
+            e.yvel >>= 9;
+            e.xvel = Sin512(e.angle);
+            e.xvel *= e.speed;
+            e.xvel >>= 9;
+            if (e.values[0] < 120)
+                ++e.values[0];
+            else
+                e.type = 0;
+            break;
+    }
+}
+__attribute__((optimize("Os"))) static void PS1TextMsgDraw()
+{
+    int *t    = scriptEng.temp;
+    Entity &e = objectEntityList[objectEntityPos];
+    if (e.propertyValue < 10)
+        g_ps1TextMsgCover = g_ps1TextMsgCover | (1u << (10 + e.propertyValue));
+    switch (e.propertyValue) {
+        case 0:
+            e.ypos      = 116;
+            e.values[1] = 0;
+            PS1TextMsgText(e);
+            break;
+        case 1:
+            e.values[1] = 1;
+            e.ypos      = 116;
+            PS1TextMsgText(e);
+            e.ypos += 22;
+            e.values[1] = 2;
+            PS1TextMsgText(e);
+            break;
+        case 2:
+            e.ypos = 116;
+            if (e.values[4] > 99) {
+                e.values[1] = 5;
+                PS1TextMsgText(e);
+            }
+            else {
+                if (e.values[4] > 9) {
+                    e.values[1] = 4;
+                    PS1TextMsgText(e);
+                }
+                else {
+                    e.values[1] = 3;
+                    PS1TextMsgText(e);
+                }
+            }
+            break;
+        case 3:
+            if (e.visible == 1) {
+                e.ypos = 64;
+                if (e.values[4] > 99) {
+                    e.values[1] = 9;
+                    PS1TextMsgText(e);
+                }
+                else {
+                    if (e.values[4] > 9) {
+                        e.values[1] = 8;
+                        PS1TextMsgText(e);
+                    }
+                    else {
+                        if (e.values[4] == 1) {
+                            e.values[1] = 6;
+                            PS1TextMsgText(e);
+                        }
+                        else {
+                            e.values[1] = 7;
+                            PS1TextMsgText(e);
+                        }
+                    }
+                }
+            }
+            break;
+        case 4:
+            e.ypos      = 116;
+            e.values[1] = 10;
+            PS1TextMsgText(e);
+            break;
+        case 5:
+            e.ypos      = 116;
+            e.values[1] = 11;
+            PS1TextMsgText(e);
+            break;
+        case 6:
+            e.ypos      = 116;
+            e.values[1] = 12;
+            PS1TextMsgText(e);
+            break;
+        case 7:
+            e.ypos      = 116;
+            e.values[1] = 13;
+            PS1TextMsgText(e);
+            break;
+        case 8:
+            e.ypos      = 68;
+            e.values[1] = 14;
+            PS1TextMsgText(e);
+            break;
+        case 9: { // DrawSpriteScreenFX OBJECTFRAME FX_ROTOZOOM TEMP0 TEMP1
+            t[0] = e.xpos;
+            t[0] >>= 16;
+            t[0] += SCREEN_CENTERX;
+            t[1] = e.ypos;
+            t[1] >>= 16;
+            ObjectScript *o = &objectScriptList[e.type];
+            SpriteFrame *f  = &scriptFrames[o->frameListOffset + e.frame];
+            DrawSpriteRotozoom(e.direction, t[0], t[1], -f->pivotX, -f->pivotY, f->sprX, f->sprY, f->width, f->height, e.rotation, e.scale,
+                               o->spriteSheetID);
+            break;
+        }
+    }
+}
 #endif
 #if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM == RETRO_PS1
 // PS1: upstream computes inputCheck for every variable operand (two flag loads and branches); only the key
@@ -13309,6 +13632,14 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALBOMB:
                 opcodeSize = 0;
                 PS1SpecialBombUpdate();
+                break;
+            case FUNC_PS1TEXTMSGUPDATE:
+                opcodeSize = 0;
+                PS1TextMsgUpdate();
+                break;
+            case FUNC_PS1TEXTMSGDRAW:
+                opcodeSize = 0;
+                PS1TextMsgDraw();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;
