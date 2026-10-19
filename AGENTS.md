@@ -145,6 +145,10 @@ at the stage's first draw (`PS1OTSubEnsure`), `MatrixInverse`'s double path as a
 `tools/scene3d/inverse_check.sh`). Two suite guards watch RAM: `s2-release-ss-entry` (target 8,192 B) and
 `s2-release-zone-headroom` (81,808 B); the EXE is padded to 2 KB, so code moves the heap in 2 KB steps (look at where the
 last .data symbol ends). Never -Os shared code to save RAM: it changes Sonic 1's EXE.
+Third batch (`506f895`..`d107673`): the asm rejects near faces itself (PS1OTOtherC's tests; state fields 120-140), the
+transform skips the RTPS redo for a flagged triple's vertex with RTPT depth < 256, rotozoom sprites off screen are culled
+whole, off-screen billboards leave PS1TexturedRectOT at once, the Lose Ring's subs are natives (`PS1SpLoseRing` /
+`PS1SpLoseRingDraw`), and Sonic 2's `Scene3D.o` builds without divide traps. RAM: 224 B under the zones' next 2 KB step.
 
 ## Layout
 | Path | Role |
