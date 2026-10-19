@@ -8,6 +8,22 @@ Matrix matWorld = Matrix();
 Matrix matView  = Matrix();
 Matrix matTemp  = Matrix();
 
+// Sonic 2's code size (docs/43: every KB of code is a KB less heap at the special stage's load peak and in the zones):
+// cold paths at -Os. Sonic 1 keeps its code as it was.
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+#define PS1_S2_SMALL __attribute__((optimize("Os")))
+#else
+#define PS1_S2_SMALL
+#endif
+// Sonic 2: the ordering table (PS1Draw3DSceneOT) is the only 3D path; the sort + Draw3DScene path (the GDB A/B switches
+// g_ps1Draw3DOT / g_ps1Sort3DExact) went for RAM (docs/43; OT_CHECK and tools/chain_cmp.py check the pass now). Sonic 1
+// keeps its code as it was.
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL) && !defined(PS1_SORT3D_CHECK)
+#define PS1_S2_OT_ONLY 1
+#else
+#define PS1_S2_OT_ONLY 0
+#endif
+
 #if RETRO_PLATFORM == RETRO_PS1
 #include <psyqo/alloc.h>
 #include "../ps1/gpu_chain.hh"
@@ -355,7 +371,8 @@ static bool PS1MatrixInverseRotation(Matrix *matrix)
     return true;
 }
 #endif
-void MatrixInverse(Matrix *matrix)
+// -Os (docs/43: RAM): its double fallback was 8.5 KB at -O2; the special stage's inverses take the rotation path above
+PS1_S2_SMALL void MatrixInverse(Matrix *matrix)
 {
 #if RETRO_PLATFORM == RETRO_PS1
     if (PS1MatrixInverseRotation(matrix))
@@ -477,7 +494,7 @@ static_assert(offsetof(PS1TfState, pj) == 4 && offsetof(PS1TfState, end) == 8 &&
               "Scene3DTf.S's layout");
 extern "C" int PS1TransformAsm(PS1TfState *s, int v);
 #endif
-void PS1TransformProject3D(int count)
+PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Scene3DTf.S
 {
     using namespace psyqo::GTE;
     const Matrix &m = matFinal;
@@ -611,7 +628,8 @@ static inline int PS1Side2(uint32_t k)
 volatile uint32_t g_ps1FadedFast   = 0; // faded faces through the fast path (GDB)
 volatile uint32_t g_ps1FadedCulled = 0; // ... of them off screen or degenerate (not drawn)
 void PS1FadeRecordRun(uint32_t *first, int count, int stride); // ps1/render.cpp: faded at FlipScreen by a screen fade
-int PS1FadedFaces(int i, int count)
+#if !PS1_S2_OT_ONLY
+PS1_S2_SMALL int PS1FadedFaces(int i, int count) // -Os: Draw3DScene's runs (only the g_ps1Draw3DOT = 0 A/B path now)
 {
     const bool draw = PS1Draw3DOpen();
     uint32_t *run   = nullptr;
@@ -699,6 +717,7 @@ int PS1FadedFaces(int i, int count)
     g_ps1FadedCulled = g_ps1FadedCulled + culled;
     return i;
 }
+#endif
 
 #endif
 void TransformVertexBuffer()
@@ -764,7 +783,7 @@ void TransformVertices(Matrix *matrix, int startIndex, int endIndex)
         vert->z      = (vx * matrix->values[0][2] >> 8) + (vy * matrix->values[1][2] >> 8) + (vz * matrix->values[2][2] >> 8) + matrix->values[3][2];
     }
 }
-#if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_SORT3D_CHECK)
+#if (RETRO_PLATFORM == RETRO_PS1 && !PS1_S2_OT_ONLY) || defined(PS1_SORT3D_CHECK)
 // Stable LSD radix sort, descending by depth (ties keep their order, like upstream's bubble sort): keys hi - depth
 // ascending, in as many 9-bit passes as the depth range needs (the half-pipe: 2). One counting loop fills every pass's
 // histogram (docs/30 phase 7.2b). Identical order to upstream's: tools/scene3d/sort3d_check.sh.
@@ -848,6 +867,7 @@ void PS1SortDrawList3D(DrawListEntry3D *list, int count)
 }
 #endif
 
+#if !PS1_S2_OT_ONLY
 void Sort3DDrawList()
 {
 #if RETRO_PLATFORM == RETRO_PS1
@@ -901,11 +921,21 @@ void Sort3DDrawList()
         }
     }
 }
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
 // vertexBufferT[i].u: the GTE's screen position (upstream's SCREEN_CENTER +- projection * T / T.z within about a pixel);
 // a vertex the GTE can't do (near the camera, off the GTE's screen range) is marked and projected here exactly (its exact
 // T is computed: PS1VertexT before the face is drawn).
 #define PS1_PROJ_MARK (0x8000u)
+#if PS1_GAME != 1
+// a vertex left to the CPU, out of line (Sonic 2: PS1OTOtherFace and PS1Draw3DList inlined it at every corner)
+__attribute__((noinline)) static void PS1ProjectedExact(int i, int *x, int *y)
+{
+    PS1VertexXYZ t = PS1ExactT(i);
+    *x             = SCREEN_CENTERX + projectionX * t.x / t.z;
+    *y             = SCREEN_CENTERY - projectionY * t.y / t.z;
+}
+#endif
 static inline void PS1ProjectedVertex(int i, int *x, int *y)
 {
     uint32_t p = g_ps1Proj[i].u;
@@ -914,9 +944,13 @@ static inline void PS1ProjectedVertex(int i, int *x, int *y)
         *y = (int16_t)(p >> 16);
     }
     else {
+#if PS1_GAME != 1
+        PS1ProjectedExact(i, x, y);
+#else
         PS1VertexXYZ t = PS1ExactT(i);
         *x = SCREEN_CENTERX + projectionX * t.x / t.z;
         *y = SCREEN_CENTERY - projectionY * t.y / t.z;
+#endif
     }
 }
 int PS1FadedFaces(int i, int count); // above: a run of faded faces, returns where it stopped
@@ -926,6 +960,7 @@ bool PS1TexturedRectWords(int x0, int y0, int x1, int y1, int u0, int v0, int u1
 #if RETRO_PLATFORM == RETRO_PS1
 static uint32_t s_ps1FadedHbl = 0, s_ps1GeneralN = 0; // this Draw3DScene: faded runs' hblanks, general-path faces
 static void PS1Draw3DList(int spriteSheetID, int count);
+#if !PS1_S2_OT_ONLY
 void Draw3DScene(int spriteSheetID)
 {
     uint32_t t0        = PS1Hblanks();
@@ -938,6 +973,7 @@ void Draw3DScene(int spriteSheetID)
     g_ps1Prof3DGeneral  = g_ps1Prof3DDraw - s_ps1FadedHbl;
     g_ps1Prof3DGeneralN = s_ps1GeneralN;
 }
+#endif
 // Draw3DScene's loop over the first `count` entries of g_ps1DrawOrder (PS1Draw3DSceneOT runs it on one entry at a time)
 static void PS1Draw3DList(int spriteSheetID, int count)
 #if PS1_GAME != 1
@@ -1295,7 +1331,8 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     g_ps1Prof3DGeneral  = g_ps1Prof3DDraw - s_ps1FadedHbl;
     g_ps1Prof3DGeneralN = s_ps1GeneralN;
 }
-static void PS1Draw3DList(int spriteSheetID, int count)
+// -Os (docs/43: RAM, 6.3 KB at -O2): with the ordering table it draws only the rare faces PS1OTOtherFace hands it
+__attribute__((optimize("Os"))) static void PS1Draw3DList(int spriteSheetID, int count)
 #endif
 #else
 void Draw3DScene(int spriteSheetID)
@@ -1324,6 +1361,7 @@ void Draw3DScene(int spriteSheetID)
         Face *face = &faceBuffer[drawList3D[i].faceID];
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
+#if !PS1_S2_OT_ONLY // (the ordering table gives this list only faces the fast path doesn't take)
         if (face->flag == FACE_FLAG_FADED) { // the fast path: the run of faded faces whose corners the GTE projected
             uint32_t tf = PS1Hblanks();
             int next    = PS1FadedFaces(i, count);
@@ -1333,6 +1371,7 @@ void Draw3DScene(int spriteSheetID)
                 continue;
             }
         }
+#endif
         // the general path: upstream's code; its vertexBufferT reads get the exact transform (PS1ExactT)
         ++s_ps1GeneralN;
 #if PS1_PROFILE

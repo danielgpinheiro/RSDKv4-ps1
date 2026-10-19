@@ -2910,7 +2910,7 @@ void DrawFadedFace(void *v, uint color, uint fogColor, int alpha)
 // to the CPU, ~30-200 a frame, no longer captured through the general path): the same early-outs, strip order, colour
 // and limits test. 0: nothing drawn; 1: w[0..4] = the opaque flat quad; 2: beyond the GPU limits (the caller draws it
 // through DrawFadedFace: the clipped polygon).
-PS1_HOT3D int PS1FadedFaceWords(const Vertex *q, uint color, uint fogColor, int alpha, uint32_t *w)
+__attribute__((optimize("Os"))) int PS1FadedFaceWords(const Vertex *q, uint color, uint fogColor, int alpha, uint32_t *w)
 {
     if (alpha > 0xFF)
         alpha = 0xFF;

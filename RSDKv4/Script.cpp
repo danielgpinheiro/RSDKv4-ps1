@@ -12855,13 +12855,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 uint32_t t1 = PS1Hblanks();
 #if PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL) // the host tool (tools/rsdkmanifest) has no PS1 Scene3D
                 uint32_t t2 = t1;
-                if (g_ps1Draw3DOT && !g_ps1Sort3DExact) // the sort folded into an ordering table (Scene3D.cpp)
-                    PS1Draw3DSceneOT(scriptInfo->spriteSheetID);
-                else {
-                    Sort3DDrawList();
-                    t2 = PS1Hblanks();
-                    Draw3DScene(scriptInfo->spriteSheetID);
-                }
+                PS1Draw3DSceneOT(scriptInfo->spriteSheetID); // the sort folded into an ordering table (Scene3D.cpp)
 #else
                 Sort3DDrawList();
                 uint32_t t2 = PS1Hblanks();
