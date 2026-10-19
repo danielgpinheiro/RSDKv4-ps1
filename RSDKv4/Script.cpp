@@ -9483,6 +9483,20 @@ __attribute__((optimize("Os"))) static void PS1HalfpipeSegment()
     ap[0] = L(930);
     get(L(929), t[0], t[1]);
     t[0]++;
+    { // the whole run at once when every index is in the table and the vertices are plain in-range ones (PS1VertexRun):
+      // the same values and high-water marks without a bounds-checked call and two range tests per value (docs/43:
+      // ~180 vertices a segment, ~11 hblanks of the segment frame's spike)
+        const int table = L(929), n = t[1], len = L(table);
+        Vertex *run = (n > 0 && t[0] >= 0 && t[0] + 3 * n <= len) ? PS1VertexRun(ap[0], n) : nullptr;
+        if (run) {
+            for (int k = 0, pos = table + 1 + t[0]; k < n; ++k, pos += 3) {
+                run[k].x = scriptCode[pos];
+                run[k].y = scriptCode[pos + 1];
+                run[k].z = scriptCode[pos + 2];
+            }
+            t[0] += 3 * n, ap[0] += n, t[1] = 0;
+        }
+    }
     while (t[1] > 0) { // the segment's vertices from its table
         int table = L(929);
         Vertex &q = V(ap[0]);
