@@ -81,6 +81,7 @@ make BOOT=X SAMPLER=1 && tools/pc_profile.sh OUT [START END]   # CPU profile by 
                                               # hblanks / vsyncs; GPU= prices the chain (tools/gpu_cost.py), KEEP_RAM=1
                                               # keeps the RAM dumps, JUMP=0 = Right only (Sonic 1's special stage,
                                               # window 300-1500); a PERF_SPLIT=1 build adds the SPLIT line
+                                              # (and with LOG=1 OUT_log.bin: each frame's CPU hblanks | vsyncs << 12)
 python3 tools/gpu_cost.py RAM.bin HEAD [TAIL ...]   # DuckStation's GPU model on a frame's chain (clipped to the screen)
 python3 tools/chain_cmp.py REF_OUT NEW_OUT        # two perf_scene.sh GPU= KEEP_RAM=1 runs: the frames' chain payload words
                                                 # compared in GPU order (links left out): exact A/B of draw code
@@ -138,6 +139,12 @@ inverse (`tools/scene3d/inverse_check.sh`), the runtime big-value run (`tools/sc
 special stage's load is the limit**: watch `perf_scene.sh`'s `headroom=` (17,184 B after these) and run
 `tools/special_entry_test.sh`; -O2 on the special-stage natives (+9 KB) left the stage without its sprites. Keep
 `PS1HalfpipeSegment` and the other big natives -Os.
+Second batch (2026-10-19, `b0df3ca`..`6bfccd8`): the HUD draw and the player controls as natives (`PS1SpecialHUDDraw`,
+`PS1SpecialCtrlP1` / `P2`: Tails's CPU keeps six 16-bit shift registers in big-value locals), the capture scratch allocated
+at the stage's first draw (`PS1OTSubEnsure`), `MatrixInverse`'s double path as a table (`PS1MatrixInverseTable`, checked by
+`tools/scene3d/inverse_check.sh`). Two suite guards watch RAM: `s2-release-ss-entry` (target 8,192 B) and
+`s2-release-zone-headroom` (81,808 B); the EXE is padded to 2 KB, so code moves the heap in 2 KB steps (look at where the
+last .data symbol ends). Never -Os shared code to save RAM: it changes Sonic 1's EXE.
 
 ## Layout
 | Path | Role |
