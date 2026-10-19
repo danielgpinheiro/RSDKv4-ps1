@@ -975,6 +975,20 @@ void TransformVertexBuffer()
 }
 void TransformVertices(Matrix *matrix, int startIndex, int endIndex)
 {
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1
+    // the matrix in locals (docs/43: GCC reloaded its 12 entries for every vertex, the stores below could alias it; the
+    // special stage's segment build transforms ~180 vertices a segment). The matrix is never one of the vertices.
+    const int m00 = matrix->values[0][0], m10 = matrix->values[1][0], m20 = matrix->values[2][0], m30 = matrix->values[3][0];
+    const int m01 = matrix->values[0][1], m11 = matrix->values[1][1], m21 = matrix->values[2][1], m31 = matrix->values[3][1];
+    const int m02 = matrix->values[0][2], m12 = matrix->values[1][2], m22 = matrix->values[2][2], m32 = matrix->values[3][2];
+    for (Vertex *vert = &vertexBuffer[startIndex], *end = &vertexBuffer[endIndex]; vert < end; ++vert) {
+        const int vx = vert->x, vy = vert->y, vz = vert->z;
+        vert->x      = (vx * m00 >> 8) + (vy * m10 >> 8) + (vz * m20 >> 8) + m30;
+        vert->y      = (vx * m01 >> 8) + (vy * m11 >> 8) + (vz * m21 >> 8) + m31;
+        vert->z      = (vx * m02 >> 8) + (vy * m12 >> 8) + (vz * m22 >> 8) + m32;
+    }
+    return;
+#endif
     for (int v = startIndex; v < endIndex; ++v) {
         int vx       = vertexBuffer[v].x;
         int vy       = vertexBuffer[v].y;
