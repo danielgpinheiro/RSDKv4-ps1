@@ -60,6 +60,9 @@ static volatile uint32_t *const s_ps1PerfSec[11] = {
     &g_ps1ProfLayer[1], &g_ps1ProfLayer[2], &g_ps1ProfLayer[3], &g_ps1Prof3DTransformHbl, &g_ps1Prof3DSortHbl,
     &g_ps1Prof3DDrawHbl};
 volatile uint32_t g_ps1PerfWinSec[11] = {};
+// the window's frames one by one (perf_scene.sh LOG=1): CPU hblanks (up to 4095) | vsyncs (up to 15) << 12
+#define PS1_PERF_LOG_N 640
+volatile uint16_t g_ps1PerfLog[PS1_PERF_LOG_N];
 #endif
 
 psyqo::GPU *g_ps1GPU           = nullptr;
@@ -107,6 +110,8 @@ __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu)
                 g_ps1PerfWinMaxFlip = fl;
             for (int k = 0; k < 11; ++k)
                 g_ps1PerfWinSec[k] = g_ps1PerfWinSec[k] + *s_ps1PerfSec[k];
+            if (f - g_ps1PerfWinFrom < PS1_PERF_LOG_N)
+                g_ps1PerfLog[f - g_ps1PerfWinFrom] = (uint16_t)((h < 4095 ? h : 4095) | (d < 15 ? d : 15) << 12);
 #endif
         }
     }

@@ -16,6 +16,7 @@
 #   complete) to OUT_shot_F.vram and the entity table to OUT_ent_F.bin, for exact A/B checks between builds
 #   (tools/shots_cmp.py REF_OUT NEW_OUT; docs/perf-43-tracker.md).
 #   PAD="f:mask ...": more pad masks at engine frames (after the chase's own at 240 / 420 / 432).
+#   LOG=1: the window's frames one by one (PERF_SPLIT builds: CPU hblanks | vsyncs << 12, uint16) into OUT_log.bin.
 #   HOLD=0x18: the pad mask held from frame 240 instead of Right (0x08), e.g. Right + A to keep jumping.
 #   MID='gdb lines' / POST='gdb lines' run at frame FROM / at the window's end (e.g. printf of counters: delta = POST - MID).
 #   A `make PERF_SPLIT=1` build adds a "SPLIT" line: GPU tail (GPU still drawing the previous chain after the CPU's work;
@@ -39,6 +40,11 @@ else
 symbol-file $ELF"
 fi
 printf "%s\n%s\n" "$HDR" "${PRE:-}" > "$OUT.hdr"
+# LOG=1 (a PERF_SPLIT build): the window's frames one by one (CPU hblanks | vsyncs << 12) into $OUT_log.bin
+if [ "${LOG:-}" = 1 ]; then
+    POST="${POST:+$POST
+}dump binary memory ${OUT}_log.bin &g_ps1PerfLog[0] &g_ps1PerfLog[640]"
+fi
 SPLIT=0; mipsel-none-elf-nm "$ELF" 2>/dev/null | grep -q g_ps1PerfGpuTail && SPLIT=1
 # The GDB script: one conditional break per event frame, in order (PS1PerfTick runs at the frame's end, after its chain is
 # complete): the window and pad at 240 / 420 / 432, the GPU dumps, the window's counters at TO + 1.
