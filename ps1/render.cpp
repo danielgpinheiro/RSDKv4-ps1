@@ -2919,13 +2919,20 @@ PS1_HOT3D bool PS1TexturedRectWords(int x0, int y0, int x1, int y1, int u0, int 
 // kept for the frame in a small cache; the position tests and words are the full function's. A quad beyond the GPU
 // limits (its UVs are cut with it) or a picture cluster takes the full function.
 struct PS1TexWordCache {
-    uint32_t frame, key; // key: sheetID | blended << 8 | 1 << 16 (0: empty)
+    uint32_t surf, atlas, cluts, key; // the atlas state it was made in; key: sheetID | blended << 8 | 1 << 16 (0: empty)
     int u0, v0, u1, v1;
     uint32_t w0, a, b, c, d;
 };
 #define PS1_TEXWORD_N 64 // the rings' and bombs' animation frames and the shadows: 8 entries thrashed (docs/43)
 static PS1TexWordCache s_texWordCache[PS1_TEXWORD_N];
 extern volatile uint32_t g_ps1PerfFrames;
+// The words depend only on the UV box, the sheet, the blend and the atlas state they were made in (the sheet binding
+// g_ps1SurfaceGen, the atlas load, its CLUT count; picture clusters are never cached): entries stay valid across frames
+// (docs/43: keyed on the frame, every box missed once a frame and took the full path)
+static inline bool PS1TexWordCurrent(const PS1TexWordCache &e)
+{
+    return e.surf == g_ps1SurfaceGen && e.atlas == g_ps1AtlasLoads && e.cluts == (uint32_t)g_ps1AtlasClutCount;
+}
 __attribute__((optimize("Os"))) bool PS1TexturedRectFast(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended, uint32_t *w)
 {
     if (!s_frameOpen || PS1ObjectsHidden())
@@ -2934,9 +2941,9 @@ __attribute__((optimize("Os"))) bool PS1TexturedRectFast(int x0, int y0, int x1,
     bool beyond = PS1BeyondGpuLimits(xmin, ymin, xmax, ymax);
     if (beyond || xmax <= 0 || ymax <= 0 || xmin >= SCREEN_XSIZE || ymin >= SCREEN_YSIZE || xmin == xmax || ymin == ymax)
         return PS1TexturedRectWords(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, w); // its counters and clipping
-    const uint32_t key = (uint32_t)sheetID | (uint32_t)blended << 8 | 1u << 16, frame = g_ps1PerfFrames;
+    const uint32_t key = (uint32_t)sheetID | (uint32_t)blended << 8 | 1u << 16;
     PS1TexWordCache &e = s_texWordCache[((uint32_t)u0 * 7 + (uint32_t)v0 * 13 + (uint32_t)u1 * 3 + (uint32_t)v1 + key) & (PS1_TEXWORD_N - 1)];
-    if (e.frame != frame || e.key != key || e.u0 != u0 || e.v0 != v0 || e.u1 != u1 || e.v1 != v1) {
+    if (e.key != key || e.u0 != u0 || e.v0 != v0 || e.u1 != u1 || e.v1 != v1 || !PS1TexWordCurrent(e)) {
         uint32_t t[9];
         if (!PS1TexturedRectWords(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, t))
             return false;
@@ -2944,7 +2951,8 @@ __attribute__((optimize("Os"))) bool PS1TexturedRectFast(int x0, int y0, int x1,
         const PS1AtlasCluster *c = PS1FindCluster(PS1SurfaceSheet(sheetID), umin, vmin); // the one the words came from
         for (int k = 0; k < 9; ++k) w[k] = t[k];
         if (c && !c->picture) {
-            e.frame = frame, e.key = key, e.u0 = u0, e.v0 = v0, e.u1 = u1, e.v1 = v1;
+            e.surf = g_ps1SurfaceGen, e.atlas = g_ps1AtlasLoads, e.cluts = (uint32_t)g_ps1AtlasClutCount;
+            e.key = key, e.u0 = u0, e.v0 = v0, e.u1 = u1, e.v1 = v1;
             e.w0 = t[0], e.a = t[2], e.b = t[4], e.c = t[6], e.d = t[8];
         }
         return true;
@@ -2968,12 +2976,12 @@ uint32_t *PS1TexturedRectOT(int x0, int y0, int x1, int y1, int u0, int v0, int 
     if (!s_frameOpen || PS1ObjectsHidden())
         return nullptr;
     const int xmin = x0 < x1 ? x0 : x1, xmax = x0 < x1 ? x1 : x0, ymin = y0 < y1 ? y0 : y1, ymax = y0 < y1 ? y1 : y0;
-    const uint32_t key = (uint32_t)sheetID | (uint32_t)blended << 8 | 1u << 16, frame = g_ps1PerfFrames;
+    const uint32_t key = (uint32_t)sheetID | (uint32_t)blended << 8 | 1u << 16;
     PS1TexWordCache *e = nullptr;
     if (!PS1BeyondGpuLimits(xmin, ymin, xmax, ymax) && xmax > 0 && ymax > 0 && xmin < SCREEN_XSIZE && ymin < SCREEN_YSIZE
         && xmin != xmax && ymin != ymax) {
         e = &s_texWordCache[((uint32_t)u0 * 7 + (uint32_t)v0 * 13 + (uint32_t)u1 * 3 + (uint32_t)v1 + key) & (PS1_TEXWORD_N - 1)];
-        if (e->frame != frame || e->key != key || e->u0 != u0 || e->v0 != v0 || e->u1 != u1 || e->v1 != v1)
+        if (e->key != key || e->u0 != u0 || e->v0 != v0 || e->u1 != u1 || e->v1 != v1 || !PS1TexWordCurrent(*e))
             e = nullptr;
         else {
             uint32_t *h = PS1ChainOTRaw(9);
