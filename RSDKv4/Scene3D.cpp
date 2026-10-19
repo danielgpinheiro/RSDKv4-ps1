@@ -753,7 +753,7 @@ static void PS1ExactXYPass(int count)
     const Matrix &m = matFinal;
     const int m00 = m.values[0][0], m10 = m.values[1][0], m20 = m.values[2][0], m30 = m.values[3][0];
     const int m01 = m.values[0][1], m11 = m.values[1][1], m21 = m.values[2][1], m31 = m.values[3][1];
-    const int px = projectionX, py = projectionY;
+    const int px = projectionX, py = projectionY, cx = SCREEN_CENTERX;
     const PS1ProjEntry *const pj = g_ps1Proj; // locals: the stores below would make GCC reload the globals each vertex
     const Vertex *const vb       = vertexBuffer;
     PS1ExactXY *xy               = s_ps1ExactXY;
@@ -762,11 +762,13 @@ static void PS1ExactXYPass(int count)
         const int v = *p, z = pj[v].v;
         if (z <= 0)
             continue;
+        if (z == 0) // (never: tells GCC the divisions below need no zero trap)
+            __builtin_unreachable();
         const Vertex &q = vb[v];
         const int x = q.x, y = q.y, w = q.z;
         const int tx = (x * m00 >> 8) + (y * m10 >> 8) + (w * m20 >> 8) + m30;
         const int ty = (x * m01 >> 8) + (y * m11 >> 8) + (w * m21 >> 8) + m31;
-        xy->x        = SCREEN_CENTERX + px * tx / z;
+        xy->x        = cx + px * tx / z;
         xy->y        = SCREEN_CENTERY - py * ty / z;
     }
     s_ps1XYCount = count;
