@@ -40,11 +40,38 @@ static PS1ScriptBig s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1];
 static int s_ps1ScriptBigCount = 0;
 static ushort s_ps1BigBucket[PS1_BIGBUCKET_COUNT];
 static bool s_ps1BigBucketDirty = true;
+#if PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+// Sonic 2: the scripts' runtime insertions go to a second sorted run at the top of the same array, growing down
+// (s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1 - rtCount ...]): an insertion moved the loaded table's tail (up to ~40 KB: the
+// special stage's segment build fills six 40-entry tables near the code's start, ~50 hblanks on every 4th frame early
+// in a stage, docs/43) and rebuilt the bucket index. The two runs hold what the one table held, with the same capacity
+// (an insertion or a load's append fails when count + rtCount reaches PS1_SCRIPTBIG_COUNT, as count did), and a load
+// drops the entries at or past its position from both: every read gives the same value.
+#define PS1_BIG_RT 1
+static int s_ps1BigRtCount = 0;
+static inline PS1ScriptBig *PS1BigRt() { return &s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1 - s_ps1BigRtCount]; }
+static int PS1BigRtFind(int pos) // the first runtime entry with .pos >= pos
+{
+    const PS1ScriptBig *r = PS1BigRt();
+    int lo = 0, hi = s_ps1BigRtCount;
+    while (lo < hi) {
+        int m = (lo + hi) >> 1;
+        if (r[m].pos < pos)
+            lo = m + 1;
+        else
+            hi = m;
+    }
+    return lo;
+}
+#define PS1_BIG_TOTAL (s_ps1ScriptBigCount + s_ps1BigRtCount)
+#else
+#define PS1_BIG_TOTAL (s_ps1ScriptBigCount)
+#endif
 static void PS1ScriptBigChanged()
 {
     s_ps1ScriptBig[s_ps1ScriptBigCount].pos = 0x7FFFFFFF;
     s_ps1BigBucketDirty                     = true;
-    g_ps1ScriptBigCount                     = s_ps1ScriptBigCount;
+    g_ps1ScriptBigCount                     = PS1_BIG_TOTAL;
 }
 static void PS1ScriptBigIndex()
 {
@@ -67,6 +94,13 @@ static inline int PS1ScriptBigFind(int pos) // index of the first entry with .po
 int PS1ScriptBigValue(int pos)
 {
     int k = PS1ScriptBigFind(pos);
+#ifdef PS1_BIG_RT
+    if (s_ps1ScriptBig[k].pos != pos && s_ps1BigRtCount) {
+        int j = PS1BigRtFind(pos);
+        if (j < s_ps1BigRtCount && PS1BigRt()[j].pos == pos)
+            return PS1BigRt()[j].value;
+    }
+#endif
     return s_ps1ScriptBig[k].pos == pos ? s_ps1ScriptBig[k].value : PS1_SCRIPT_BIG; // not stored: the literal value
 }
 __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
@@ -78,10 +112,21 @@ __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
             scriptCode.slot[pos] = (short)value;
             return;
         }
-        if (s_ps1ScriptBigCount == PS1_SCRIPTBIG_COUNT) {
+        if (PS1_BIG_TOTAL == PS1_SCRIPTBIG_COUNT) {
             g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
             return;
         }
+#ifdef PS1_BIG_RT
+        int j = PS1BigRtFind(pos);
+        PS1ScriptBig *r = PS1BigRt();
+        memmove(r - 1, r, j * sizeof(PS1ScriptBig)); // the entries below pos one down, the new one under the rest
+        r[j - 1].pos   = pos;
+        r[j - 1].value = value;
+        ++s_ps1BigRtCount;
+        g_ps1ScriptBigCount  = PS1_BIG_TOTAL;
+        scriptCode.slot[pos] = PS1_SCRIPT_BIG;
+        return;
+#endif
         int k = PS1ScriptBigFind(pos);
         memmove(&s_ps1ScriptBig[k + 1], &s_ps1ScriptBig[k], (s_ps1ScriptBigCount - k) * sizeof(PS1ScriptBig));
         s_ps1ScriptBig[k].pos   = pos;
@@ -92,11 +137,26 @@ __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
         return;
     }
     int k = PS1ScriptBigFind(pos);
-    if (s_ps1ScriptBig[k].pos == pos)
+    if (s_ps1ScriptBig[k].pos == pos) {
         s_ps1ScriptBig[k].value = value;
+        return;
+    }
+#ifdef PS1_BIG_RT
+    int j = PS1BigRtFind(pos);
+    if (j < s_ps1BigRtCount && PS1BigRt()[j].pos == pos)
+        PS1BigRt()[j].value = value;
+#endif
 }
 static bool PS1ScriptStore(int pos, int value)
 {
+#ifdef PS1_BIG_RT
+    if (s_ps1BigRtCount && PS1BigRt()[s_ps1BigRtCount - 1].pos >= pos) { // the runtime run's entries at or past pos too
+        int j = PS1BigRtFind(pos);
+        memmove(&s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1 - j], PS1BigRt(), j * sizeof(PS1ScriptBig));
+        s_ps1BigRtCount = j;
+        g_ps1ScriptBigCount = PS1_BIG_TOTAL;
+    }
+#endif
     if (s_ps1ScriptBigCount && s_ps1ScriptBig[s_ps1ScriptBigCount - 1].pos >= pos) {
         while (s_ps1ScriptBigCount && s_ps1ScriptBig[s_ps1ScriptBigCount - 1].pos >= pos) --s_ps1ScriptBigCount;
         PS1ScriptBigChanged();
@@ -105,7 +165,7 @@ static bool PS1ScriptStore(int pos, int value)
         scriptCode.slot[pos] = (short)value;
         return true;
     }
-    if (s_ps1ScriptBigCount == PS1_SCRIPTBIG_COUNT)
+    if (PS1_BIG_TOTAL == PS1_SCRIPTBIG_COUNT)
         return false;
     scriptCode.slot[pos]                         = PS1_SCRIPT_BIG;
     s_ps1ScriptBig[s_ps1ScriptBigCount].pos      = pos;
@@ -3565,6 +3625,9 @@ static bool PS1LoadScriptImage()
     scriptCodePos       = codePos;
     jumpTablePos        = jumpPos;
     s_ps1ScriptBigCount = bigCount;
+#ifdef PS1_BIG_RT
+    s_ps1BigRtCount = 0; // the image replaces every entry
+#endif
     PS1ScriptBigChanged();
     s_ps1ScriptEnd   = scripts + 1;
     s_ps1FunctionEnd = fns;
@@ -3864,6 +3927,9 @@ void ClearScriptData()
 #if RETRO_PLATFORM == RETRO_PS1
     memset(&scriptCode, 0, sizeof(scriptCode));
     s_ps1ScriptBigCount = 0;
+#ifdef PS1_BIG_RT
+    s_ps1BigRtCount = 0;
+#endif
     PS1ScriptBigChanged();
     s_ps1ScriptEnd   = 1;
     s_ps1FunctionEnd = 0;
