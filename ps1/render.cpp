@@ -2923,7 +2923,8 @@ struct PS1TexWordCache {
     int u0, v0, u1, v1;
     uint32_t w0, a, b, c, d;
 };
-static PS1TexWordCache s_texWordCache[8];
+#define PS1_TEXWORD_N 64 // the rings' and bombs' animation frames and the shadows: 8 entries thrashed (docs/43)
+static PS1TexWordCache s_texWordCache[PS1_TEXWORD_N];
 extern volatile uint32_t g_ps1PerfFrames;
 __attribute__((optimize("Os"))) bool PS1TexturedRectFast(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended, uint32_t *w)
 {
@@ -2934,7 +2935,7 @@ __attribute__((optimize("Os"))) bool PS1TexturedRectFast(int x0, int y0, int x1,
     if (beyond || xmax <= 0 || ymax <= 0 || xmin >= SCREEN_XSIZE || ymin >= SCREEN_YSIZE || xmin == xmax || ymin == ymax)
         return PS1TexturedRectWords(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, w); // its counters and clipping
     const uint32_t key = (uint32_t)sheetID | (uint32_t)blended << 8 | 1u << 16, frame = g_ps1PerfFrames;
-    PS1TexWordCache &e = s_texWordCache[((uint32_t)u0 * 7 + (uint32_t)v0 * 13 + (uint32_t)u1 * 3 + (uint32_t)v1 + key) & 7];
+    PS1TexWordCache &e = s_texWordCache[((uint32_t)u0 * 7 + (uint32_t)v0 * 13 + (uint32_t)u1 * 3 + (uint32_t)v1 + key) & (PS1_TEXWORD_N - 1)];
     if (e.frame != frame || e.key != key || e.u0 != u0 || e.v0 != v0 || e.u1 != u1 || e.v1 != v1) {
         uint32_t t[9];
         if (!PS1TexturedRectWords(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, t))
