@@ -4,6 +4,7 @@
 #include "menu.hh"
 #include "gpu_chain.hh"
 #include "loading.hh"
+#include "version_stamp.hh"
 
 #include <stdio.h>
 #include <string.h>
@@ -195,11 +196,12 @@ void chainTexPage(uint16_t tpage, int semiMode) {
     PS1ChainTPage(attr);
 }
 
-// An image of a pack at (x, y); semiMode >= 0 draws its STP texels blended (0: B/2 + F/2, 1: B + F, 3: B + F/4).
-void drawImage(const PS1MenuImage &img, int x, int y, int semiMode = 0) {
+// An image of a pack at (x, y); semiMode >= 0 draws its STP texels blended (0: B/2 + F/2, 1: B + F, 3: B + F/4);
+// level: the sprite's grey modulation (0x80 = the art's own colours).
+void drawImage(const PS1MenuImage &img, int x, int y, int semiMode = 0, uint8_t level = 0x80) {
     bool semi = img.semi && semiMode >= 0;
     chainTexPage(img.tpage, semi ? semiMode : -1);
-    psyqo::Prim::Sprite s(psyqo::Color{ { .r = 0x80, .g = 0x80, .b = 0x80 } });
+    psyqo::Prim::Sprite s(psyqo::Color{ { .r = level, .g = level, .b = level } });
     if (semi)
         s.setSemiTrans();
     psyqo::PrimPieces::ClutIndex clut;
@@ -252,8 +254,8 @@ int textWidth(const PS1MenuPack &pack, int font, const char *s) { // pixels
     return w >> 4;
 }
 
-// align: 0 left, 1 centred on x. Lines split at '\n'.
-void drawText(const PS1MenuPack &pack, int font, const char *s, int x, int y, int align = 0) {
+// align: 0 left, 1 centred on x. Lines split at '\n'. level: drawImage's.
+void drawText(const PS1MenuPack &pack, int font, const char *s, int x, int y, int align = 0, uint8_t level = 0x80) {
     if (font >= pack.fontCount)
         return;
     int lineH = pack.fonts[font].lineHeight;
@@ -264,7 +266,7 @@ void drawText(const PS1MenuPack &pack, int font, const char *s, int x, int y, in
             if (!g)
                 continue;
             if (g->image < pack.imageCount)
-                drawImage(pack.images[g->image], (x16 >> 4) + g->xoff, y + g->yoff);
+                drawImage(pack.images[g->image], (x16 >> 4) + g->xoff, y + g->yoff, 0, level);
             x16 += g->advance;
         }
         if (*s == '\n')
@@ -1266,6 +1268,8 @@ void PS1MenuFrame() {
         s_taPack         = PS1MenuPack();
         return;
     }
+    if (screen == PS1_MENU_TITLE) // build stamp (ps1/version_stamp.hh): the title screen only, bottom-left, under the fade
+        drawText(g_ps1MenuScreens, PS1_FONT_LABEL_M, PS1VersionText(), 8, 240 - 8 - 15, 0, 0x50); // light grey
     if (s_m.fade > 0) { // fade in after a screen change: black at 75 / 50 % (two B/2 + F/2 passes = 25 %)
         int passes = s_m.fade > 4 ? 2 : 1;
         for (int i = 0; i < passes; ++i) drawRect(0, 0, 320, 240, 0, 0, 0, 0);

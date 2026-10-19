@@ -55,9 +55,10 @@ ps1/video.cpp \
 ps1/loading.cpp \
 ps1/memcard.cpp \
 ps1/stack.cpp \
+ps1/version_stamp.cpp \
 
 ifeq ($(PLATFORM_TEST),1)
-SRCS := ps1/platform_test.cpp $(filter-out RSDKv4/% ps1/%_headless.cpp ps1/render.cpp ps1/tileset.cpp ps1/sprite_atlas.cpp ps1/menu.cpp,$(SRCS))
+SRCS := ps1/platform_test.cpp $(filter-out RSDKv4/% ps1/%_headless.cpp ps1/render.cpp ps1/tileset.cpp ps1/sprite_atlas.cpp ps1/menu.cpp ps1/version_stamp.cpp,$(SRCS))
 endif
 
 # ps1/libc comes FIRST: its C/C++ shim headers (<string>, <cmath>, <stdio.h>, ...) shadow any

@@ -57,6 +57,8 @@ tools/data_disc.sh              # = tools/build_assets.py --src ../Sonic2_Extrac
                                 # game disc from ../Sonic2_Extracted (Data/ + Bytecode/, no sources / menus / ZoneM)
 tools/export_builder.sh ../Sonic-2-PS1-ISO-Builder   # the public builder's builder/ + bin/ (natural build; writes
                                 # bin/README.md, SHA256SUMS and tools/disc/exe_name.txt)
+# Build stamp: every disc gets VERSION.TXT (tools/gen_version.py: commit, -dirty; the builders: bin/VERSION.TXT from the
+# export), drawn bottom-left on the menus' title screen (ps1/version_stamp.*, ps1/menu.cpp). PS1_VERSION_FILE=path / none
 make dist                       # natural build only: licensed (../LICENSE.DAT by path, LICENSE=none for none), verified
                                 # build/dist/Sonic2-PS1.bin/.cue + SHA256SUMS (reproducible: same hashes on a rebuild)
                                 # (data_disc.sh also builds manifests, atlases per variant, tile pages)

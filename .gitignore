@@ -307,3 +307,6 @@ tools/rsdkmanifest/rsdkmanifest
 *.ogv
 .DS_Store
 tools/rsdkmanifest/rsdkmanifest-s1
+
+# Build stamp written by tools/gen_version.py (build_disc.py writes its own under build/)
+/VERSION.TXT

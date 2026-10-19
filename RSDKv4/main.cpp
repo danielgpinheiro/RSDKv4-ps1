@@ -21,6 +21,7 @@
 #include "../ps1/loading.hh"
 #include "../ps1/stack.hh"
 #include "../ps1/test_mode.hh"
+#include "../ps1/version_stamp.hh"
 #include "../ps1/video.hh"
 
 extern "C" char __heap_start, __stack_start;
@@ -173,6 +174,7 @@ class RSDKv4PS1App final : public psyqo::Application {
         // (47 KB less headroom at the load peak).
         ReadSaveRAMData();
         PS1DetectGpuVersion(); // flip-bit sprites for flipped tiles if the GPU draws them (ps1/render.cpp, docs/43 G3)
+        PS1VersionLoad();      // VERSION.TXT (build stamp for the title screen, ps1/version_stamp.hh): next to the index
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
         PS1Scene3DReadList(); // the stages that get the Scene3D block (RSDKv4/Scene3D.cpp)
         Engine.Init();

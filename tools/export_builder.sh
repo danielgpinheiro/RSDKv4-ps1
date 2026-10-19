@@ -25,7 +25,7 @@ if [ "$GAME" = 1 ]; then LIST=rsdkv4_filelist_s1.txt TRACE=boot_trace_s1.txt EXE
 B=$DEST/builder
 rm -rf "$B"
 mkdir -p "$B/tools/rsdkmanifest" "$B/RSDKv4/NativeObjects" "$B/ps1" "$DEST/bin"
-for f in build_assets.py extract_rsdk.py bytecode_scan.py $LIST; do cp tools/$f "$B/tools/"; done
+for f in build_assets.py extract_rsdk.py bytecode_scan.py gen_version.py $LIST; do cp tools/$f "$B/tools/"; done
 for d in scripts atlas tiles bgstrips menu audio disc; do
   mkdir -p "$B/tools/$d"
   cp tools/$d/*.py "$B/tools/$d/"
@@ -41,7 +41,9 @@ cp ps1/*.hh "$B/ps1/"
 cp LICENSE.md "$B/RSDKv4/LICENSE.md" # the decompilation's license travels with its sources
 cp rsdkv4.ps-exe "$DEST/bin/$EXE"
 ( cd "$DEST/bin" && shasum -a 256 $EXE > SHA256SUMS )
-printf '# bin/\n\n`%s`: the PS1 executable, built from the RSDKv4-ps1 port at commit `%s` (`make GAME=%s`, with\n`RSDK_AUTOBUILD=1`). SHA-256 in `SHA256SUMS`.\n' \
-  "$EXE" "$(git rev-parse --short HEAD)" "$GAME" > "$DEST/bin/README.md"
-echo "exported $(git rev-parse --short HEAD) -> $DEST ($(find "$B" -type f | wc -l | tr -d ' ') builder files)"
+# bin/VERSION.TXT: this port's commit, put on the builder's discs (build_disc.py) and shown on the title screen
+VERSION=$(/usr/bin/python3 tools/gen_version.py "$DEST/bin/VERSION.TXT" .)
+printf '# bin/\n\n`%s`: the PS1 executable, built from the RSDKv4-ps1 port at commit `%s` (`make GAME=%s`, with\n`RSDK_AUTOBUILD=1`). SHA-256 in `SHA256SUMS`.\n\n`VERSION.TXT` (`%s`) goes on the disc; the title screen shows it bottom-left.\n' \
+  "$EXE" "$(git rev-parse --short HEAD)" "$GAME" "$VERSION" > "$DEST/bin/README.md"
+echo "exported $(git rev-parse --short HEAD) (version $VERSION) -> $DEST ($(find "$B" -type f | wc -l | tr -d ' ') builder files)"
 cat "$DEST/bin/SHA256SUMS"
