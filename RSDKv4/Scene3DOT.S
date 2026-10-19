@@ -175,20 +175,10 @@ L_face:
     bltz    $t5, L_neg              # fogStr < 0 (fogMax < 0): alpha > 255 -> 255
     subu    $t7, $t7, $t5           # alpha = 255 - fogStr
 L_alpha:
-    # degenerate faces (all x equal or all y equal: no pixel) are not drawn. A face wholly off the 320 x 240 screen is
-    # written anyway: its corners are within the GTE's -1024..1023, so the GPU clips it to the drawing area (nothing
-    # drawn, a few GPU cycles); the CPU tests cost ~25 instructions a face (docs/43 C1: pictures identical, chain words
-    # not)
-    xor     $t5, $t0, $t1
-    xor     $t6, $t0, $t2
-    or      $t5, $t5, $t6
-    xor     $t6, $t0, $t3
-    or      $t5, $t5, $t6
-    andi    $t6, $t5, 0xFFFF
-    beqz    $t6, L_cull
-    srl     $t6, $t5, 16
-    beqz    $t6, L_cull
-    nop
+    # A face wholly off the 320 x 240 screen is written anyway: its corners are within the GTE's -1024..1023, so the GPU
+    # clips it to the drawing area (nothing drawn, a few GPU cycles); the CPU tests cost ~25 instructions a face (docs/43
+    # C1: pictures identical, chain words not). Degenerate faces (all x or all y equal) are culled in L_notA: such a face
+    # has all four corners collinear, so s1 = s3 = 0 (the test only runs then).
     mfc2    $t6, $24                # s3 = MAC0
     lw      $t5, 16($s1)            # f.color
     mult    $t4, $t6                # strip order: diagonal a-c when s1 * s3 < 0: b a c d
@@ -335,10 +325,20 @@ L_c2:                               # entry 1 missed: entry 2?
     or      $t4, $t4, $at           # 0x28000000 | entry 2's colour bits
 
 L_notA:
-    # s1 = s3 = 0 with a != c: all four collinear: a b c d
+    # s1 = s3 = 0: all four collinear. Degenerate (all x equal or all y equal: no pixel): not drawn. Else with a != c:
+    # a b c d
     or      $at, $t4, $t6
     bnez    $at, L_t2
     xor     $at, $t0, $t2
+    xor     $t4, $t0, $t1           # (s1 / s3 are no longer read on these paths; t5 keeps the colour)
+    or      $t4, $t4, $at
+    xor     $t6, $t0, $t3
+    or      $t4, $t4, $t6
+    andi    $t6, $t4, 0xFFFF
+    beqz    $t6, L_cull
+    srl     $t6, $t4, 16
+    beqz    $t6, L_cull
+    nop
     bnez    $at, L_swap01
     nop
 L_t2:
