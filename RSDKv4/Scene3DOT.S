@@ -301,8 +301,11 @@ L_other:                            # not fast: depth, lo / hi and the record he
     move    $a2, $t4                # depth
     subu    $t0, $s3, $t0
     sra     $a1, $t0, 3             # face index
-    jal     PS1OTOtherC             # (s, i, depth) -> the record's .first (tagged) or null
-    move    $a0, $s0
+    jal     PS1OTOtherC             # (s, i, depth) -> the record's .first (tagged), null, or 1: nothing drawn and the
+    move    $a0, $s0                # open run left as it was
+    li      $at, 1
+    beq     $v0, $at, L_orej
+    nop
     sw      $v0, 4($s3)             # rec.first
     lw      $t8, 56($sp)
     lw      $a1, 60($sp)
@@ -313,6 +316,18 @@ L_other:                            # not fast: depth, lo / hi and the record he
     move    $t9, $zero              # the run was closed: the next faded face opens one
     b       L_next
     move    $v1, $zero
+L_orej:                             # nothing drawn, the run still open: w as saved, its end as the state has it
+    sw      $zero, 4($s3)           # rec.first
+    lw      $t8, 56($sp)
+    lw      $a1, 60($sp)
+    lw      $a2, 64($sp)
+    lw      $a3, 68($sp)
+    lw      $v0, 72($sp)
+    lw      $ra, 76($sp)
+    lw      $t9, S_W($s0)
+    lw      $v1, S_WEND($s0)
+    b       L_next
+    nop
 
 L_c2:                               # entry 1 missed: entry 2?
     bne     $t5, $a3, L_miss

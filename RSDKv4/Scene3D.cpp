@@ -1390,11 +1390,32 @@ static __attribute__((noinline)) uint32_t *PS1OTTexFace(const Face &f, int sprit
     g_ps1Faces = g_ps1Faces + 1;
     return reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(h) | 2);
 }
+// PS1OTOtherC's answer for a face that draws nothing and left the open run as it was (the asm keeps writing into it)
+#define PS1_OT_REJECT (reinterpret_cast<uint32_t *>(1))
 extern "C" uint32_t *PS1OTOtherC(PS1OTFastState *s, int i, int depth)
 {
-    PS1OTCloseRun(s); // what the other paths allocate goes after the run in the arena
     ++s->others;
     const Face &f = faceBuffer[i];
+    if (f.flag == FACE_FLAG_FADED && g_ps1Draw3DFadedFast) {
+        // PS1OTOtherFace's returns that draw nothing (a corner behind the camera; wholly off one side of the screen, or
+        // degenerate: the tests it makes on the same corners) before the open run is closed: no run closed here and
+        // opened again for the next faded face (docs/43: ~140 such near faces a frame at the stage's start). The quads
+        // after it go on in the same run; their words and their order (through the ordering table) are the same.
+        if (g_ps1Proj[f.a].v <= 0 || g_ps1Proj[f.b].v <= 0 || g_ps1Proj[f.c].v <= 0 || g_ps1Proj[f.d].v <= 0) // PS1_ZPOS
+            return PS1_OT_REJECT;
+        int x0, y0, x1, y1, x2, y2, x3, y3;
+        PS1ProjectedVertex(f.a, &x0, &y0);
+        PS1ProjectedVertex(f.b, &x1, &y1);
+        PS1ProjectedVertex(f.c, &x2, &y2);
+        PS1ProjectedVertex(f.d, &x3, &y3);
+        if ((x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) || (x0 > SCREEN_XSIZE && x1 > SCREEN_XSIZE && x2 > SCREEN_XSIZE && x3 > SCREEN_XSIZE)
+            || (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) || (y0 > SCREEN_YSIZE && y1 > SCREEN_YSIZE && y2 > SCREEN_YSIZE && y3 > SCREEN_YSIZE)
+            || (x0 == x1 && x1 == x2 && x2 == x3) || (y0 == y1 && y1 == y2 && y2 == y3)) {
+            ++s_ps1OTFadedGen[0];
+            return PS1_OT_REJECT;
+        }
+    }
+    PS1OTCloseRun(s); // what the other paths allocate goes after the run in the arena
     if ((f.flag == FACE_FLAG_TEXTURED_C || f.flag == FACE_FLAG_TEXTURED_C_BLEND) && g_ps1Draw3DTexFast)
         return PS1OTTexFace(f, s->sheet, s->draw);
     return PS1OTOtherFace(i, depth, s->sheet, s->draw);
