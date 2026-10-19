@@ -200,11 +200,17 @@ static int s_ps1ProcessedN = 0;
 static bool s_ps1FlagsAll  = true;
 // The first slot from e on (e itself included) that has a type and isn't PRIORITY_INACTIVE, else end: 8 instructions a
 // slot (GCC's loop was 12: load-delay nops, two more counters). The loads at end read the slot after the list (RAM).
+#ifndef RETRO_PS1_HOST_TOOL
 static_assert(offsetof(Entity, type) == 250 && offsetof(Entity, priority) == 252 && sizeof(Entity) == 280
                   && PRIORITY_INACTIVE == 5,
               "PS1ScanLive's constants");
+#endif
 static inline Entity *PS1ScanLive(Entity *e, Entity *end)
 {
+#ifdef RETRO_PS1_HOST_TOOL // tools/rsdkmanifest (built for the host): the same scan in C
+    while (e != end && (e->type == OBJ_TYPE_BLANKOBJECT || e->priority == PRIORITY_INACTIVE)) ++e;
+    return e;
+#else
     uint32_t t, p;
     __asm__(".set push\n.set noreorder\n"
             "1:  lbu   %1, 250(%0)\n"
@@ -221,6 +227,7 @@ static inline Entity *PS1ScanLive(Entity *e, Entity *end)
             : "r"(end)
             : "memory");
     return e;
+#endif
 }
 #endif
 void ProcessObjects()
