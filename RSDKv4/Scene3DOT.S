@@ -305,10 +305,12 @@ L_other:                            # not fast: depth, lo / hi and the record he
     # start): a corner behind the camera; or, on the corners PS1ProjectedVertex gives (a CPU corner's exact position by
     # its list slot; a stale one goes to C), all x < 0, all x > SCREEN_XSIZE, all y < 0, all y > 240, all x equal or all
     # y equal. The record's .first is 0 and the open run stays open, as PS1OTOtherC's PS1_OT_REJECT. Anything else: C.
-    # t0 / t2 = and of x / y (all < 0: sign set), t1 / t3 = or of x - SCREEN_XSIZE - 1 / y - 241 (all past: sign clear),
-    # t5 / t6 = or of x ^ x0 / y ^ y0 (all equal: 0), a0 / a1 = x0 / y0, a2 / ra = x / y, t7 the corner, v0 / at scratch
+    # t0 / t2 = and of x / y (all < 0: sign set; all equal: and == or), t1 / t3 = or of x / y, t5 / t6 = or of
+    # x - SCREEN_XSIZE - 1 / y - 241 (all past the edge: sign clear); a0 = -(SCREEN_XSIZE + 1), a1 = the corners' end,
+    # a2 / ra = x / y, t7 the corner, v0 / at scratch
     sw      $ra, 80($sp)
     sw      $v0, 84($sp)
+    lw      $a0, S_QXN($s0)
     li      $t0, -1
     move    $t1, $zero
     li      $t2, -1
@@ -316,14 +318,14 @@ L_other:                            # not fast: depth, lo / hi and the record he
     move    $t5, $zero
     move    $t6, $zero
     move    $t7, $s1
+    addiu   $a1, $s1, 16
 L_rc:
     lw      $v0, 0($t7)             # the corner's vertex
-    nop
+    addiu   $t7, $t7, 4
     sll     $at, $v0, 3
     addu    $at, $s4, $at
     lw      $a2, 4($at)             # .v
     lw      $ra, 0($at)             # .u
-    nop
     blez    $a2, L_rzrej            # behind the camera (PS1_ZPOS)
     andi    $at, $ra, 0xFFFF
     xori    $at, $at, 0x8000
@@ -333,35 +335,25 @@ L_rc:
     sra     $ra, $ra, 16            # y = (int16)(u >> 16)
 L_rxy:
     and     $t0, $t0, $a2
-    lw      $at, S_QXN($s0)
+    or      $t1, $t1, $a2
     and     $t2, $t2, $ra
-    addu    $at, $a2, $at           # x - SCREEN_XSIZE - 1
-    or      $t1, $t1, $at
-    addiu   $at, $ra, -241          # y - SCREEN_YSIZE - 1
-    or      $t3, $t3, $at
-    bne     $t7, $s1, 1f
-    nop
-    move    $a0, $a2                # corner 0: x0, y0
-    move    $a1, $ra
-1:  xor     $at, $a2, $a0
+    or      $t3, $t3, $ra
+    addu    $at, $a2, $a0           # x - SCREEN_XSIZE - 1
     or      $t5, $t5, $at
-    xor     $at, $ra, $a1
+    addiu   $at, $ra, -241          # y - SCREEN_YSIZE - 1
+    bne     $t7, $a1, L_rc
     or      $t6, $t6, $at
-    addiu   $t7, $t7, 4
-    addiu   $at, $s1, 16
-    bne     $t7, $at, L_rc
-    nop
     bltz    $t0, L_rrej             # all x < 0
     nop
-    bgez    $t1, L_rrej             # all x > SCREEN_XSIZE
+    bgez    $t5, L_rrej             # all x > SCREEN_XSIZE
     nop
     bltz    $t2, L_rrej             # all y < 0
     nop
-    bgez    $t3, L_rrej             # all y > SCREEN_YSIZE
+    bgez    $t6, L_rrej             # all y > SCREEN_YSIZE
     nop
-    beqz    $t5, L_rrej             # all x equal
+    beq     $t0, $t1, L_rrej        # all x equal
     nop
-    beqz    $t6, L_rrej             # all y equal
+    beq     $t2, $t3, L_rrej        # all y equal
     nop
 L_rbail:                            # the face draws: C, as before
     lw      $ra, 80($sp)
