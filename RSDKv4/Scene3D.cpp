@@ -69,6 +69,33 @@ static uint16_t *s_ps1CpuList = s_ps1DummyCpuList;
 static int s_ps1CpuN = 0, s_ps1CpuCap = 0; // listed this frame, slots (0 without the block: every vertex the exact way)
 static int s_ps1XYCount = 0; // the vertices the last transform did (a mark past them is stale: the exact transform then)
 #endif
+#if PS1_S2_OT_ONLY
+// Sonic 2: the scratch (the ordering table's captured sub-lists, one entry per face) is only read while the stage runs,
+// so it is allocated at the stage's first draw, after the load, as the chain arenas are (ps1/gpu_chain.cpp
+// PS1ChainBegin): in the block, its 6.6 KB raised the load's high-water (docs/43: the special stage's entry headroom).
+// Freed first in every stage load (PS1Scene3DPrepare), so no load ever has it on the heap. Without it (the heap full)
+// a captured face is not drawn, as when its arena is full, and g_ps1Scene3DAllocFail counts it.
+static DrawListEntry3D *s_ps1OTSub = nullptr;
+static void PS1OTSubRelease()
+{
+    if (s_ps1OTSub) {
+        psyqo_free(s_ps1OTSub);
+        s_ps1OTSub = nullptr;
+    }
+    g_ps1Scene3DScratch = s_ps1DummyScratch;
+}
+static void PS1OTSubEnsure()
+{
+    if (s_ps1OTSub || !g_ps1FaceCap)
+        return;
+    s_ps1OTSub = (DrawListEntry3D *)psyqo_malloc(FACEBUFFER_SIZE * sizeof(DrawListEntry3D));
+    if (!s_ps1OTSub) {
+        g_ps1Scene3DAllocFail = g_ps1Scene3DAllocFail + 1;
+        return;
+    }
+    g_ps1Scene3DScratch = s_ps1OTSub;
+}
+#endif
 static char s_ps1Scene3DStages[8][24];
 static int s_ps1Scene3DStageCount = -1; // -1: Data/Game/PS1Scene3D.bin not read yet
 static void PS1Scene3DPoint(uint8_t *b)
@@ -84,7 +111,11 @@ static void PS1Scene3DPoint(uint8_t *b)
     else {
         faceBuffer = (Face *)b, b += FACEBUFFER_SIZE * sizeof(Face);
         drawList3D = (DrawListEntry3D *)b, b += FACEBUFFER_SIZE * sizeof(DrawListEntry3D);
+#if PS1_S2_OT_ONLY
+        g_ps1Scene3DScratch = s_ps1DummyScratch; // allocated at the stage's first draw (PS1OTSubEnsure)
+#else
         g_ps1Scene3DScratch = (DrawListEntry3D *)b, b += FACEBUFFER_SIZE * sizeof(DrawListEntry3D);
+#endif
         vertexBuffer = (Vertex *)b, b += VERTEXBUFFER_SIZE * sizeof(Vertex);
         g_ps1Proj = (PS1ProjEntry *)b, b += VERTEXBUFFER_SIZE * sizeof(PS1ProjEntry);
         g_ps1ExactT = (PS1ExactEntry *)b;
@@ -131,6 +162,9 @@ void PS1Scene3DPrepare(const char *folder)
     PS1Scene3DReadList();
     bool want = false;
     for (int i = 0; i < s_ps1Scene3DStageCount && !want; ++i) want = strcmp(folder, s_ps1Scene3DStages[i]) == 0;
+#if PS1_S2_OT_ONLY
+    PS1OTSubRelease();
+#endif
     if (want == (s_ps1Scene3DBlock != nullptr))
         return;
     if (s_ps1Scene3DBlock) {
@@ -141,7 +175,7 @@ void PS1Scene3DPrepare(const char *folder)
         g_ps1Scene3DFrees = g_ps1Scene3DFrees + 1;
         return;
     }
-    const size_t size = FACEBUFFER_SIZE * (sizeof(Face) + 2 * sizeof(DrawListEntry3D))
+    const size_t size = FACEBUFFER_SIZE * (sizeof(Face) + (PS1_S2_OT_ONLY ? 1 : 2) * sizeof(DrawListEntry3D))
                         + VERTEXBUFFER_SIZE * (sizeof(Vertex) + sizeof(PS1ProjEntry)) + 256 * sizeof(PS1ExactEntry)
 #if PS1_GAME != 1
                         + PS1_XY_N * (sizeof(PS1ExactXY) + sizeof(uint16_t))
@@ -1303,6 +1337,10 @@ static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int 
     one.faceID     = i;
     one.depth      = depth;
     g_ps1DrawOrder = &one;
+#if PS1_S2_OT_ONLY
+    if (g_ps1Scene3DScratch == s_ps1DummyScratch) // no scratch (PS1OTSubEnsure): not drawn
+        return nullptr;
+#endif
     PS1ChainCaptureBegin();
     PS1Draw3DList(spriteSheetID, 1);
     uint32_t *first, *last, size;
@@ -1545,6 +1583,7 @@ static void PS1OTCheck(const PS1OTFastState &s0, const PS1OTFastState &out, bool
 void PS1Draw3DSceneOT(int spriteSheetID)
 {
     uint32_t t0        = PS1Hblanks();
+    PS1OTSubEnsure();
     g_ps1Prof3DProject = 0;
     s_ps1FadedHbl = s_ps1GeneralN = 0;
     s_ps1OTCaptured = s_ps1OTTex = 0;
