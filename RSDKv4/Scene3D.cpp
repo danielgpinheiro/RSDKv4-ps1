@@ -494,7 +494,7 @@ static bool PS1MulRNTrunc(long long X, PS1U64 M, int ex, int drop, bool negDet, 
     return true;
 }
 #endif
-static bool PS1MatrixInverseRotation(Matrix *matrix)
+PS1_S2_SMALL static bool PS1MatrixInverseRotation(Matrix *matrix)
 {
     int(*v)[4] = matrix->values;
     if (v[0][3] || v[1][3] || v[2][3] || v[3][0] || v[3][1] || v[3][2] || v[3][3] != 256)
@@ -549,6 +549,62 @@ static bool PS1MatrixInverseRotation(Matrix *matrix)
     return true;
 }
 #endif
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+#define PS1_INV_TABLE 1
+// Sonic 2: upstream's 16 cofactors (MatrixInverse below) as a table: each one's six terms m[a] * m[b] * m[c] in
+// upstream's order, the first negated or not, the others added or subtracted (bit k of s_ps1InvNeg: term k has a minus):
+// the same double operations in the same order, so the same bits (tools/scene3d/inverse_check.sh). Unrolled they were
+// 6.3 KB of soft-float calls, for the inverses that are not rotations (none in the special stage): RAM (docs/43).
+static const uint8_t s_ps1InvTerm[16][6][3] = {
+    {{5, 10, 15}, {5, 11, 14}, {9, 6, 15}, {9, 7, 14}, {13, 6, 11}, {13, 7, 10}}, // inv[0]
+    {{1, 10, 15}, {1, 11, 14}, {9, 2, 15}, {9, 3, 14}, {13, 2, 11}, {13, 3, 10}}, // inv[1]
+    {{1, 6, 15}, {1, 7, 14}, {5, 2, 15}, {5, 3, 14}, {13, 2, 7}, {13, 3, 6}}, // inv[2]
+    {{1, 6, 11}, {1, 7, 10}, {5, 2, 11}, {5, 3, 10}, {9, 2, 7}, {9, 3, 6}}, // inv[3]
+    {{4, 10, 15}, {4, 11, 14}, {8, 6, 15}, {8, 7, 14}, {12, 6, 11}, {12, 7, 10}}, // inv[4]
+    {{0, 10, 15}, {0, 11, 14}, {8, 2, 15}, {8, 3, 14}, {12, 2, 11}, {12, 3, 10}}, // inv[5]
+    {{0, 6, 15}, {0, 7, 14}, {4, 2, 15}, {4, 3, 14}, {12, 2, 7}, {12, 3, 6}}, // inv[6]
+    {{0, 6, 11}, {0, 7, 10}, {4, 2, 11}, {4, 3, 10}, {8, 2, 7}, {8, 3, 6}}, // inv[7]
+    {{4, 9, 15}, {4, 11, 13}, {8, 5, 15}, {8, 7, 13}, {12, 5, 11}, {12, 7, 9}}, // inv[8]
+    {{0, 9, 15}, {0, 11, 13}, {8, 1, 15}, {8, 3, 13}, {12, 1, 11}, {12, 3, 9}}, // inv[9]
+    {{0, 5, 15}, {0, 7, 13}, {4, 1, 15}, {4, 3, 13}, {12, 1, 7}, {12, 3, 5}}, // inv[10]
+    {{0, 5, 11}, {0, 7, 9}, {4, 1, 11}, {4, 3, 9}, {8, 1, 7}, {8, 3, 5}}, // inv[11]
+    {{4, 9, 14}, {4, 10, 13}, {8, 5, 14}, {8, 6, 13}, {12, 5, 10}, {12, 6, 9}}, // inv[12]
+    {{0, 9, 14}, {0, 10, 13}, {8, 1, 14}, {8, 2, 13}, {12, 1, 10}, {12, 2, 9}}, // inv[13]
+    {{0, 5, 14}, {0, 6, 13}, {4, 1, 14}, {4, 2, 13}, {12, 1, 6}, {12, 2, 5}}, // inv[14]
+    {{0, 5, 10}, {0, 6, 9}, {4, 1, 10}, {4, 2, 9}, {8, 1, 6}, {8, 2, 5}}, // inv[15]
+};
+static const uint8_t s_ps1InvNeg[16] = {0x26, 0x19, 0x26, 0x19, 0x19, 0x26, 0x19, 0x26, 0x26, 0x19, 0x26, 0x19, 0x19, 0x26, 0x19, 0x26};
+PS1_S2_SMALL static void PS1MatrixInverseTable(Matrix *matrix)
+{
+    double inv[16], det;
+    double m[16];
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            m[(y << 2) + x] = matrix->values[y][x] / 256.0;
+        }
+    }
+    for (int i = 0; i < 16; ++i) {
+        const uint8_t(*t)[3] = s_ps1InvTerm[i];
+        const int neg        = s_ps1InvNeg[i];
+        double acc           = (neg & 1 ? -m[t[0][0]] : m[t[0][0]]) * m[t[0][1]] * m[t[0][2]];
+        for (int k = 1; k < 6; ++k) {
+            const double p = m[t[k][0]] * m[t[k][1]] * m[t[k][2]];
+            acc            = (neg >> k & 1) ? acc - p : acc + p;
+        }
+        inv[i] = acc;
+    }
+
+    det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+
+    if (det == 0)
+        return;
+
+    det = 1.0 / det;
+
+    for (int i = 0; i < 0x10; ++i) inv[i] = (int)((inv[i] * det) * 256);
+    for (int i = 0; i < 0x10; ++i) matrix->values[i / 4][i % 4] = inv[i];
+}
+#endif
 // -Os (docs/43: RAM): its double fallback was 8.5 KB at -O2; the special stage's inverses take the rotation path above
 PS1_S2_SMALL void MatrixInverse(Matrix *matrix)
 {
@@ -556,6 +612,9 @@ PS1_S2_SMALL void MatrixInverse(Matrix *matrix)
     if (PS1MatrixInverseRotation(matrix))
         return;
 #endif
+#ifdef PS1_INV_TABLE
+    PS1MatrixInverseTable(matrix);
+#else
     double inv[16], det;
     double m[16];
     for (int y = 0; y < 4; ++y) {
@@ -605,6 +664,7 @@ PS1_S2_SMALL void MatrixInverse(Matrix *matrix)
 
     for (int i = 0; i < 0x10; ++i) inv[i] = (int)((inv[i] * det) * 256);
     for (int i = 0; i < 0x10; ++i) matrix->values[i / 4][i % 4] = inv[i];
+#endif
 }
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
