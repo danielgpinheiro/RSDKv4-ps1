@@ -943,6 +943,8 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1TextMsgUpdate", 0),
     FunctionInfo("PS1TextMsgDraw", 0),
     FunctionInfo("PS1SpecialHUDDraw", 0),
+    FunctionInfo("PS1SpecialCtrlP1", 0),
+    FunctionInfo("PS1SpecialCtrlP2", 0),
 #endif
 #endif
 };
@@ -1518,6 +1520,8 @@ enum ScrFunc {
     FUNC_PS1TEXTMSGUPDATE,
     FUNC_PS1TEXTMSGDRAW,
     FUNC_PS1SPECIALHUDDRAW,
+    FUNC_PS1SPECIALCTRLP1,
+    FUNC_PS1SPECIALCTRLP2,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -11270,6 +11274,215 @@ static void PS1SpecialHUDDraw()
         }
     }
 }
+// The special stage's player controls (Special function 2: the first player's touch keys, ProcessObjectControl, a
+// demo's input table; function 3: Tails's CPU, player 1's input delayed through six 16-bit shift registers in locals
+// 7438-7443; both then the blink timer), natively: one statement per script instruction, in order (t = temps, cr = the
+// check result, ap = array positions, G = globals, E() = the running entity, re-read as the VM re-reads
+// objectEntityPos; key variables with the VM's inputCheck, their array index being the running entity). Function
+// bodies: the VM's `return` after the opcode ends the call. Patched in only when each function and its jump-table
+// entries match SPCTRL1_FN_SIG / SPCTRL2_FN_SIG (docs/43: ~45 VM instructions a frame for Tails, 25 for the first
+// player; the shift registers hold up to 0xFFFF, so every one of Tails's goes through the big-value table).
+__attribute__((optimize("Os"))) static void PS1SpecialCtrlP1()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr = scriptEng.checkResult;
+    int *G  = globalVariables;
+    auto E  = []() -> Entity & { return objectEntityList[objectEntityPos]; };
+    auto ic = []() { return !(forceUseScripts || Engine.usingOrigins) || objectEntityPos <= 1; }; // inputCheck
+    auto L  = [](int pos) { return (int)scriptCode[pos]; };
+    auto touch = [&](int l, int tp, int r, int b) { // FUNC_CHECKTOUCHRECT
+        cr = -1;
+#if !RETRO_USE_ORIGINAL_CODE
+        AddDebugHitbox(H_TYPE_FINGER, NULL, l, tp, r, b);
+#endif
+        for (int f = 0; f < touches; ++f) {
+            if (touchDown[f] && touchX[f] > l && touchX[f] < r && touchY[f] > tp && touchY[f] < b)
+                cr = f;
+        }
+    };
+    auto pause = [&]() {
+        if (G[13] == 0) {
+            PlaySfx(23, 0);
+            Engine.gameMode = 5;
+        }
+    };
+    if (G[5] == 0) {
+        if (G[7] == 1) {
+            if (E().controlMode == 0) {
+                touch(0, 96, SCREEN_CENTERX, SCREEN_YSIZE);
+                if (cr > -1) {
+                    ap[0] = cr;
+                    t[0]  = touchX[ap[0]];
+                    t[0] -= saveRAM[39];
+                    if (t[0] > 0) {
+                        if (ic())
+                            keyDown.right = 1;
+                    }
+                    else {
+                        if (ic())
+                            keyDown.left = 1;
+                    }
+                }
+                touch(SCREEN_CENTERX, 96, SCREEN_XSIZE, 240);
+                if (cr > -1) {
+                    if (ic())
+                        keyDown.A = 1;
+                }
+                if (G[102] == 0) { // Or KEYPRESSBUTTONA KEYDOWNBUTTONA
+                    int a = keyPress.A && ic();
+                    a |= keyDown.A && ic();
+                    if (ic())
+                        keyPress.A = a;
+                }
+                G[102] = keyDown.A && ic();
+                if (debugMode == 1) {
+                    touch(0, 0, 112, 56);
+                    if (cr > -1) {
+                        if (ic())
+                            keyDown.B = 1;
+                    }
+                    if (G[103] == 0) {
+                        int b = keyPress.B && ic();
+                        b |= keyDown.B && ic();
+                        if (ic())
+                            keyPress.B = b;
+                    }
+                    G[103] = keyDown.B && ic();
+                }
+                touch(240, 0, SCREEN_XSIZE, 40);
+                if (cr > -1)
+                    pause();
+                if ((keyPress.start && ic()) == 1)
+                    pause();
+                if ((keyDown.B && ic()) == 2) // the mobile back key's pause, its 1 patched to 2 (patch_back_pause)
+                    pause();
+            }
+        }
+        ProcessObjectControl(&E());
+        if (G[13] == 1) {
+            E().values[24] = L(7457);
+            int *op = scriptEng.operands; // CallNativeFunction2 GLOBAL[137] 2 0
+            op[0] = G[137], op[1] = 2, op[2] = 0;
+            if (op[0] >= 0 && op[0] < NATIIVEFUNCTION_COUNT) {
+                if (StrLength(scriptText)) {
+                    void (*func)(int *, char *) = (void (*)(int *, char *))nativeFunction[op[0]];
+                    if (func)
+                        func(&op[2], scriptText);
+                }
+                else {
+                    void (*func)(int *, int *) = (void (*)(int *, int *))nativeFunction[op[0]];
+                    if (func)
+                        func(&op[1], &op[2]);
+                }
+            }
+            G[137] = op[0];
+        }
+    }
+    else {
+        touch(0, 0, SCREEN_XSIZE, SCREEN_YSIZE);
+        if ((keyPress.start && ic()) == 1)
+            cr = 0;
+        if (cr > -1) {
+            if (L(7448) > 1)
+                PS1ScriptWrite(7448, 1);
+        }
+        if ((keyPress.start && ic()) == 1)
+            PS1ScriptWrite(7448, 1);
+        PS1ScriptWrite(7447, L(7447) - 1);
+        if (L(7447) < 1) {
+            if (L(7445) < L(7446)) {
+                if (L(7445) >= 0 && L(7445) < scriptCode[L(7444)]) // GetTableValue TEMP0 LOCAL7445 LOCAL7444
+                    t[0] = scriptCode[L(7444) + L(7445) + 1];
+                E().up        = (t[0] & (1 << 0)) >> 0;
+                E().down      = (t[0] & (1 << 1)) >> 1;
+                E().left      = (t[0] & (1 << 2)) >> 2;
+                E().right     = (t[0] & (1 << 3)) >> 3;
+                E().jumpPress = (t[0] & (1 << 4)) >> 4;
+                E().jumpHold  = (t[0] & (1 << 5)) >> 5;
+                PS1ScriptWrite(7445, L(7445) + 1);
+                if (L(7445) >= 0 && L(7445) < scriptCode[L(7444)]) // GetTableValue LOCAL7447 LOCAL7445 LOCAL7444
+                    PS1ScriptWrite(7447, scriptCode[L(7444) + L(7445) + 1]);
+                PS1ScriptWrite(7445, L(7445) + 1);
+            }
+        }
+        else {
+            if (E().jumpPress == 1)
+                E().jumpPress = 0;
+        }
+        if (L(7448) > 0) {
+            PS1ScriptWrite(7448, L(7448) - 1);
+            if (L(7448) < 1) {
+                ap[0]                    = L(7456);
+                PS1_OBJ(ap[0]).type      = 0;
+                PS1_OBJ(ap[0]).state     = 8;
+                PS1_OBJ(ap[0]).priority  = 1;
+                PS1_OBJ(ap[0]).drawOrder = 6;
+            }
+        }
+    }
+    if (E().values[7] > 0) {
+        E().values[7]--;
+        t[0] = (E().values[7] & (1 << 2)) >> 2;
+        if (t[0] == 1)
+            E().visible = 0;
+        else
+            E().visible = 1;
+    }
+}
+// ShL LOCAL 1 / Or LOCAL bit / And LOCAL 65535 (each written back by the VM): a slot that already holds a big value is
+// updated in place, so only the last of the three writes shows (nothing reads in between) and only it is made;
+// otherwise the three writes as the VM makes them (one may insert the slot into the table), each re-read
+static int PS1LocalShiftIn(int pos, int bit)
+{
+    if (scriptCode.slot[pos] == PS1_SCRIPT_BIG) {
+        const int v = ((scriptCode[pos] << 1) | bit) & 65535;
+        PS1ScriptWrite(pos, v);
+        return v;
+    }
+    PS1ScriptWrite(pos, scriptCode[pos] << 1);
+    PS1ScriptWrite(pos, scriptCode[pos] | bit);
+    PS1ScriptWrite(pos, scriptCode[pos] & 65535);
+    return scriptCode[pos];
+}
+static void PS1SpecialCtrlP2()
+{
+    int *t     = scriptEng.temp;
+    Entity &p1 = PS1_OBJ(2);
+    int r[6];
+    r[0] = PS1LocalShiftIn(7438, p1.up);
+    r[1] = PS1LocalShiftIn(7439, p1.down);
+    r[2] = PS1LocalShiftIn(7440, p1.left);
+    r[3] = PS1LocalShiftIn(7441, p1.right);
+    r[4] = PS1LocalShiftIn(7442, p1.jumpPress);
+    r[5] = PS1LocalShiftIn(7443, p1.jumpHold);
+    Entity &me = objectEntityList[objectEntityPos];
+    t[0]       = r[0];
+    t[0] >>= 15;
+    me.up = t[0];
+    t[0]  = r[1];
+    t[0] >>= 15;
+    me.down = t[0];
+    t[0]    = r[2];
+    t[0] >>= 15;
+    me.left = t[0];
+    t[0]    = r[3];
+    t[0] >>= 15;
+    me.right = t[0];
+    t[0]     = r[4];
+    t[0] >>= 15;
+    me.jumpPress = t[0];
+    t[0]         = r[5];
+    t[0] >>= 15;
+    me.jumpHold = t[0];
+    if (me.values[7] > 0) {
+        me.values[7]--;
+        t[0] = (me.values[7] & (1 << 2)) >> 2;
+        if (t[0] == 1)
+            me.visible = 0;
+        else
+            me.visible = 1;
+    }
+}
 #endif
 __attribute__((optimize("Os"))) static void PS1TextMsgDraw()
 {
@@ -13997,6 +14210,14 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALHUDDRAW:
                 opcodeSize = 0;
                 PS1SpecialHUDDraw();
+                break;
+            case FUNC_PS1SPECIALCTRLP1: // a function body
+                opcodeSize = 0;
+                PS1SpecialCtrlP1();
+                break;
+            case FUNC_PS1SPECIALCTRLP2: // a function body
+                opcodeSize = 0;
+                PS1SpecialCtrlP2();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;
