@@ -2934,7 +2934,7 @@ extern volatile uint32_t g_ps1PerfFrames;
 // The words depend only on the UV box, the sheet, the blend and the atlas state they were made in (the sheet binding
 // g_ps1SurfaceGen, the atlas load, its CLUT count; picture clusters are never cached): entries stay valid across frames
 // (docs/43: keyed on the frame, every box missed once a frame and took the full path)
-static inline bool PS1TexWordCurrent(const PS1TexWordCache &e)
+__attribute__((always_inline)) static inline bool PS1TexWordCurrent(const PS1TexWordCache &e)
 {
     return e.surf == g_ps1SurfaceGen && e.atlas == g_ps1AtlasLoads && e.cluts == (uint32_t)g_ps1AtlasClutCount;
 }
