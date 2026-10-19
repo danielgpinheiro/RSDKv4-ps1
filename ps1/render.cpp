@@ -2488,15 +2488,14 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         rotation = 0x200 - rotation;
     // Wholly off screen (as Sonic 1's version above, docs/43: the special stage's message letters fly off at ~10x): each
     // corner PS1AffineCorners makes is within R + 2 of (XPos, YPos) (|sn|, |cs| <= |scale|; the shifts' floors, and the
-    // fourth corner q1 + q2 - q0 adds up three of them). When that square is off screen and within the GPU limits every
-    // piece below is culled without a counter, and Sonic 2's atlases have no on-demand pictures (PS1DrawSprite's cull):
-    // nothing is lost by not looking the pieces up.
+    // fourth corner q1 + q2 - q0 adds up three of them). When that square is off screen every piece below is culled
+    // (with g_ps1LimitFix), and Sonic 2's atlases have no on-demand pictures (PS1DrawSprite's cull): nothing drawn is lost
+    // by not looking the pieces up. (The diagnostic g_ps1WrapCulled then counts only the pieces of sprites on screen.)
     if (g_ps1LimitFix) {
         int ax = pivotX < 0 ? -pivotX : pivotX, bx = width - pivotX, ay = pivotY < 0 ? -pivotY : pivotY, by = height - pivotY;
         bx = bx < 0 ? -bx : bx, by = by < 0 ? -by : by;
         const int R = (((ax > bx ? ax : bx) + (ay > by ? ay : by)) * (scale < 0 ? -scale : scale) >> 9) + 3;
-        if ((XPos + R <= 0 || YPos + R <= 0 || XPos - R >= SCREEN_XSIZE || YPos - R >= SCREEN_YSIZE)
-            && !PS1BeyondGpuLimits(XPos - R, YPos - R, XPos + R, YPos + R)) {
+        if (XPos + R <= 0 || YPos + R <= 0 || XPos - R >= SCREEN_XSIZE || YPos - R >= SCREEN_YSIZE) {
             g_ps1AffineCulled = g_ps1AffineCulled + 1;
             return;
         }
