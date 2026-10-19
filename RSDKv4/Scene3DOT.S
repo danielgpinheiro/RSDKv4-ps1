@@ -174,33 +174,10 @@ L_face:
     bltz    $t5, L_neg              # fogStr < 0 (fogMax < 0): alpha > 255 -> 255
     subu    $t7, $t7, $t5           # alpha = 255 - fogStr
 L_alpha:
-    # off-screen / degenerate (x, y are -1024..1023): all x < 0 (bit 15), all y < 0 (bit 31), all x > xMax (low half
-    # of p - (xMax + 1) not negative), all y > yMax (high half of p - ((yMax + 1) << 16) not negative), all x equal,
-    # all y equal
-    and     $at, $t0, $t1
-    and     $at, $at, $t2
-    and     $at, $at, $t3
-    andi    $t5, $at, 0x8000
-    bnez    $t5, L_cull
-    addu    $t5, $t0, $a0
-    bltz    $at, L_cull
-    addu    $t6, $t1, $a0
-    or      $t5, $t5, $t6
-    addu    $t6, $t2, $a0
-    or      $t5, $t5, $t6
-    addu    $t6, $t3, $a0
-    or      $t5, $t5, $t6
-    andi    $t5, $t5, 0x8000
-    beqz    $t5, L_cull
-    lui     $at, QYN_HI
-    addu    $t5, $t0, $at
-    addu    $t6, $t1, $at
-    or      $t5, $t5, $t6
-    addu    $t6, $t2, $at
-    or      $t5, $t5, $t6
-    addu    $t6, $t3, $at
-    or      $t5, $t5, $t6
-    bgez    $t5, L_cull
+    # degenerate faces (all x equal or all y equal: no pixel) are not drawn. A face wholly off the 320 x 240 screen is
+    # written anyway: its corners are within the GTE's -1024..1023, so the GPU clips it to the drawing area (nothing
+    # drawn, a few GPU cycles); the CPU tests cost ~25 instructions a face (docs/43 C1: pictures identical, chain words
+    # not)
     xor     $t5, $t0, $t1
     xor     $t6, $t0, $t2
     or      $t5, $t5, $t6

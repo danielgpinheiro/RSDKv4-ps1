@@ -1139,13 +1139,14 @@ static void PS1OTCheck(const PS1OTFastState &s0, int i, const PS1OTFastState &ou
         int cull = (x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) ? 2 : (x0 > xMax && x1 > xMax && x2 > xMax && x3 > xMax) ? 3
                  : (y0 < 0 && y1 < 0 && y2 < 0 && y3 < 0) ? 4 : (y0 > yMax && y1 > yMax && y2 > yMax && y3 > yMax) ? 5
                  : (x0 == x1 && x1 == x2 && x2 == x3) ? 6 : (y0 == y1 && y1 == y2 && y2 == y3) ? 7 : 0;
-        // 2d87dee's packed tests decide, the unpacked ones only label the coverage
-        const uint32_t pn = pa & pb & pc & pd;
-        const uint32_t px = (pa - qx) | (pb - qx) | (pc - qx) | (pd - qx), py = (pa - qy) | (pb - qy) | (pc - qy) | (pd - qy);
+        // only degenerate faces are culled (2d87dee's packed tests); a face wholly off screen (labels 2-5) is drawn and
+        // left to the GPU's drawing area since the off-screen tests went (pictures identical)
         const uint32_t eq = (pa ^ pb) | (pa ^ pc) | (pa ^ pd);
-        if ((pn & 0x80008000u) || !(px & 0x8000) || !(py & 0x80000000u) || !(eq & 0xFFFF) || !(eq & 0xFFFF0000u)) {
-            ++s.culled;
+        if (cull >= 2 && cull <= 5)
             g_ps1OTCheckCover[cull] = g_ps1OTCheckCover[cull] + 1;
+        if (!(eq & 0xFFFF) || !(eq & 0xFFFF0000u)) {
+            ++s.culled;
+            g_ps1OTCheckCover[6 + !!(eq & 0xFFFF)] = g_ps1OTCheckCover[6 + !!(eq & 0xFFFF)] + 1;
             if (s.rec[i].first)
                 PS1OTCheckFail(i);
             continue;
