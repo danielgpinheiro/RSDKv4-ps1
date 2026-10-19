@@ -762,8 +762,6 @@ static void PS1ExactXYPass(int count)
         const int v = *p, z = pj[v].v;
         if (z <= 0)
             continue;
-        if (z == 0) // (never: tells GCC the divisions below need no zero trap)
-            __builtin_unreachable();
         const Vertex &q = vb[v];
         const int x = q.x, y = q.y, w = q.z;
         const int tx = (x * m00 >> 8) + (y * m10 >> 8) + (w * m20 >> 8) + m30;

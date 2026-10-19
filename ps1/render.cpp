@@ -2997,13 +2997,11 @@ uint32_t *PS1TexturedRectOT(int x0, int y0, int x1, int y1, int u0, int v0, int 
         return nullptr;
     const int xmin = x0 < x1 ? x0 : x1, xmax = x0 < x1 ? x1 : x0, ymin = y0 < y1 ? y0 : y1, ymax = y0 < y1 ? y1 : y0;
     const uint32_t key = (uint32_t)sheetID | (uint32_t)blended << 8 | 1u << 16;
-    PS1TexWordCache *e = nullptr;
-    if (!PS1BeyondGpuLimits(xmin, ymin, xmax, ymax) && xmax > 0 && ymax > 0 && xmin < SCREEN_XSIZE && ymin < SCREEN_YSIZE
-        && xmin != xmax && ymin != ymax) {
-        e = &s_texWordCache[((uint32_t)u0 * 7 + (uint32_t)v0 * 13 + (uint32_t)u1 * 3 + (uint32_t)v1 + key) & (PS1_TEXWORD_N - 1)];
-        if (e->key != key || e->u0 != u0 || e->v0 != v0 || e->u1 != u1 || e->v1 != v1 || !PS1TexWordCurrent(*e))
-            e = nullptr;
-        else {
+    const bool beyond = PS1BeyondGpuLimits(xmin, ymin, xmax, ymax);
+    const bool off    = xmax <= 0 || ymax <= 0 || xmin >= SCREEN_XSIZE || ymin >= SCREEN_YSIZE || xmin == xmax || ymin == ymax;
+    if (!beyond && !off) {
+        PS1TexWordCache *e = &s_texWordCache[((uint32_t)u0 * 7 + (uint32_t)v0 * 13 + (uint32_t)u1 * 3 + (uint32_t)v1 + key) & (PS1_TEXWORD_N - 1)];
+        if (e->key == key && e->u0 == u0 && e->v0 == v0 && e->u1 == u1 && e->v1 == v1 && PS1TexWordCurrent(*e)) {
             uint32_t *h = PS1ChainOTRaw(9);
             if (!h)
                 return nullptr;
@@ -3013,7 +3011,14 @@ uint32_t *PS1TexturedRectOT(int x0, int y0, int x1, int y1, int u0, int v0, int 
             return h;
         }
     }
-    uint32_t w[9]; // a miss, beyond the limits, off screen: PS1TexturedRectFast as it is
+    else if (!beyond && g_ps1LimitFix) {
+        // off screen within the GPU limits (a ring or bomb beside / behind the camera): PS1TexturedRectFast hands it to
+        // PS1TexturedRectWords, which looks the sheet up (counting an unbound one) and returns false: the same, at once
+        if (PS1SurfaceSheet(sheetID) < 0)
+            g_ps1SheetUnbound = g_ps1SheetUnbound + 1;
+        return nullptr;
+    }
+    uint32_t w[9]; // a miss, beyond the limits: PS1TexturedRectFast as it is
     if (!PS1TexturedRectFast(x0, y0, x1, y1, u0, v0, u1, v1, sheetID, blended, w))
         return nullptr;
     uint32_t *h = PS1ChainOTRaw(9);
