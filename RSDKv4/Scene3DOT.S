@@ -458,12 +458,11 @@ PS1OTLinkAsm:
     lui     $t6, 0x00FF
     ori     $t6, $t6, 0xFFFF        # 0xffffff
     sll     $t0, $a1, 3
-    addu    $t0, $a0, $t0           # one past the record being linked
+    addu    $t0, $a0, $t0           # one past the last record
     beq     $t0, $a0, K_done
-    nop
+    addiu   $t0, $t0, -8            # the record being linked (the loop's delay slot steps to the next one)
     .balign 16
 K_loop:
-    addiu   $t0, $t0, -8
     lw      $t1, 4($t0)             # first
     lw      $t2, 0($t0)             # depth
     beqz    $t1, K_next
@@ -480,7 +479,7 @@ K_loop:
     sw      $t5, 0($t2)
 K_next:
     bne     $t0, $a0, K_loop
-    nop
+    addiu   $t0, $t0, -8
 K_done:
     jr      $ra
     nop
