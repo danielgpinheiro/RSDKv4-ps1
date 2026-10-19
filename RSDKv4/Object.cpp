@@ -192,6 +192,37 @@ volatile uint32_t g_ps1ObjSlotsWalked = 0;
 // the ~400 live slots, and (2) the slots whose process flag it sets recorded in order: only this loop sets the flag,
 // so the type groups are built from that list (PS1BuildTypeGroupsFrom) instead of another walk of all slots.
 static short s_ps1Processed[ENTITY_COUNT];
+#if PS1_GAME != 1
+// processObjectFlag's true entries are the last ProcessObjects' list (s_ps1Processed[0..s_ps1ProcessedN)) unless another
+// process variant wrote every flag since (s_ps1FlagsAll): only Object.cpp writes the flags, and nothing reads them
+// while the loop below runs (the type groups are built after it)
+static int s_ps1ProcessedN = 0;
+static bool s_ps1FlagsAll  = true;
+// The first slot from e on (e itself included) that has a type and isn't PRIORITY_INACTIVE, else end: 8 instructions a
+// slot (GCC's loop was 12: load-delay nops, two more counters). The loads at end read the slot after the list (RAM).
+static_assert(offsetof(Entity, type) == 250 && offsetof(Entity, priority) == 252 && sizeof(Entity) == 280
+                  && PRIORITY_INACTIVE == 5,
+              "PS1ScanLive's constants");
+static inline Entity *PS1ScanLive(Entity *e, Entity *end)
+{
+    uint32_t t, p;
+    __asm__(".set push\n.set noreorder\n"
+            "1:  lbu   %1, 250(%0)\n"
+            "    lbu   %2, 252(%0)\n"
+            "    beq   %0, %3, 2f\n"
+            "    addiu %0, %0, 280\n"
+            "    beqz  %1, 1b\n"
+            "    addiu %2, %2, -5\n"
+            "    beqz  %2, 1b\n"
+            "    nop\n"
+            "2:  addiu %0, %0, -280\n"
+            ".set pop\n"
+            : "+r"(e), "=&r"(t), "=&r"(p)
+            : "r"(end)
+            : "memory");
+    return e;
+}
+#endif
 void ProcessObjects()
 {
 #if PS1_PROFILE
@@ -214,19 +245,33 @@ void ProcessObjects()
         sy4 = yScrollOffset + OBJECT_BORDER_Y4;
     };
     bounds();
+#if PS1_GAME != 1
+    // The flags cleared up front (the true ones only): a blank or inactive slot then costs two loads (docs/43; the
+    // special stage walks ~1,100 of them every frame)
+    if (s_ps1FlagsAll) {
+        memset(processObjectFlag, 0, sizeof(processObjectFlag));
+        s_ps1FlagsAll = false;
+    }
+    else {
+        for (int k = 0; k < s_ps1ProcessedN; ++k) processObjectFlag[s_ps1Processed[k]] = false;
+    }
+#endif
     // The slot index is a local (the global objectEntityPos, which scripts read, is set only around their runs and left
     // at ENTITY_COUNT as upstream's loop leaves it): no global load / store for each of the 896 slots (docs/30 7.2b).
+#if PS1_GAME != 1
+    // A blank slot does nothing below (see the #else), nor does an inactive one (the switch below leaves its flag false;
+    // objectEntityPos is set again before any script runs): the special stage's ~700 rings and bombs the pipe hasn't
+    // reached (docs/43 C7). Each next slot is read after the previous one's script ran, as before.
+    Entity *const ps1End = objectEntityList + ENTITY_COUNT;
+    for (Entity *entity = PS1ScanLive(objectEntityList, ps1End); entity != ps1End; entity = PS1ScanLive(entity + 1, ps1End)) {
+        const int pos = entity - objectEntityList;
+#else
     Entity *entity = objectEntityList;
     for (int pos = 0; pos < ENTITY_COUNT; ++pos, ++entity) {
         processObjectFlag[pos] = false;
         // A blank slot does nothing below (the priority switch only decides whether a typed object runs; its
         // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/28).
         if (entity->type == OBJ_TYPE_BLANKOBJECT)
-            continue;
-#if PS1_GAME != 1
-        // An inactive slot does nothing either (the switch below leaves its flag false; objectEntityPos is set again
-        // before any script runs): the special stage's ~700 rings and bombs the pipe hasn't reached (docs/43 C7)
-        if (entity->priority == PRIORITY_INACTIVE)
             continue;
 #endif
         objectEntityPos = pos;
@@ -280,6 +325,9 @@ void ProcessObjects()
     }
     objectEntityPos = ENTITY_COUNT;
 
+#if PS1_GAME != 1
+    s_ps1ProcessedN = processed;
+#endif
     PS1BuildTypeGroupsFrom(s_ps1Processed, processed);
 }
 #else
@@ -384,6 +432,9 @@ void ProcessObjects()
 #endif
 void ProcessPausedObjects()
 {
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1
+    s_ps1FlagsAll = true; // writes every flag (ProcessObjects' list no longer covers the true ones)
+#endif
     for (int i = 0; i < DRAWLAYER_COUNT; ++i) drawListEntries[i].listSize = 0;
 
     for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
@@ -401,6 +452,9 @@ void ProcessPausedObjects()
 }
 void ProcessFrozenObjects()
 {
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1
+    s_ps1FlagsAll = true; // writes every flag (ProcessObjects' list no longer covers the true ones)
+#endif
     for (int i = 0; i < DRAWLAYER_COUNT; ++i) drawListEntries[i].listSize = 0;
 
     for (objectEntityPos = 0; objectEntityPos < ENTITY_COUNT; ++objectEntityPos) {
@@ -480,6 +534,9 @@ void ProcessFrozenObjects()
 #if !RETRO_REV00
 void Process2PObjects()
 {
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1
+    s_ps1FlagsAll = true; // writes every flag (ProcessObjects' list no longer covers the true ones)
+#endif
     for (int i = 0; i < DRAWLAYER_COUNT; ++i) drawListEntries[i].listSize = 0;
 
     int boundX1 = -(0x200 << 16);

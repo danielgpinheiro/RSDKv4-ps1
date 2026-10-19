@@ -7,8 +7,9 @@ T=$(mktemp -d)
 python3 - "$T" <<'PY'
 import sys
 s = open('RSDKv4/Scene3D.cpp').read()
-i = s.index('static bool PS1MatrixInverseRotation')
-open(sys.argv[1] + '/fast.inc', 'w').write(s[i:s.index('\n}\n', i) + 3])
+i = s.index('typedef unsigned long long PS1U64;')  # the integer helpers, then PS1MatrixInverseRotation
+k = s.index('static bool PS1MatrixInverseRotation')
+open(sys.argv[1] + '/fast.inc', 'w').write(s[i:s.index('\n}\n', k) + 3])
 j = s.index('void MatrixInverse(Matrix *matrix)')
 body = s[j:s.index('\n}\n', j) + 3]
 body = body.replace('void MatrixInverse(', 'static void MatrixInverseUp(')
@@ -17,6 +18,7 @@ open(sys.argv[1] + '/up.inc', 'w').write(body)
 PY
 cat > "$T/t.cpp" <<'CPP'
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

@@ -379,6 +379,82 @@ void MatrixRotateXYZ(Matrix *matrix, short rotationX, short rotationY, short rot
 // corner: a rotation, as MatrixRotateXYZ makes) all of its products and sums are exact (integers over powers of two)
 // until 1.0 / det: integer cofactors, then the same double operations -> the same bits (tools/scene3d/inverse_check.sh,
 // 3,000,000 cases). Anything else takes upstream's code.
+// The doubles below in integers (docs/43: ~30 soft-float calls an inverse, every frame): RN(2^24 / A) for A > 0 as M * 2^ex
+// (M in [2^52, 2^53), round to nearest even, as the soft-float division), by restoring long division.
+typedef unsigned long long PS1U64;
+#if PS1_GAME != 1 // Sonic 2 (Sonic 1's EXE stays as it was: its inverses keep the doubles)
+static int PS1BitLen64(PS1U64 v)
+{
+    int n = 0;
+    if (v >> 32) n += 32, v >>= 32;
+    uint32_t w = (uint32_t)v;
+    if (w >> 16) n += 16, w >>= 16;
+    if (w >> 8) n += 8, w >>= 8;
+    if (w >> 4) n += 4, w >>= 4;
+    if (w >> 2) n += 2, w >>= 2;
+    if (w >> 1) n += 1, w >>= 1;
+    return n + (int)w;
+}
+static void PS1RecipRN(PS1U64 A, PS1U64 &M, int &ex)
+{
+    const int k = PS1BitLen64(A); // A in [2^(k-1), 2^k)
+    if (A == 1ull << (k - 1)) {
+        M = 1ull << 52, ex = 24 - (52 + k - 1);
+        return;
+    }
+    PS1U64 q = 1, r = (1ull << k) - A; // 2^k / A: 1, remainder 2^k - A
+    for (int j = 0; j < 52; ++j) {
+        r <<= 1, q <<= 1;
+        if (r >= A)
+            r -= A, q |= 1;
+    }
+    ex = 24 - (52 + k); // q = floor(2^(52 + k) / A) in (2^52, 2^53)
+    r <<= 1;
+    if (r > A || (r == A && (q & 1)))
+        if (++q == 1ull << 53)
+            q >>= 1, ++ex;
+    M = q;
+}
+// trunc(RN(X * M * 2^ex) * 2^-drop) for X != 0 (the product rounded to 53 bits as a double, then (int) of the value scaled
+// by a power of two); false when the result would not fit an int (the caller's double code decides then).
+static bool PS1MulRNTrunc(long long X, PS1U64 M, int ex, int drop, bool negDet, int &out)
+{
+    const bool neg = (X < 0) != negDet;
+    const PS1U64 ax = X < 0 ? -(PS1U64)X : (PS1U64)X; // < 2^50
+    const uint32_t x0 = (uint32_t)ax, x1 = (uint32_t)(ax >> 32), m0 = (uint32_t)M, m1 = (uint32_t)(M >> 32);
+    const PS1U64 lo = (PS1U64)x0 * m0, mid = (PS1U64)x0 * m1 + (PS1U64)x1 * m0;
+    PS1U64 plo = lo + (mid << 32);
+    PS1U64 phi = (PS1U64)x1 * m1 + (mid >> 32) + (plo < lo);
+    const int b = phi ? 64 + PS1BitLen64(phi) : PS1BitLen64(plo);
+    PS1U64 m;
+    int sh = 0;
+    if (b > 53) {
+        sh = b - 53; // <= 49
+        m = (plo >> sh) | (phi << (64 - sh));
+        const PS1U64 rem = plo & ((1ull << sh) - 1), half = 1ull << (sh - 1);
+        if (rem > half || (rem == half && (m & 1)))
+            if (++m == 1ull << 53)
+                m >>= 1, ++sh;
+    }
+    else {
+        m = plo;
+    }
+    const int e = sh + ex - drop;
+    PS1U64 v;
+    if (e >= 0) {
+        if (e > 30 || (m << e) >> 31)
+            return false;
+        v = m << e;
+    }
+    else {
+        v = -e >= 64 ? 0 : m >> -e;
+        if (v >> 31)
+            return false;
+    }
+    out = neg ? -(int)v : (int)v;
+    return true;
+}
+#endif
 static bool PS1MatrixInverseRotation(Matrix *matrix)
 {
     int(*v)[4] = matrix->values;
@@ -399,6 +475,26 @@ static bool PS1MatrixInverseRotation(Matrix *matrix)
     if (D == 0)
         return true; // upstream returns: matrix unchanged
     const i64 D15 = a * e * k - a * f * h - d * b * k + d * c * h + g * b * f - g * c * e; // inv[15] * 2^24
+#if PS1_GAME != 1
+    // det = 1.0 / (D / 2^24) = RN(2^24 / D); each entry (int)(((X / 2^s) * det) * 256) = trunc(RN(X * det) / 2^(s - 8))
+    // (scalings by powers of two are exact): in integers, the doubles only where the result would not fit an int
+    PS1U64 M;
+    int ex;
+    PS1RecipRN(D < 0 ? -(PS1U64)D : (PS1U64)D, M, ex);
+    int out[16];
+    for (int i = 0; i < 16; ++i) {
+        const i64 X = i == 15 ? D15 : N[i];
+        if (!X) { // 0.0 * det * 256 truncates to 0 (det is finite): N[3], [7], [11]-[14] always, the others when an entry is
+            out[i] = 0;
+            continue;
+        }
+        if (PS1MulRNTrunc(X, M, ex, i == 15 ? 16 : 8, D < 0, out[i]))
+            continue;
+        double det = 1.0 / ((double)D / 16777216.0);
+        double inv = i == 15 ? (double)D15 / 16777216.0 : (double)N[i] / 65536.0;
+        out[i]     = (int)((inv * det) * 256);
+    }
+#else
     double det = 1.0 / ((double)D / 16777216.0);
     int out[16];
     for (int i = 0; i < 16; ++i) {
@@ -409,6 +505,7 @@ static bool PS1MatrixInverseRotation(Matrix *matrix)
         double inv = i == 15 ? (double)D15 / 16777216.0 : (double)N[i] / 65536.0;
         out[i]     = (int)((inv * det) * 256);
     }
+#endif
     for (int i = 0; i < 16; ++i) v[i / 4][i % 4] = out[i];
     return true;
 }
