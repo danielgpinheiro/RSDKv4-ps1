@@ -298,6 +298,7 @@ static const uint16_t *PS1PaletteFor(int bank)
 static uint16_t s_palSrc[256];
 static int s_palSrcBank = -1, s_palSrcCluts = -1;
 static uint32_t s_palSrcAtlas = 0;
+static uint s_palSrcVersion = 0; // g_ps1PalVersion when s_palSrc was last compared (no write since: nothing changed)
 __attribute__((noinline, optimize("Os"))) static void PS1BuildPaletteCached(int bank)
 {
     if (s_fadePending || bank != s_palSrcBank || g_ps1AtlasLoads != s_palSrcAtlas || g_ps1AtlasClutCount != s_palSrcCluts) {
@@ -308,8 +309,12 @@ __attribute__((noinline, optimize("Os"))) static void PS1BuildPaletteCached(int 
         }
         memcpy(s_palSrc, fullPalette[bank], sizeof(s_palSrc));
         s_palSrcBank = bank, s_palSrcAtlas = g_ps1AtlasLoads, s_palSrcCluts = g_ps1AtlasClutCount;
+        s_palSrcVersion = g_ps1PalVersion;
         return;
     }
+    if (s_palSrcVersion == g_ps1PalVersion) // no palette write since the last compare: s_palSrc is the palette
+        return;
+    s_palSrcVersion    = g_ps1PalVersion;
     const ushort *p565 = fullPalette[bank];
     bool changed       = false;
     for (int i = 1; i < 256; ++i) {

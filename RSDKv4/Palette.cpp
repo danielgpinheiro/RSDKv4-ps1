@@ -7,6 +7,9 @@ PaletteEntry *activePalette32 = fullPalette32[0];
 // Palettes (as RGB565 Colors)
 ushort fullPalette[PALETTE_COUNT][PALETTE_COLOR_COUNT];
 ushort *activePalette = fullPalette[0]; // Ptr to the 256 color set thats active
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+uint g_ps1PalVersion = 0;
+#endif
 
 #if RETRO_PLATFORM == RETRO_PS1
 byte gfxLineBuffer[SCREEN_YSIZE] __attribute__((aligned(4))); // Pointers to active palette (PS1: read 4 lines a word)
@@ -62,6 +65,7 @@ void LoadPalette(const char *filePath, int paletteID, int startPaletteIndex, int
 #if RETRO_REV00
 void SetLimitedFade(byte paletteID, byte R, byte G, byte B, ushort blendAmount, int startIndex, int endIndex)
 {
+    PS1_PAL_WRITTEN();
     if (paletteID >= PALETTE_COUNT)
         return;
     paletteMode     = 1;
@@ -88,6 +92,7 @@ void SetLimitedFade(byte paletteID, byte R, byte G, byte B, ushort blendAmount, 
 #else
 void SetPaletteFade(byte destPaletteID, byte srcPaletteA, byte srcPaletteB, ushort blendAmount, int startIndex, int endIndex)
 {
+    PS1_PAL_WRITTEN();
     if (destPaletteID >= PALETTE_COUNT || srcPaletteA >= PALETTE_COUNT || srcPaletteB >= PALETTE_COUNT)
         return;
 
