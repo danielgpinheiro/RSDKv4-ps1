@@ -945,6 +945,8 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SpecialHUDDraw", 0),
     FunctionInfo("PS1SpecialCtrlP1", 0),
     FunctionInfo("PS1SpecialCtrlP2", 0),
+    FunctionInfo("PS1SpLoseRing", 0),
+    FunctionInfo("PS1SpLoseRingDraw", 0),
 #endif
 #endif
 };
@@ -1522,6 +1524,8 @@ enum ScrFunc {
     FUNC_PS1SPECIALHUDDRAW,
     FUNC_PS1SPECIALCTRLP1,
     FUNC_PS1SPECIALCTRLP2,
+    FUNC_PS1SPLOSERING,
+    FUNC_PS1SPLOSERINGDRAW,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -11152,7 +11156,7 @@ __attribute__((optimize("Os"))) static void PS1TextMsgUpdate()
 // (t = temps, ap = array positions, G = globals, me = the HUD; function 10 inline: its listing is checked with the
 // sub's). Patched in only when the sub, its jump-table entries and function 10 match SPHUD_DRAW_SIG / SPHUD_FN10_SIG
 // (docs/43: ~10 hblanks a frame in the VM with Sonic & Tails).
-static void PS1SpecialHUDDraw()
+__attribute__((optimize("Os"))) static void PS1SpecialHUDDraw()
 {
     int *t = scriptEng.temp, *ap = scriptEng.arrayPosition, *G = globalVariables;
     Entity &me = objectEntityList[objectEntityPos];
@@ -11482,6 +11486,45 @@ static void PS1SpecialCtrlP2()
         else
             me.visible = 1;
     }
+}
+// The special stage's Lose Ring (the rings a hit scatters: dozens at once, 90 frames each, ~20 VM instructions a frame
+// apiece: up to ~60 hblanks a frame after a hit, docs/43): its update sub (fall, grow to 512, spin, gone after 90 frames)
+// and draw sub (a scaled sprite at the screen centre's offset), natively: one statement per script instruction, in
+// order (t = temps). Patched in only when the subs (and the update's jump-table entries) match SPLOSERING_SIG /
+// SPLOSERING_DRAW_SIG.
+static void PS1SpLoseRingUpdate()
+{
+    Entity &me = objectEntityList[objectEntityPos];
+    me.yvel += me.values[1];
+    me.xpos += me.xvel;
+    me.ypos += me.yvel;
+    if (me.scale < 512)
+        me.scale += 16;
+    me.animationTimer += me.animationSpeed;
+    if (me.animationTimer > 255) {
+        me.animationTimer -= 256;
+        me.frame++;
+        if (me.frame == 8)
+            me.frame = 0;
+    }
+    if (me.values[0] < 90)
+        me.values[0]++;
+    else
+        me.type = 0;
+}
+static void PS1SpLoseRingDraw()
+{
+    int *t                         = scriptEng.temp;
+    Entity &me                     = objectEntityList[objectEntityPos];
+    const ObjectScript *scriptInfo = &objectScriptList[me.type];
+    t[0]                           = me.xpos;
+    t[0] >>= 16;
+    t[0] += SCREEN_CENTERX;
+    t[1] = me.ypos;
+    t[1] >>= 16;
+    const SpriteFrame *f = &scriptFrames[scriptInfo->frameListOffset + me.frame]; // DrawSpriteScreenFX OBJECTFRAME FX_SCALE
+    DrawSpriteScaled(me.direction, t[0], t[1], -f->pivotX, -f->pivotY, me.scale, me.scale, f->width, f->height, f->sprX, f->sprY,
+                     scriptInfo->spriteSheetID);
 }
 #endif
 __attribute__((optimize("Os"))) static void PS1TextMsgDraw()
@@ -11854,6 +11897,8 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1TEXTMSGUPDATE: scriptText[0] = '\0'; PS1TextMsgUpdate(); break;
         case FUNC_PS1TEXTMSGDRAW: scriptText[0] = '\0'; PS1TextMsgDraw(); break;
         case FUNC_PS1SPECIALHUDDRAW: scriptText[0] = '\0'; PS1SpecialHUDDraw(); break;
+        case FUNC_PS1SPLOSERING: scriptText[0] = '\0'; PS1SpLoseRingUpdate(); break;
+        case FUNC_PS1SPLOSERINGDRAW: scriptText[0] = '\0'; PS1SpLoseRingDraw(); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -14218,6 +14263,14 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALCTRLP2: // a function body
                 opcodeSize = 0;
                 PS1SpecialCtrlP2();
+                break;
+            case FUNC_PS1SPLOSERING: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1SpLoseRingUpdate();
+                break;
+            case FUNC_PS1SPLOSERINGDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1SpLoseRingDraw();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;

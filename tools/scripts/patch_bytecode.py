@@ -4474,6 +4474,44 @@ SPHUD_FN10_SIG = [
     'JT 16 IfGreater @25 @27',
 ]
 
+# The special stage's Lose Ring subs: RSDKv4/Script.cpp PS1SpLoseRingUpdate / PS1SpLoseRingDraw
+SPLOSERING_SIG = [
+    'Add OBJECTYVEL OBJECTVALUE1',
+    'Add OBJECTXPOS OBJECTXVEL',
+    'Add OBJECTYPOS OBJECTYVEL',
+    'IfLower 0 OBJECTSCALE 512',
+    'Add OBJECTSCALE 16',
+    'endif',
+    'Add OBJECTANIMATIONTIMER OBJECTANIMATIONSPEED',
+    'IfGreater 2 OBJECTANIMATIONTIMER 255',
+    'Sub OBJECTANIMATIONTIMER 256',
+    'Inc OBJECTFRAME',
+    'IfEqual 4 OBJECTFRAME 8',
+    'Equal OBJECTFRAME 0',
+    'endif',
+    'endif',
+    'IfLower 6 OBJECTVALUE0 90',
+    'Inc OBJECTVALUE0',
+    'else',
+    'Equal OBJECTTYPE 0',
+    'endif',
+    'End',
+    'JT 3 IfLower @5 @6',
+    'JT 7 IfGreater @13 @14',
+    'JT 10 IfEqual @12 @13',
+    'JT 14 IfLower @17 @19',
+]
+
+SPLOSERING_DRAW_SIG = [
+    'Equal TEMP0 OBJECTXPOS',
+    'ShR TEMP0 16',
+    'Add TEMP0 SCREENXCENTER',
+    'Equal TEMP1 OBJECTYPOS',
+    'ShR TEMP1 16',
+    'DrawSpriteScreenFX OBJECTFRAME 0 TEMP0 TEMP1',
+    'End',
+]
+
 # Special functions 2 (the first player's controls) and 3 (Tails's CPU): RSDKv4/Script.cpp PS1SpecialCtrlP1 / P2
 SPCTRL1_FN_SIG = [
     'IfEqual 0 GLOBAL[1,0,5] 0',
@@ -9655,6 +9693,8 @@ def main():
                      ('textmsgdraw', lambda d: patch_stage_sub(d, 'Text Message', 1, TEXTMSG_DRAW_SIG, 'PS1TextMsgDraw',
                                                                with_jumps=True, funcs={12: TEXTMSG_FN12_SIG})),
                      ('sphud', patch_special_hud),
+                     ('splosering', lambda d: patch_stage_sub(d, 'Lose Ring', 0, SPLOSERING_SIG, 'PS1SpLoseRing', with_jumps=True)
+                      + ', ' + patch_stage_sub(d, 'Lose Ring', 1, SPLOSERING_DRAW_SIG, 'PS1SpLoseRingDraw')),
                      ('spctrl', lambda d: patch_stage_function(d, 'Special', 2, SPCTRL1_FN_SIG, 'PS1SpecialCtrlP1') + ', ' +
                       patch_stage_function(d, 'Special', 3, SPCTRL2_FN_SIG, 'PS1SpecialCtrlP2')),
                      ('halfpipe', patch_halfpipe),
