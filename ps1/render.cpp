@@ -723,21 +723,12 @@ static inline void PS1ApplyInk(psyqo::PrimPieces::TPageAttr &attr)
 // draws: B/4 + 3F/4), 3 = opaque.
 static inline int PS1AlphaLevel(int a) { return a < 64 ? 0 : a < 160 ? 1 : a < 224 ? 2 : 3; }
 
-// Rows [v, v + h) of a piece at (x, y) with CLUT set A or B; dir != 0: a 1:1 mirrored piece as a flip rectangle from
-// texcoord u, v (PS1FlipRectTex), its texpage with GP0(E1h) bit 12 (X) / 13 (Y) (dir = RSDK FLIP_X 1 | FLIP_Y 2,
-// docs/43 G3, V4-104: PS1ChainPieceFlipRect).
-static __attribute__((always_inline)) inline void PS1ChainPieceSpriteRowsT(const PS1Piece &p, int x, int y, int u, int v, int h, bool setB,
-                                                                          int dir)
+// Rows [v, v + h) of a piece at (x, y) with CLUT set A or B.
+static void PS1ChainPieceSpriteRows(const PS1Piece &p, int x, int y, int v, int h, bool setB)
 {
     psyqo::PrimPieces::TPageAttr attr = PS1ClusterTPage(p.c);
     if (s_ink != PS1_INK_OPAQUE)
         PS1ApplyInk(attr);
-    if (dir) {
-        uint16_t raw;
-        __builtin_memcpy(&raw, &attr, 2);
-        raw = (uint16_t)(raw | (dir << 12));
-        __builtin_memcpy(&attr, &raw, 2);
-    }
     PS1ChainTPage(attr);
     psyqo::Prim::Sprite s(psyqo::Color{ { .r = s_inkMod, .g = s_inkMod, .b = s_inkMod } });
     if (s_ink != PS1_INK_OPAQUE) {
@@ -746,21 +737,36 @@ static __attribute__((always_inline)) inline void PS1ChainPieceSpriteRowsT(const
     }
     s.position = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)y } };
     s.size     = psyqo::Vertex{ { .w = p.w, .h = (int16_t)h } };
-    s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)u, (uint8_t)v, PS1ClusterClut(p.c, setB) };
+    s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)p.u, (uint8_t)v, PS1ClusterClut(p.c, setB) };
     PS1ChainSprite(s);
     g_ps1DrawSprites = g_ps1DrawSprites + 1;
 }
-static void PS1ChainPieceSpriteRows(const PS1Piece &p, int x, int y, int v, int h, bool setB)
-{
-    PS1ChainPieceSpriteRowsT(p, x, y, p.u, v, h, setB, 0);
-}
-// Out of line: the unflipped sprite path stays as it was. PS1ChainTPage dedupes on the whole texpage, so the next
-// unflipped piece sends its own (flip bits clear); a quad in between invalidates it.
+
+// A 1:1 mirrored piece as a flip rectangle (docs/43 G3, V4-104): PS1ChainPieceSpriteRows' sprite from texcoord (tu, tv)
+// (PS1FlipRectTex) under the piece's texpage with GP0(E1h) bit 12 (X) / 13 (Y) (dir = RSDK FLIP_X 1 | FLIP_Y 2), its own
+// copy so the unflipped path stays exactly as it was.
 static __attribute__((noinline)) void PS1ChainPieceFlipRect(const PS1Piece &p, int x, int y, int tu, int tv, bool setB, int dir)
 {
     if (setB)
         PS1EnsureSetB();
-    PS1ChainPieceSpriteRowsT(p, x, y, tu, tv, p.h, setB, dir);
+    psyqo::PrimPieces::TPageAttr attr = PS1ClusterTPage(p.c);
+    if (s_ink != PS1_INK_OPAQUE)
+        PS1ApplyInk(attr);
+    uint16_t raw;
+    __builtin_memcpy(&raw, &attr, 2);
+    raw = (uint16_t)(raw | (dir << 12));
+    __builtin_memcpy(&attr, &raw, 2);
+    PS1ChainTPage(attr); // PS1ChainTPage dedupes on the whole texpage: the next unflipped piece sends its own
+    psyqo::Prim::Sprite s(psyqo::Color{ { .r = s_inkMod, .g = s_inkMod, .b = s_inkMod } });
+    if (s_ink != PS1_INK_OPAQUE) {
+        s.setSemiTrans();
+        g_ps1InkPieces = g_ps1InkPieces + 1;
+    }
+    s.position = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)y } };
+    s.size     = psyqo::Vertex{ { .w = p.w, .h = p.h } };
+    s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)tu, (uint8_t)tv, PS1ClusterClut(p.c, setB) };
+    PS1ChainSprite(s);
+    g_ps1DrawSprites     = g_ps1DrawSprites + 1;
     g_ps1SpriteFlipRects = g_ps1SpriteFlipRects + 1;
 }
 
