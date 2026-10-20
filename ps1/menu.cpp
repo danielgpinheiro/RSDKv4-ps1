@@ -212,13 +212,12 @@ void drawImage(const PS1MenuImage &img, int x, int y, int semiMode = 0, uint8_t 
     PS1ChainSprite(s);
 }
 
-#if PS1_GAME == 1
-// An image modulated by an RGB colour (the native SetRenderVertexColor tints: texel x colour / 255 -> the GPU's
-// texel x c / 128 with c = colour / 2).
+// An image modulated by an RGB colour: the native SetRenderVertexColor tints (texel x colour / 255), here at the GPU's
+// full range (texel x c / 128 with c = colour, about twice as bright): the 10 x 10 save-screen emeralds came out muted
+// on the mid-grey art and hard to tell from the flat grey of the missing ones (tester 2026-10-20, V4-106).
 void drawImageTint(const PS1MenuImage &img, int x, int y, uint32_t rgb) {
     chainTexPage(img.tpage, -1);
-    psyqo::Prim::Sprite s(psyqo::Color{ { .r = (uint8_t)((rgb >> 17) & 0x7F), .g = (uint8_t)((rgb >> 9) & 0x7F),
-                                          .b = (uint8_t)((rgb >> 1) & 0x7F) } });
+    psyqo::Prim::Sprite s(psyqo::Color{ { .r = (uint8_t)(rgb >> 16), .g = (uint8_t)(rgb >> 8), .b = (uint8_t)rgb } });
     psyqo::PrimPieces::ClutIndex clut;
     memcpy(&clut, &img.clut, 2);
     s.position = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)y } };
@@ -226,7 +225,6 @@ void drawImageTint(const PS1MenuImage &img, int x, int y, uint32_t rgb) {
     s.texInfo  = psyqo::PrimPieces::TexInfo{ img.u, img.v, clut };
     PS1ChainSprite(s);
 }
-#endif
 
 const PS1MenuGlyph *findGlyph(const PS1MenuPack &pack, int font, int code) {
     if (font >= pack.fontCount)
@@ -962,6 +960,8 @@ void saveScreen(int move, int moveX, bool ok, bool back, bool select) {
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
     static const int icons[4] = { PS1_MENU_ICON_SONIC, PS1_MENU_ICON_TAILS, PS1_MENU_ICON_KNUX, PS1_MENU_ICON_SONIC };
+    // SubMenuButton emeraldColorsS2
+    static const uint32_t emeralds[7] = { 0x00C0FF, 0x8000C0, 0xFF0000, 0xFF60FF, 0xFFC000, 0x60C000, 0xFFFFFF };
     if (!s_m.delDialog)
         s_m.sel = (s_m.sel + move + 5) % 5;
     drawText(mp, PS1_FONT_HEADING_L, PS1MenuString(PS1_STR_SAVE_SELECT), 160, 6, 1);
@@ -988,8 +988,12 @@ void saveScreen(int move, int moveX, bool ok, bool back, bool select) {
         drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(name), 60, y + 3);
         if (i == s_m.sel && !s_m.delDialog)
             saveDeleteHint(mp, y);
-        for (int e = 0; e < 7; ++e)
-            drawImage(mp.images[(f.emeralds >> e) & 1 ? PS1_MENU_EMERALD_ON : PS1_MENU_EMERALD_OFF], 60 + e * 12, y + 20);
+        for (int e = 0; e < 7; ++e) { // each in its colour when collected (SubMenuButton emeraldColorsS2)
+            if ((f.emeralds >> e) & 1)
+                drawImageTint(mp.images[PS1_MENU_EMERALD_ON], 60 + e * 12, y + 20, emeralds[e]);
+            else
+                drawImage(mp.images[PS1_MENU_EMERALD_OFF], 60 + e * 12, y + 20);
+        }
     }
     if (saveDeleteFrame(moveX, ok, back, select))
         return;
