@@ -10,9 +10,11 @@ upstream does.
 Sonic 2, Death Egg Zone (Zone12, V4-105): after Mecha Sonic the One Way Door at x 1016 and Eggman at x 1088 (who holds
 that door shut, `object[-1].state = 0`, until the player reaches him) are processed only within the screen's object
 range (xScrollOffset + SCREEN_XSIZE + 128). A spindash locks the camera for 15 frames (GlobalCode function 18): on the
-PS1's 320-pixel screen the arena leaves the camera at 544, the range ends at 992 and neither object runs while a
-full-charge spindash rolls through the closed door (on a 424-pixel PC screen the door is in range). Both get
-PRIORITY_ACTIVE (always processed), so the door stays shut until Eggman's scene opens the way, as in a slow approach.
+PS1's 320-pixel screen the arena leaves the camera at 544-630, the range ends before Eggman and he does not run while a
+full-charge spindash rolls past the door, which then opens for the player's speed with nobody holding it (on a 424-pixel
+PC screen both are in range). Eggman gets PRIORITY_ACTIVE (always processed), so the door stays shut until his scene
+opens the way, as in a slow approach. The door keeps its default: it is in range whenever the player can reach it, and
+its update (three player loops of box tests) cost 2.6 CPU hblanks a frame on DuckStation when always processed.
 
 Each edit is checked against the record it expects (type by name in the stage's object list, position, flags); a
 layout already edited is left as it is. Usage: patch_layouts.py DATA_DIR [--game 1|2]
@@ -29,7 +31,6 @@ PRIORITY_FLAG, PRIORITY_ACTIVE = 0x20, 1  # RSDKv4/Object.hpp ObjectPriority
 
 # (folder, act file, object name, x, y in pixels, attribute flags expected before the edit, priority)
 EDITS_S2 = (
-    ('Zone12', 'Act1.bin', 'One Way Door', 1016, None, 0, PRIORITY_ACTIVE),
     ('Zone12', 'Act1.bin', 'Eggman', 1088, None, 0, PRIORITY_ACTIVE),
 )
 
