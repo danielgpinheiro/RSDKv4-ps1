@@ -118,10 +118,11 @@ python3 tools/memcard/build_icons.py                  # regenerate ps1/memcard_i
 ## docs/43 fix pass (2026-10-16/17)
 Results per issue: `docs/perf-43-report.md` (log: `docs/perf-43-tracker.md`; hardware facts: `docs/ps1-perf-findings.md`).
 New in RSDKv4-ps1: `ps1/pad.cpp` (psyqo's AdvancedPad driver for port 1 only), flip-bit tile sprites after a boot
-self-test (`PS1DetectGpuVersion`; GDB `g_ps1FlipRectsOn` / `g_ps1FlipRectsForce`), the special-stage Bomb native
-(`PS1SpecialBomb`), the ordering table's rare paths out of line. Harness: `tools/perf_scene.sh` `SHOTS=` (VRAM + entity
-table per frame) with `tools/shots_cmp.py`, `RUN_EXE` / `RUN_ELF`, `DISC=` (reference on the pre-patch disc), `HOLD=`,
-`PAD="f:mask ..."`, `MID=` / `POST=` (GDB lines at the window's start / end), a retry when GDB loses the race.
+self-test (`PS1DetectGpu`; since 2026-10-19 also 1:1 flipped sprite pieces: "GPU type and flip rectangles" below; GDB
+`g_ps1FlipRectsOn` / `g_ps1FlipRectsForce`), the special-stage Bomb native (`PS1SpecialBomb`), the ordering table's rare
+paths out of line. Harness: `tools/perf_scene.sh` `SHOTS=` (VRAM + entity table per frame) with `tools/shots_cmp.py`,
+`RUN_EXE` / `RUN_ELF`, `DISC=` (reference on the pre-patch disc), `HOLD=`, `PAD="f:mask ..."`, `MID=` / `POST=` (GDB
+lines at the window's start / end), a retry when GDB loses the race.
 
 ## Special stage in assembly (docs/43 C1 / C4, 2026-10-18)
 `RSDKv4/Scene3DOT.S` (the ordering table's faded fast path) and `RSDKv4/Scene3DTf.S` (the GTE transform loop), Sonic 2
@@ -193,3 +194,15 @@ Builds cleanly · fits 2 MB (and `tools/special_entry_test.sh` after RAM / code 
 unless Sonic 2 changes · verified in the emulator with evidence · `../docs/30` / `../docs/37` updated · commit (prefixes
 `feature:` `fix:` `chore:` `housekeeping:` `FMV:`) and push to `fork ps1` only when the user asks; no Claude / AI
 attribution, no `Co-Authored-By` line, here or in the builders.
+
+## GPU type and flip rectangles (2026-10-19, ledger V4-104)
+`PS1DetectGpu` (`ps1/render.cpp`, `start()` before anything is drawn) runs psx-spx's GPU detection (GP1(10h) index 4 then
+7; else GP0(E1h) bit 12 -> GPUSTAT bit 12 after E6h = 0): type 0 (the old 160-pin GPU; PCSX-Redux and the stock
+DuckStation answer so) never uses GP0(E1h) flip bits; types 1 / 2 run the 2x1 readback, and flip rectangles are used
+only when it comes back mirrored (`g_ps1GpuType`, `g_ps1GpuQuery7`, `g_ps1FlipTest`; GDB `g_ps1FlipRectsOn` /
+`g_ps1FlipRectsForce`). Flipped tiles and 1:1 unrotated flipped sprite pieces (`PS1ChainPieceRect`, upright mirrored
+affine pieces) are then rectangles under a flipped texpage when `PS1FlipRectTex` (`ps1/sprite_quad.hh`) allows it (X flip:
+u + w even; unflipped X: u even; the quad it replaces exact), else quads; counters `g_ps1TileFlipRects`,
+`g_ps1SpriteFlipRects`, `g_ps1SpriteFlipQuads`. Tests: `*-gpu-detect` (type 0 on both stock emulators) and `*-flip-ab-*`
+on the DuckStation preview (`../tests` emulator `dsp`: every picture identical to the quad path), host
+`test_*_sprite_quads` flip-rect-exact. The code costs one 2 KB heap step (the EXE is padded to 2 KB).

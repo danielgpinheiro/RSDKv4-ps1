@@ -86,6 +86,13 @@ static void ttyx(uint32_t v) {
     while (n) ttyc(b[--n]);
 }
 static void ttysx(uint32_t v) { ttyc(' '); ttyx(v); }
+void PS1TestNote(const char *tag, uint32_t a, uint32_t b, uint32_t c) {
+    tty(tag);
+    ttysx(a);
+    ttysx(b);
+    ttysx(c);
+    ttyc('\n');
+}
 static void testExit(uint32_t status) {
     *(volatile int16_t *)0xBF802082 = (int16_t)status;
     for (;;) {

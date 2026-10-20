@@ -694,6 +694,15 @@ template <typename Fn> static void PS1ForEachPieceAtlas(int sheet, int sheetID, 
 
 static inline bool PS1ObjectsHidden() { return (g_ps1DebugDrawMask & 1) != 0; }
 
+// Flip-bit rectangles (PS1DetectGpu below, docs/43 G3): s_flipRects = the GPU draws them (type 1 / 2 and the readback).
+// g_ps1GpuType: psx-spx's GPU version (0 old, 1 unknown, 2 new), g_ps1GpuQuery7 the raw GP1(10h) index 7 answer,
+// g_ps1FlipTest the readback word (0 = not tested: type 0).
+static bool s_flipRects = false;
+volatile uint32_t g_ps1GpuType = 0, g_ps1GpuQuery7 = 0, g_ps1FlipRectsOn = 1, g_ps1FlipTest = 0;
+volatile uint32_t g_ps1FlipRectsForce = 0;
+volatile uint32_t g_ps1SpriteFlipRects = 0, g_ps1SpriteFlipQuads = 0; // 1:1 flipped pieces as flip rects / left quads (total)
+static inline __attribute__((always_inline)) bool PS1FlipRectsLive() { return (s_flipRects || g_ps1FlipRectsForce) && g_ps1FlipRectsOn; }
+
 // Ink state for the next pieces: GPU semi-transparency mode (psx-spx GP0 E1h bits 5-6) and the texel
 // modulation (0x80 = unchanged). Set by the ink draw calls around their piece loops.
 enum PS1Ink { PS1_INK_OPAQUE, PS1_INK_HALF, PS1_INK_ADD, PS1_INK_SUB };
@@ -714,12 +723,21 @@ static inline void PS1ApplyInk(psyqo::PrimPieces::TPageAttr &attr)
 // draws: B/4 + 3F/4), 3 = opaque.
 static inline int PS1AlphaLevel(int a) { return a < 64 ? 0 : a < 160 ? 1 : a < 224 ? 2 : 3; }
 
-// Rows [v, v + h) of a piece at (x, y) with CLUT set A or B.
-static void PS1ChainPieceSpriteRows(const PS1Piece &p, int x, int y, int v, int h, bool setB)
+// Rows [v, v + h) of a piece at (x, y) with CLUT set A or B; dir != 0: a 1:1 mirrored piece as a flip rectangle from
+// texcoord u, v (PS1FlipRectTex), its texpage with GP0(E1h) bit 12 (X) / 13 (Y) (dir = RSDK FLIP_X 1 | FLIP_Y 2,
+// docs/43 G3, V4-104: PS1ChainPieceFlipRect).
+static __attribute__((always_inline)) inline void PS1ChainPieceSpriteRowsT(const PS1Piece &p, int x, int y, int u, int v, int h, bool setB,
+                                                                          int dir)
 {
     psyqo::PrimPieces::TPageAttr attr = PS1ClusterTPage(p.c);
     if (s_ink != PS1_INK_OPAQUE)
         PS1ApplyInk(attr);
+    if (dir) {
+        uint16_t raw;
+        __builtin_memcpy(&raw, &attr, 2);
+        raw = (uint16_t)(raw | (dir << 12));
+        __builtin_memcpy(&attr, &raw, 2);
+    }
     PS1ChainTPage(attr);
     psyqo::Prim::Sprite s(psyqo::Color{ { .r = s_inkMod, .g = s_inkMod, .b = s_inkMod } });
     if (s_ink != PS1_INK_OPAQUE) {
@@ -728,9 +746,22 @@ static void PS1ChainPieceSpriteRows(const PS1Piece &p, int x, int y, int v, int 
     }
     s.position = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)y } };
     s.size     = psyqo::Vertex{ { .w = p.w, .h = (int16_t)h } };
-    s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)p.u, (uint8_t)v, PS1ClusterClut(p.c, setB) };
+    s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)u, (uint8_t)v, PS1ClusterClut(p.c, setB) };
     PS1ChainSprite(s);
     g_ps1DrawSprites = g_ps1DrawSprites + 1;
+}
+static void PS1ChainPieceSpriteRows(const PS1Piece &p, int x, int y, int v, int h, bool setB)
+{
+    PS1ChainPieceSpriteRowsT(p, x, y, p.u, v, h, setB, 0);
+}
+// Out of line: the unflipped sprite path stays as it was. PS1ChainTPage dedupes on the whole texpage, so the next
+// unflipped piece sends its own (flip bits clear); a quad in between invalidates it.
+static __attribute__((noinline)) void PS1ChainPieceFlipRect(const PS1Piece &p, int x, int y, int tu, int tv, bool setB, int dir)
+{
+    if (setB)
+        PS1EnsureSetB();
+    PS1ChainPieceSpriteRowsT(p, x, y, tu, tv, p.h, setB, dir);
+    g_ps1SpriteFlipRects = g_ps1SpriteFlipRects + 1;
 }
 
 // 1:1 piece at (x, y); under a bank split, cut at the split line (rows below it use set B).
@@ -838,14 +869,37 @@ static void PS1ChainPieceQuad(const PS1Piece &p, const int16_t *xs, const int16_
 // narrower: a scaled edge has no exact integer UV); unmirrored scaled pieces the full [u, u + w) range.
 static void PS1ChainPieceRect(const PS1Piece &p, int x, int y, int w, int h, bool flipX, bool flipY)
 {
-    if (!flipX && !flipY && w == p.w && h == p.h) {
-        PS1ChainPieceSprite(p, x, y);
-        return;
+    if (w == p.w && h == p.h) {
+        if (!flipX && !flipY) {
+            PS1ChainPieceSprite(p, x, y);
+            return;
+        }
+        // A 1:1 mirrored piece as a flip rectangle when the GPU draws them and PS1FlipRectTex allows it (not across a
+        // bank split). PS1ChainTPage dedupes on the whole texpage, so the next unflipped piece sends its own (flip bits
+        // clear); a quad in between invalidates it.
+        if (PS1FlipRectsLive()) {
+            int tu, tv, y0 = s_splitY;
+            if ((!y0 || y + h <= y0 || y >= y0) && PS1FlipRectTex(p.u, p.v, w, h, flipX, flipY, &tu, &tv)) {
+                PS1ChainPieceFlipRect(p, x, y, tu, tv, y0 && y >= y0, flipX | flipY << 1);
+                return;
+            }
+            g_ps1SpriteFlipQuads = g_ps1SpriteFlipQuads + 1;
+        }
     }
     PS1QuadUV uv  = PS1RectUV(p.u, p.v, p.w, p.h, w, h, flipX, flipY); // ps1/sprite_quad.hh
     int16_t xs[4] = { (int16_t)x, (int16_t)(x + w), (int16_t)x, (int16_t)(x + w) };
     int16_t ys[4] = { (int16_t)y, (int16_t)y, (int16_t)(y + h), (int16_t)(y + h) };
     PS1ChainPieceQuad(p, xs, ys, uv.u0, uv.u1, uv.v0, uv.v1);
+}
+
+// Corners of an affine piece that is 1:1, upright and mirrored in X (rotation 0, scale 1, FLIP_X: Sonic facing left):
+// corner A (the piece's local top-left) is the top-right one. With flip rects live, Sonic 2's affine path sends such a
+// piece through PS1ChainPieceRect (a flip rectangle where PS1FlipRectTex allows it, else its exact 1:1 quad, the same
+// pixels). Sonic 1's cached affine pieces keep their quad: replaying its 9 cached words costs less CPU than a sprite
+// (Labyrinth on the DuckStation preview: 210.3 -> 212.1 CPU hblanks a frame with the reroute).
+static inline bool PS1UprightMirror(const int *x, const int *y, int w, int h)
+{
+    return y[0] == y[1] && x[0] - x[1] == w && x[2] == x[0] && y[2] - y[0] == h;
 }
 
 // GPU limits (psx-spx GPU "Vertex"): coordinates are 11-bit signed (-1024..1023, beyond that they wrap)
@@ -1438,50 +1492,65 @@ static void PS1TileSetup()
 // Texture flip bits (docs/43 G3; nocash psx-spx "GPU Render Rectangle Commands" / "GPU Versions"): GP0(E1h) bits 12-13
 // mirror rectangles on every GPU but the old 160-pin CXD8514Q (PU-7 / EARLY-PU-8 boards; every PSone has them), which is
 // why flipped tiles were 9-word textured quads (~3x a rectangle's GPU time, "GPU Rendering Timings"). Emulators differ
-// (PCSX-Redux and DuckStation before 2026-10-16 ignore the bits; DuckStation b9b8366 draws them), so the GPU is tested at
-// boot instead of trusting GP1(10h) index 7: two texels uploaded off screen, a 2 x 1 X-flipped rect drawn from them and read
-// back by GP0(C0h). Only when they come back mirrored (texcoord u0, then u0 - 1: the rule the quads' backwards UVs give)
-// are flipped tiles sprites under a flipped texpage (X flip starts at the tile's last texel column, u + 15).
+// (PCSX-Redux and DuckStation before 2026-10-16 ignore the bits; DuckStation b9b8366 draws them). The GPU type comes first
+// (psx-spx "GPU Detection": v0 = the old 160-pin GPU never gets flip bits); on v1 / v2 the GPU is also tested, since an
+// emulator can answer v2 and not draw the flips (PCSX ReARMed's gpu_neon): two texels uploaded off screen, a 2 x 1
+// X-flipped rect drawn from them and read back by GP0(C0h). Only when they come back mirrored (texcoord u0, then u0 - 1:
+// the rule the quads' backwards UVs give) are flipped tiles and 1:1 flipped sprite pieces rectangles under a flipped
+// texpage (X flip starts at the last texel column, u + 15 for a tile; PS1FlipRectTex for a piece).
 // g_ps1FlipRectsOn = 0 (GDB) forces the quads; g_ps1FlipRectsForce = 1 forces flip rects (harness: CPU cost on emulators
 // that don't draw them).
-static bool s_flipRects = false;
-volatile uint32_t g_ps1GpuVersion = 0, g_ps1FlipRectsOn = 1, g_ps1FlipTest = 0; // FlipTest: the readback word
-volatile uint32_t g_ps1FlipRectsForce = 0;
-void PS1DetectGpuVersion() // main.cpp start(), before anything is drawn
+void PS1DetectGpu() // main.cpp start(), before anything is drawn
 {
     using namespace psyqo::Hardware;
     auto ready = []() { while (!(GPU::Ctrl & (1 << 26))) {} };
     auto query = [](uint32_t index) { GPU::Ctrl = 0x10000000 | index; return (uint32_t)GPU::Data; };
     ready();
     const uint32_t area0 = query(3), area1 = query(4), offset = query(5), stat = GPU::Ctrl;
-    g_ps1GpuVersion = query(7); // 2 on the new GPU (DuckStation >= a9c01a6 answers; PCSX-Redux doesn't)
-    // the corner of VRAM (x 1016-1023, y 511): texels u 60-63 of the 15-bit page at x 960, y 256; free at boot
-    ready();
-    GPU::Data = 0xA0000000;                  // CPU -> VRAM
-    GPU::Data = (511u << 16) | 1020u;
-    GPU::Data = (1u << 16) | 4u;
-    GPU::Data = 0x56781234u;                 // u 60 = 1234h, u 61 = 5678h
-    GPU::Data = 0x0F0F0F0Fu;                 // u 62, 63
-    ready();
-    GPU::Data = 0xE3000000;                  // drawing area: all of VRAM, no offset
-    GPU::Data = 0xE4000000 | (511u << 10) | 1023u;
-    GPU::Data = 0xE5000000;
-    GPU::Data = 0xE1000000 | 0x1000 | 0x400 | 0x100 | 0x10 | 15; // X flip, draw to display, 15-bit, page (960, 256)
-    GPU::Data = 0x01000000;                  // clear the texture cache
-    GPU::Data = 0x65808080;                  // textured raw rect, variable size
-    GPU::Data = (511u << 16) | 1016u;
-    GPU::Data = (255u << 8) | 61u;           // u0 61, v 255
-    GPU::Data = (1u << 16) | 2u;
-    ready();
-    GPU::Data = 0x01000000;
-    GPU::Data = 0xC0000000;                  // VRAM -> CPU: the two drawn pixels
-    GPU::Data = (511u << 16) | 1016u;
-    GPU::Data = (1u << 16) | 2u;
-    while (!(GPU::Ctrl & (1 << 27))) {}
-    g_ps1FlipTest = (uint32_t)GPU::Data;
-    s_flipRects   = g_ps1FlipTest == 0x12345678u; // pixel 1016 = u 61, 1017 = u 60: mirrored
+    // psx-spx "GPU Detection" (Perfect Assassin's routine): index 4 is latched first, so an old GPU, which leaves the
+    // latch alone on index 7, can't answer 2 with a stale value (the draw offset, latched last above, could be 2).
+    GPU::Ctrl = 0x10000004;
+    const uint32_t q7 = query(7);
+    uint32_t type     = 2; // new 208-pin GPU (LATE-PU-8 and up, every PSone; DuckStation >= a9c01a6)
+    if ((q7 & 0xFFFFFF) != 2) {
+        ready();
+        GPU::Data = 0xE6000000; // mask bits off: GPUSTAT bit 12 below can only come from the texpage write
+        GPU::Data = 0xE1001000 | (GPU::Ctrl & 0x3FFF);
+        (void)(uint32_t)GPU::Data; // the routine's dummy read
+        type = (GPU::Ctrl >> 12) & 1; // 1: an unknown (arcade / prototype) GPU, 0: the old 160-pin one
+    }
+    g_ps1GpuQuery7 = q7;
+    g_ps1GpuType   = type;
+    if (type) {
+        // the corner of VRAM (x 1016-1023, y 511): texels u 60-63 of the 15-bit page at x 960, y 256; free at boot
+        ready();
+        GPU::Data = 0xA0000000;                  // CPU -> VRAM
+        GPU::Data = (511u << 16) | 1020u;
+        GPU::Data = (1u << 16) | 4u;
+        GPU::Data = 0x56781234u;                 // u 60 = 1234h, u 61 = 5678h
+        GPU::Data = 0x0F0F0F0Fu;                 // u 62, 63
+        ready();
+        GPU::Data = 0xE3000000;                  // drawing area: all of VRAM, no offset
+        GPU::Data = 0xE4000000 | (511u << 10) | 1023u;
+        GPU::Data = 0xE5000000;
+        GPU::Data = 0xE1000000 | 0x1000 | 0x400 | 0x100 | 0x10 | 15; // X flip, draw to display, 15-bit, page (960, 256)
+        GPU::Data = 0x01000000;                  // clear the texture cache
+        GPU::Data = 0x65808080;                  // textured raw rect, variable size
+        GPU::Data = (511u << 16) | 1016u;
+        GPU::Data = (255u << 8) | 61u;           // u0 61, v 255
+        GPU::Data = (1u << 16) | 2u;
+        ready();
+        GPU::Data = 0x01000000;
+        GPU::Data = 0xC0000000;                  // VRAM -> CPU: the two drawn pixels
+        GPU::Data = (511u << 16) | 1016u;
+        GPU::Data = (1u << 16) | 2u;
+        while (!(GPU::Ctrl & (1 << 27))) {}
+        g_ps1FlipTest = (uint32_t)GPU::Data;
+        s_flipRects   = g_ps1FlipTest == 0x12345678u; // pixel 1016 = u 61, 1017 = u 60: mirrored
+    }
     ready();
     GPU::Data = 0xE1000000 | (stat & 0x7FF); // the texpage as it was (GPUSTAT bits 0-10), flip bits clear
+    GPU::Data = 0xE6000000 | ((stat >> 11) & 3); // the mask bits as they were (GPUSTAT bits 11-12)
     GPU::Data = 0xE3000000 | (area0 & 0xFFFFF);
     GPU::Data = 0xE4000000 | (area1 & 0xFFFFF);
     GPU::Data = 0xE5000000 | (offset & 0x3FFFFF);
@@ -1632,7 +1701,7 @@ static void PS1DrawTileBandT(const TileLayer *layer, byte above, int sy, int h, 
 }
 static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
 {
-    if ((s_flipRects || g_ps1FlipRectsForce) && g_ps1FlipRectsOn)
+    if (PS1FlipRectsLive())
         PS1DrawTileBandT<true>(layer, above, sy, h, ly, chunkX, fullW);
     else
         PS1DrawTileBandT<false>(layer, above, sy, h, ly, chunkX, fullW);
@@ -2509,6 +2578,8 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
     // edge (a dark line). Other angles / scales can't be exact with integer UVs: the far edges come one texel in, so
     // no pixel reads a neighbouring piece.
     const bool right = scale == 0x200 && !(rotation & 0x7F);
+    // rotation 0, scale 1, facing left, flip rects live (V4-104): upright mirrored pieces go through PS1ChainPieceRect
+    const bool upMirror = fx && rotation == 0 && scale == 0x200 && PS1FlipRectsLive();
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
         PS1QuadCorners q = PS1AffineCorners(XPos, YPos, pivotX, pivotY, sn, cs, fx, p.ox, p.oy, p.w, p.h); // ps1/sprite_quad.hh
         const int *qx = q.x, *qy = q.y;
@@ -2528,6 +2599,10 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         int u0 = uv.u0, u1 = uv.u1, v0 = uv.v0, v1 = uv.v1;
         if (beyond && g_ps1LimitFix) { // zoomed past the GPU limits: cut to the screen
             PS1ChainPieceQuadClipped(p, qx, qy, u0, u1, v0, v1);
+            return;
+        }
+        if (upMirror && PS1UprightMirror(qx, qy, p.w, p.h)) {
+            PS1ChainPieceRect(p, xmin, ymin, p.w, p.h, true, false);
             return;
         }
         int16_t xs[4] = { (int16_t)qx[0], (int16_t)qx[1], (int16_t)qx[2], (int16_t)qx[3] };
