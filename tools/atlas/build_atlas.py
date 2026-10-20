@@ -272,10 +272,18 @@ class Bin:
         self.sky = [0] * width
 
     def place(self, w, h):
+        # Gutter (V4-109, as RSDKv3-ps1's CD-095): a quad's texcoords are bytes, and a mirrored / rotated piece's UV
+        # edges run one texel outside it (u - 1 / v - 1: ps1/sprite_quad.hh), an unmirrored quad's to u + w / v + h.
+        # A piece at texel 0 or ending at 256 had its edge clamped (render.cpp clampUV): the quad drew w pixels from
+        # w - 1 texels, one column doubled mid-sprite. Pieces that leave room keep texel 0 and 255 of their page free
+        # on both axes; wider / taller ones (whole 3D textures) as before.
+        lo_u = 1 if w <= self.width - 2 else 0
+        hi_u = self.width - (1 if self.width == PAGE and w <= PAGE - 2 else 0)
+        lo_v, hi_v = (1, PAGE - 1) if h <= PAGE - 2 else (0, PAGE)
         best = None
-        for u in range(0, self.width - w + 1):
-            v = max(self.sky[u:u + w])
-            if v + h <= PAGE and (best is None or v < best[1] or (v == best[1] and u < best[0])):
+        for u in range(lo_u, hi_u - w + 1):
+            v = max([lo_v] + self.sky[u:u + w])
+            if v + h <= hi_v and (best is None or v < best[1] or (v == best[1] and u < best[0])):
                 best = (u, v)
         if best:
             u, v = best
