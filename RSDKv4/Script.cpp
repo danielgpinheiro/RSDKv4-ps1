@@ -974,6 +974,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1DrawFlipFrame", 0),
     FunctionInfo("PS1DrawFlip0", 0),
     FunctionInfo("PS1DrawInkFrame", 0),
+    FunctionInfo("PS1Cylinder", 0),
 #endif
 #endif
 };
@@ -1579,6 +1580,7 @@ enum ScrFunc {
     FUNC_PS1DRAWFLIPFRAME,
     FUNC_PS1DRAWFLIP0,
     FUNC_PS1DRAWINKFRAME,
+    FUNC_PS1CYLINDER,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -5997,6 +5999,162 @@ __attribute__((optimize("Os"))) static void PS1DrawSub(int kind)
     int dir = e.direction <= FLIP_XY ? e.direction : FLIP_NONE;
     DrawSpriteFlipped((dir & FLIP_X) ? x - f->width - f->pivotX : x + f->pivotX, (dir & FLIP_Y) ? y - f->height - f->pivotY : y + f->pivotY,
                       f->width, f->height, f->sprX, f->sprY, dir, o->spriteSheetID);
+}
+// Metropolis' Cylinder (Zone09 stage object: the spinning tube a player stands in and is carried round; ~42 VM
+// instructions a frame with Sonic & Tails, ~9 hblanks: Metropolis 2's gears stretch had one frame over on DuckStation,
+// V4-111). Natively, one statement per script instruction; switch cases as the jump table lists them. Patched in only on
+// CYLINDER_SIG.
+static int PS1CollisionTop(Entity &e); // below (VAR_OBJECTCOLLISIONTOP's getter)
+__attribute__((optimize("Os"))) static void PS1CylinderUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    me.priority = 1;
+    t[2]        = 0;
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[3]      = (v[1] & (1 << t[2])) >> t[2];
+        if (t[3] == 0) {
+            TouchCollision(&me, v[10], 60, v[11], 76, &p, 65536, 1, 65536, 65536);
+            if (p.yvel < 0)
+                cr = 0;
+            if (cr == 1) {
+                v[1] |= 1 << t[2];
+                p.yvel = 0;
+                if (t[2] >= 0 && t[2] <= 3) { // switch TEMP2: OBJECTVALUE2..5 = 0, OBJECTVALUE6..9 = the player's direction
+                    v[2 + t[2]] = 0;
+                    v[6 + t[2]] = p.direction;
+                }
+            }
+            else {
+                t[0] = PS1CollisionTop(p);
+                t[0] <<= 16;
+                t[0] += p.ypos;
+                t[0] -= me.ypos;
+                if (t[0] < -3145728) {
+                    BoxCollision(&me, v[10], -64, v[11], -48, &p, 65536, 65536, 65536, 65536);
+                }
+                else {
+                    t[0] = PS1CollisionBottom(p);
+                    t[0] <<= 16;
+                    t[0] += p.ypos;
+                    t[0] -= me.ypos;
+                    if (t[0] > 4194304)
+                        BoxCollision(&me, v[10], 48, v[11], 64, &p, 65536, 65536, 65536, 65536);
+                }
+            }
+        }
+        else {
+            t[3] = 0;
+            t[0] = p.xpos;
+            t[0] -= me.xpos;
+            t[0] = abs(t[0]);
+            cr   = p.yvel < -262144;
+            t[3] |= cr;
+            cr = t[0] > v[12];
+            t[3] |= cr;
+            if (t[3] == 1) {
+                v[1] &= ~(1 << t[2]);
+                if (p.gravity == 1) {
+                    if (p.yvel >= 0) {
+                        if (p.state != 34) {
+                            if (p.animation != globalVariables[64]) {
+                                if (p.xvel < 0)
+                                    p.direction = 1;
+                                p.animation = globalVariables[90];
+                                p.angle     = 0;
+                                p.rotation  = 0;
+                            }
+                        }
+                    }
+                }
+                if (t[2] >= 0 && t[2] <= 3) // switch TEMP2: TEMP6 = OBJECTVALUE2..5
+                    t[6] = v[2 + t[2]];
+                t[6] += 32;
+                t[6] &= 255;
+                if (t[6] >= 64)
+                    p.yvel = 0;
+                else
+                    p.yvel >>= 1;
+            }
+            else {
+                p.yvel = 0;
+                t[0] >>= 16;
+                if (t[2] >= 0 && t[2] <= 3) { // switch TEMP2: TEMP6 / TEMP7 = OBJECTVALUE2..5 / 6..9
+                    t[6] = v[2 + t[2]];
+                    t[7] = v[6 + t[2]];
+                }
+                t[6] += 4;
+                t[6] &= 255;
+                p.ypos = Cos256(t[6]);
+                p.ypos *= 42;
+                p.ypos >>= 8;
+                p.ypos -= PS1CollisionBottom(p);
+                p.ypos += 19;
+                p.ypos <<= 16;
+                p.ypos += me.ypos;
+                if (p.state == 10) {
+                    if (p.gravity == 1) {
+                        p.prevAnimation  = globalVariables[90];
+                        p.animation      = globalVariables[90];
+                        p.animationSpeed = 0;
+                        p.direction      = 0;
+                        t[0]             = t[6];
+                        t[0] /= 21;
+                        if (p.xvel != 0) {
+                            if (p.xvel > 0)
+                                t[7] = 0;
+                            else
+                                t[7] = 1;
+                        }
+                        if (t[7] == 0) {
+                            p.frame    = t[0];
+                            p.rotation = 0;
+                        }
+                        else {
+                            int fr = p.frame; // GetTableValue OBJECTFRAME[1,1,6] TEMP0 75382
+                            if (t[0] >= 0 && t[0] < scriptCode[75382])
+                                fr = scriptCode[75382 + t[0] + 1];
+                            p.frame    = fr;
+                            p.rotation = 256;
+                        }
+                    }
+                }
+                if (p.state == 14) {
+                    if (p.xvel != 0) {
+                        if (p.xvel > 0)
+                            p.direction = 0;
+                        else
+                            p.direction = 1;
+                    }
+                }
+                if (t[2] >= 0 && t[2] <= 3) { // switch TEMP2: OBJECTVALUE2..5 = TEMP6, OBJECTVALUE6..9 = TEMP7
+                    v[2 + t[2]] = t[6];
+                    v[6 + t[2]] = t[7];
+                }
+                p.gravity = 0;
+            }
+        }
+        t[2]++;
+    }
+    if (v[1] != 0) {
+        if (me.propertyValue == 0) {
+            if (PS1ObjectOutOfBounds(&me) == 1)
+                me.priority = 0;
+        }
+        t[0] = 0;
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6] = players.entityRefs[loop];
+            TouchCollision(&me, v[10], -64, v[11], 64, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+            t[0] |= cr;
+        }
+        if (t[0] == 0)
+            v[1] = 0;
+    }
 }
 // Metropolis' M Platform (Zone09; V4-111): a platform moving by a 4-leg table (87247 x / 87252 y velocities, 87257
 // durations) while ridden, carrying its riders; ~20 VM instructions a player. Natively, one statement per script
@@ -13312,6 +13470,7 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1DRAWFLIPFRAME: scriptText[0] = '\0'; PS1DrawSub(3); break;
         case FUNC_PS1DRAWFLIP0: scriptText[0] = '\0'; PS1DrawSub(4); break;
         case FUNC_PS1DRAWINKFRAME: scriptText[0] = '\0'; PS1DrawSub(5); break;
+        case FUNC_PS1CYLINDER: scriptText[0] = '\0'; PS1CylinderUpdate(); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -15794,6 +15953,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1DRAWINKFRAME: // a whole sub: End follows
                 opcodeSize = 0;
                 PS1DrawSub(5);
+                break;
+            case FUNC_PS1CYLINDER: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1CylinderUpdate();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;
