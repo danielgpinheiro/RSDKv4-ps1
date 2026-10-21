@@ -11171,6 +11171,145 @@ def patch_draw_subs(bcdir):
     return '%d draw subs native (%s)' % (total, ', '.join('%s %d' % kv for kv in sorted(done.items())))
 
 
+TITLECARD_DRAW_SIG = [  # GlobalCode's Title Card draw sub, with its jump-table entries (V4-115; patch_title_card)
+    'Equal TEMP2 SCREENXCENTER',
+    'Sub TEMP2 160',
+    'ShR TEMP2 1',
+    'switch 0 OBJECTSTATE',
+    'SetActivePalette 0 0 SCREENYSIZE',
+    'DrawRect 0 0 SCREENXSIZE OBJECTVALUE3 32 64 192 255',
+    'DrawRect 0 OBJECTVALUE3 SCREENXSIZE SCREENYSIZE 0 0 0 255',
+    'IfEqual 14 GLOBAL[1,0,13] 1',
+    'IfEqual 16 OBJECTSTATE 1',
+    'DrawSpriteScreenXY 32 SCREENXSIZE SCREENYSIZE',
+    'endif',
+    'endif',
+    'DrawRect OBJECTVALUE4 168 SCREENXSIZE 72 224 224 0 255',
+    'Equal TEMP0 OBJECTVALUE4',
+    'Add TEMP0 SCREENXCENTER',
+    'DrawSpriteScreenXY 31 TEMP0 176',
+    'DrawRect 0 0 OBJECTVALUE5 SCREENYSIZE 224 0 0 255',
+    'DrawSpriteScreenXY 26 OBJECTVALUE5 0',
+    'Equal TEMP0 SCREENXCENTER',
+    'Add TEMP0 TEMP2',
+    'Add TEMP0 128',
+    'Add TEMP0 OBJECTVALUE1',
+    'DrawActName 0 TEMP0 64 0 0 16 0',
+    'Equal TEMP0 SCREENXCENTER',
+    'Add TEMP0 TEMP2',
+    'Add TEMP0 41',
+    'Add TEMP0 OBJECTVALUE2',
+    'DrawSpriteScreenXY 27 TEMP0 88',
+    'IfGreater 18 OBJECTVALUE6 0',
+    'Equal TEMP1 27',
+    'Add TEMP1 OBJECTVALUE6',
+    'IfGreater 20 TEMP1 30',
+    'Equal TEMP1 30',
+    'endif',
+    'DrawSpriteScreenXY TEMP1 TEMP0 88',
+    'endif',
+    'break',
+    'SetActivePalette 0 0 SCREENYSIZE',
+    'DrawRect 0 0 SCREENXSIZE OBJECTVALUE3 32 64 192 255',
+    'DrawRect OBJECTVALUE4 168 SCREENXSIZE 72 224 224 0 255',
+    'Equal TEMP0 OBJECTVALUE4',
+    'Add TEMP0 SCREENXCENTER',
+    'DrawSpriteScreenXY 31 TEMP0 176',
+    'DrawRect 0 0 OBJECTVALUE5 SCREENYSIZE 224 0 0 255',
+    'DrawSpriteScreenXY 26 OBJECTVALUE5 0',
+    'Equal TEMP0 SCREENXCENTER',
+    'Add TEMP0 TEMP2',
+    'Add TEMP0 128',
+    'Add TEMP0 OBJECTVALUE1',
+    'DrawActName 0 TEMP0 64 0 0 16 0',
+    'Equal TEMP0 SCREENXCENTER',
+    'Add TEMP0 TEMP2',
+    'Add TEMP0 41',
+    'Add TEMP0 OBJECTVALUE2',
+    'DrawSpriteScreenXY 27 TEMP0 88',
+    'IfGreater 22 OBJECTVALUE6 0',
+    'Equal TEMP1 27',
+    'Add TEMP1 OBJECTVALUE6',
+    'IfGreater 24 TEMP1 30',
+    'Equal TEMP1 30',
+    'endif',
+    'DrawSpriteScreenXY TEMP1 TEMP0 88',
+    'endif',
+    'break',
+    'SetActivePalette 0 0 SCREENYSIZE',
+    'Equal TEMP0 SCREENXCENTER',
+    'Add TEMP0 TEMP2',
+    'Add TEMP0 128',
+    'Add TEMP0 OBJECTVALUE1',
+    'DrawActName 0 TEMP0 64 0 0 16 0',
+    'Equal TEMP0 SCREENXCENTER',
+    'Add TEMP0 TEMP2',
+    'Add TEMP0 41',
+    'Add TEMP0 OBJECTVALUE2',
+    'DrawSpriteScreenXY 27 TEMP0 88',
+    'IfGreater 26 OBJECTVALUE6 0',
+    'Equal TEMP1 27',
+    'Add TEMP1 OBJECTVALUE6',
+    'IfGreater 28 TEMP1 30',
+    'Equal TEMP1 30',
+    'endif',
+    'DrawSpriteScreenXY TEMP1 TEMP0 88',
+    'endif',
+    'break',
+    'endswitch',
+    'End',
+    'JT 3 switch 0 9 @84 @85 @4 @4 @4 @4 @37 @37 @64 @84 @84 @64',
+    'JT 7 IfEqual @11 @12',
+    'JT 8 IfEqual @10 @11',
+    'JT 28 IfGreater @35 @36',
+    'JT 31 IfGreater @33 @34',
+    'JT 55 IfGreater @62 @63',
+    'JT 58 IfGreater @60 @61',
+    'JT 75 IfGreater @82 @83',
+    'JT 78 IfGreater @80 @81',
+]
+
+
+TITLE_RED_SHIFT = 48  # PS1 title card: the red band and its edge this far left (V4-115)
+
+
+def patch_title_card(bcdir):
+    """V4-115: the Title Card's "SONIC THE HEDGEHOG" (frame 31, 140 px, at OBJECTVALUE4 + SCREENXCENTER: x 160 once settled)
+    sits on the yellow band right of the red band (DrawRect 0 0 OBJECTVALUE5 ..., settled 192 px wide) and its 8 px edge
+    (frame 26 at OBJECTVALUE5) on the PC port's wider screen; on the PS1's 320 px the band covered its first word. The red
+    band and its edge are drawn TITLE_RED_SHIFT px further left: the red DrawRect's x 0 -> -48 in both copies of the draw
+    sub, frame 26's pivot x 0 -> -48 (the Title Card startup's SpriteFrame 0 0 8 256 248 0). Only the drawing moves:
+    OBJECTVALUE5 (whose slide-out ends the card and gives the players control) is untouched; same instruction lengths."""
+    names, vars_ = bs.tables(3)
+    path = os.path.join(bcdir, 'GlobalCode.bin')
+    raw = open(path, 'rb').read()
+    code, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    obj = global_objects(bcdir).index('Title Card')
+    draw, start = bs.load(path)[2][obj][1], bs.load(path)[2][obj][2]
+    red = 'DrawRect %d 0 OBJECTVALUE5 SCREENYSIZE 224 0 0 255'
+    edge = 'SpriteFrame %d 0 8 256 248 0'
+    dl = listing(instructions(code, draw, names, vars_))
+    sl = listing(instructions(code, start, names, vars_))
+    if dl.count(red % -TITLE_RED_SHIFT) == 2 and sl.count(edge % -TITLE_RED_SHIFT) == 1:
+        return 'Title Card red band already %d px left' % TITLE_RED_SHIFT
+    if sub_listing(path, obj, 1, names, vars_)[3] != TITLECARD_DRAW_SIG or dl.count(red % 0) != 2 or sl.count(edge % 0) != 1:
+        sys.exit('ERROR patch_bytecode: Title Card draw sub / frame 26 are not the ones patch_title_card shifts')
+    n = 0
+    for at, name, ops in instructions(code, draw, names, vars_):
+        if listing([(at, name, ops)]) == [red % 0]:
+            code[ops[0][2]] = -TITLE_RED_SHIFT
+            n += 1
+    for at, name, ops in instructions(code, start, names, vars_):
+        if listing([(at, name, ops)]) == [edge % 0]:
+            code[ops[0][2]] = -TITLE_RED_SHIFT
+            n += 1
+    assert n == 3, 'Title Card shift sites'
+    open(path, 'wb').write(encode(code) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+    return 'Title Card red band and edge drawn %d px left (3 constants)' % TITLE_RED_SHIFT
+
+
 def s1_patches():
     """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
@@ -11256,6 +11395,7 @@ def main():
                      ('arzdraw', lambda d: patch_stage_sub(d, 'ARZ Setup', 1, ARZSETUP_DRAW_SIG, 'PS1ARZSetupDraw', with_jumps=True)
                       + ', ' + patch_stage_sub(d, 'Water', 1, ARZWATER_DRAW_SIG, 'PS1ARZWaterDraw', with_jumps=True)),
                      ('drawsubs', patch_draw_subs),
+                     ('titlecard', patch_title_card),
                      ('stagesetup', lambda d: patch_global_sub(d, 'Stage Setup', 0, STAGESETUP_SIG, 'PS1StageSetup',
                                                                with_jumps=True, calls=(71, 50))),
                      ('hud', lambda d: patch_global_function(d, HUD_FN_SIG, 'PS1HUDDraw')),
