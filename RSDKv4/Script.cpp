@@ -947,6 +947,10 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SpecialCtrlP2", 0),
     FunctionInfo("PS1SpLoseRing", 0),
     FunctionInfo("PS1SpLoseRingDraw", 0),
+    FunctionInfo("PS1JellygniteDraw", 0),
+    FunctionInfo("PS1LargeGear", 0),
+    FunctionInfo("PS1LargeGearDraw", 0),
+    FunctionInfo("PS1MTZBeltPlatform", 0),
 #endif
 #endif
 };
@@ -1526,6 +1530,10 @@ enum ScrFunc {
     FUNC_PS1SPECIALCTRLP2,
     FUNC_PS1SPLOSERING,
     FUNC_PS1SPLOSERINGDRAW,
+    FUNC_PS1JELLYGNITEDRAW,
+    FUNC_PS1LARGEGEAR,
+    FUNC_PS1LARGEGEARDRAW,
+    FUNC_PS1MTZBELTPLATFORM,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -4761,6 +4769,309 @@ static void PS1RotatePlatformDraw()
     v[2] &= -65536;
     PS1DrawSpriteXY(v[8], v[1], v[2]);
     PS1DrawSpriteXY(v[10], me.xpos, me.ypos); // DrawSprite v10
+}
+
+// Hidden Palace's Jellygnite draw (Zone08 stage object; 54 VM instructions that run twice a frame: the four tentacle
+// pieces, then, re-queued on draw list 4, the eight arm pieces and the body; ~20 hblanks a frame with the three under
+// water, V4-110), natively: one statement per script instruction, in order. Patched in only when the sub matches
+// JELLYGNITE_DRAW_SIG (tools/scripts/patch_bytecode.py).
+__attribute__((optimize("Os"))) static void PS1JellygniteDraw()
+{
+    int *t     = scriptEng.temp;
+    int self   = objectEntityPos;
+    Entity &me = objectEntityList[self];
+    int *v     = me.values;
+    if (v[11] == 0) {
+        t[1] = me.angle;
+        t[1] &= 511;
+        t[0] = 0;
+        t[2] = me.ypos;
+        t[2] += 458752;
+        while (t[0] < 4) {
+            v[6] = Cos512(t[1]);
+            v[6] <<= 9;
+            v[6] += me.xpos;
+            v[7] = Sin512(t[1]);
+            v[7] <<= 8;
+            v[7] += t[2];
+            PS1DrawSpriteXY(v[10], v[6], v[7]);
+            t[0]++;
+            t[1] += 32;
+            t[1] &= 511;
+            t[2] += 393216;
+        }
+        drawListEntries[4].entityRefs[drawListEntries[4].listSize++] = self; // AddDrawListEntityRef 4 OBJECTENTITYPOS
+    }
+    else {
+        t[0] = 0;
+        t[4] = v[3];
+        v[4] = 0;
+        v[5] = 0;
+        while (t[0] < 4) {
+            t[5] = t[4];
+            t[5] >>= 7;
+            t[5] &= 511;
+            t[2] = Sin512(t[5]);
+            t[2] *= 786;
+            v[4] += t[2];
+            t[3] = Cos512(t[5]);
+            t[3] *= 786;
+            v[5] += t[3];
+            v[6] = v[4];
+            v[6] += me.xpos;
+            v[6] -= 851968;
+            v[7] = v[5];
+            v[7] += me.ypos;
+            v[7] += 65536;
+            PS1DrawSpriteXY(v[9], v[6], v[7]);
+            v[6] = v[4];
+            v[6] = -v[6];
+            v[6] += me.xpos;
+            v[6] += 851968;
+            PS1DrawSpriteXY(v[9], v[6], v[7]);
+            t[0]++;
+            t[4] += v[3];
+        }
+        // DrawSpriteFX OBJECTFRAME FX_FLIP OBJECTXPOS OBJECTYPOS: the VM's FX_FLIP case (directions past FLIP_XY: FLIP_NONE)
+        ObjectScript *o = &objectScriptList[me.type];
+        SpriteFrame *f  = &scriptFrames[o->frameListOffset + me.frame];
+        int dir = me.direction <= FLIP_XY ? me.direction : FLIP_NONE;
+        int sx  = (me.xpos >> 16) - xScrollOffset + ((dir & FLIP_X) ? -f->width - f->pivotX : f->pivotX);
+        int sy  = (me.ypos >> 16) - yScrollOffset + ((dir & FLIP_Y) ? -f->height - f->pivotY : f->pivotY);
+        DrawSpriteFlipped(sx, sy, f->width, f->height, f->sprX, f->sprY, dir, o->spriteSheetID);
+    }
+    v[11] ^= 1;
+}
+
+// Metropolis' Large Gear (Zone09 stage object, Acts 2 / 3; V4-111): update ~270 VM instructions with Sonic, ~430 with
+// Sonic & Tails (an 8-tooth position table, then per player 8 box tests, two tile collisions and the hub's), draw 2 x
+// ~40 a frame. Natively: one statement per script instruction, in order. The tooth tables are stage table values 70883
+// (x) / 70892 (y), as in the script. Patched in only when the subs and their jump-table entries match LARGEGEAR_SIG /
+// LARGEGEAR_DRAW_SIG (tools/scripts/patch_bytecode.py).
+static int PS1CollisionLeft(Entity &e); // below (VAR_OBJECTCOLLISIONLEFT's getter)
+static int PS1CollisionRight(Entity &e); // below (VAR_OBJECTCOLLISIONRIGHT's getter)
+__attribute__((optimize("Os"))) static void PS1LargeGearUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    int self   = objectEntityPos;
+    Entity &me = objectEntityList[self];
+    int *v     = me.values;
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    auto set = [](int table, int index, int value) { // SetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            PS1ScriptWrite(table + index + 1, value);
+    };
+    me.rotation = globalVariables[17];
+    me.rotation &= 63;
+    v[0] = globalVariables[17];
+    if (me.propertyValue == 1) {
+        me.rotation = -me.rotation;
+        me.rotation += 104;
+        me.rotation &= 63;
+        v[0] = -v[0];
+        v[0] += 552;
+        v[0] &= 511;
+    }
+    t[0] = 0;
+    t[1] = v[0];
+    while (t[0] < 8) {
+        t[2] = Cos512(t[1]);
+        t[2] *= -75;
+        t[2] >>= 9;
+        set(70883, t[0], t[2]);
+        t[2] = Sin512(t[1]);
+        t[2] *= -75;
+        t[2] >>= 9;
+        set(70892, t[0], t[2]);
+        t[0]++;
+        t[1] += 64;
+    }
+    t[7] = 0;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[6]      = (v[2] & (1 << t[7])) >> t[7];
+        if (t[6] == 1)
+            p.ypos += 262144;
+        v[2] &= ~(1 << t[7]);
+        t[0] = 0;
+        t[5] = 9;
+        while (t[0] < 8) {
+            get(70883, t[0], t[1]);
+            get(70892, t[0], t[2]);
+            t[3] = t[1];
+            t[4] = t[2];
+            t[1] -= 10;
+            t[2] -= 10;
+            t[3] += 10;
+            t[4] += 10;
+            if (t[6] == 1)
+                PlatformCollision(&me, t[1], t[2], t[3], t[4], &p, 65536, 65536, 65536, 65536);
+            else
+                BoxCollision(&me, t[1], t[2], t[3], t[4], &p, 65536, 65536, 65536, 65536);
+            if (cr == 1) {
+                p.gravity = self;
+                v[2] |= 1 << t[7];
+                t[5] = t[0];
+            }
+            t[0]++;
+        }
+        if (t[5] < 8) {
+            get(70883, t[5], t[0]);
+            t[0] -= v[3 + t[5]]; // switch TEMP5: case 0 Sub TEMP0 OBJECTVALUE3 ... case 7 OBJECTVALUE10 (t[5] is 0-7 here)
+            t[0] <<= 16;
+            t[1] = t[0];
+            t[1] >>= 2;
+            t[0] += t[1];
+            p.xpos += t[0];
+        }
+        else {
+            if (t[6] == 1)
+                p.ypos -= 262144;
+        }
+        ap[0]          = objectEntityPos;
+        objectEntityPos = ap[6];
+        if (PS1_OBJ(objectEntityPos).xpos > PS1_OBJ(ap[0]).xpos)
+            ObjectRWallCollision(PS1CollisionLeft(PS1_OBJ(objectEntityPos)) - 1, 0, 0);
+        else
+            ObjectLWallCollision(PS1CollisionRight(PS1_OBJ(objectEntityPos)), 0, 0);
+        ObjectFloorCollision(0, PS1CollisionBottom(PS1_OBJ(objectEntityPos)), 0);
+        objectEntityPos = ap[0];
+        BoxCollision(&PS1_OBJ(objectEntityPos), -64, -8, 64, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        t[7]++;
+    }
+    for (int i = 0; i < 8; ++i) // GetTableValue OBJECTVALUE3 0 70883 ... OBJECTVALUE10 7 70883
+        get(70883, i, v[3 + i]);
+}
+__attribute__((optimize("Os"))) static void PS1LargeGearDraw()
+{
+    int *t          = scriptEng.temp;
+    int self        = objectEntityPos;
+    Entity &me      = objectEntityList[self];
+    int *v          = me.values;
+    ObjectScript *o = &objectScriptList[me.type];
+    auto rotated    = [&](int frame) { // DrawSpriteFX <frame> FX_ROTATE OBJECTXPOS OBJECTYPOS
+        SpriteFrame *f = &scriptFrames[o->frameListOffset + frame];
+        DrawSpriteRotated(me.direction, (me.xpos >> 16) - xScrollOffset, (me.ypos >> 16) - yScrollOffset, -f->pivotX, -f->pivotY,
+                          f->sprX, f->sprY, f->width, f->height, me.rotation, o->spriteSheetID);
+    };
+    // IfEqual OBJECTVALUE1 0: the 8 teeth (frame 0) then AddDrawListEntityRef 4; else the 8 bolts (frame 2) then the hub.
+    // The two branches' loops are the same but for the frame: one loop here.
+    t[0] = 0;
+    t[1] = me.rotation;
+    while (t[0] < 8) {
+        rotated(v[1] == 0 ? 0 : 2);
+        me.rotation += 64;
+        t[0]++;
+    }
+    me.rotation = t[1];
+    if (v[1] == 0) {
+        drawListEntries[4].entityRefs[drawListEntries[4].listSize++] = self;
+    }
+    else {
+        t[0] = Cos512(v[0]);
+        t[0] *= -28;
+        t[0] <<= 7;
+        t[0] += me.xpos;
+        t[1] = Sin512(v[0]);
+        t[1] *= -28;
+        t[1] <<= 7;
+        t[1] += me.ypos;
+        PS1DrawSpriteXY(1, t[0], t[1]);
+    }
+    v[1] ^= 1;
+}
+// Metropolis' Belt Platform (Zone09 stage object, the platforms on the gears' belts; V4-111): update ~45 VM instructions,
+// 16 of them on screen in Act 2. Natively: one statement per script instruction, in order; at a waypoint stage function
+// 148 (the next leg's velocity) runs in the VM. Patched in only when the sub and its jump-table entries match
+// MTZBELTPLAT_SIG.
+static void PS1CallScriptFunction(int fn, int foreachDepth); // below
+__attribute__((optimize("Os"))) static void PS1MTZBeltPlatformUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    int self   = objectEntityPos;
+    Entity &me = objectEntityList[self];
+    int *v     = me.values;
+    t[2] = 0;
+    t[0] = me.xpos;
+    t[1] = me.ypos;
+    t[0] >>= 16;
+    t[1] >>= 16;
+    t[1] &= 2047;
+    if (me.xvel < 0) {
+        if (me.yvel < 0) {
+            if (t[0] <= v[2]) {
+                if (t[1] <= v[3])
+                    t[2] = 1;
+            }
+        }
+        else {
+            if (t[0] <= v[2]) {
+                if (t[1] >= v[3])
+                    t[2] = 1;
+            }
+        }
+    }
+    else {
+        if (me.yvel < 0) {
+            if (t[0] >= v[2]) {
+                if (t[1] <= v[3])
+                    t[2] = 1;
+            }
+        }
+        else {
+            if (t[0] >= v[2]) {
+                if (t[1] >= v[3])
+                    t[2] = 1;
+            }
+        }
+    }
+    if (t[2] == 1) {
+        if (me.direction == 0) {
+            v[7] += 2;
+            if (v[7] > v[8])
+                v[7] = 0;
+        }
+        else {
+            v[7] -= 2;
+            if (v[7] < 0)
+                v[7] = v[8];
+        }
+        ap[0] = self;
+        PS1CallScriptFunction(148, 0);
+    }
+    t[0] = me.xpos;
+    t[0] &= -65536;
+    t[1] = me.ypos;
+    t[1] &= -65536;
+    t[2] = me.xpos;
+    t[2] += me.xvel;
+    t[3] = me.ypos;
+    t[3] += me.yvel;
+    v[4] = t[2];
+    v[4] &= -65536;
+    v[4] -= t[0];
+    v[5] = t[3];
+    v[5] &= -65536;
+    v[5] -= t[1];
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        PlatformCollision(&me, -16, -8, 16, 8, &p, 65536, 65536, 65536, 65536);
+        if (cr == 1) {
+            p.xpos += v[4];
+            p.ypos += v[5];
+        }
+    }
+    me.xpos = t[2];
+    me.ypos = t[3];
 }
 
 // Hidden Palace's Bridge (stage object "Bridge" in Zone08, not Emerald Hill's; update 188 VM instructions, draw 49
@@ -11899,6 +12210,10 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1SPECIALHUDDRAW: scriptText[0] = '\0'; PS1SpecialHUDDraw(); break;
         case FUNC_PS1SPLOSERING: scriptText[0] = '\0'; PS1SpLoseRingUpdate(); break;
         case FUNC_PS1SPLOSERINGDRAW: scriptText[0] = '\0'; PS1SpLoseRingDraw(); break;
+        case FUNC_PS1JELLYGNITEDRAW: scriptText[0] = '\0'; PS1JellygniteDraw(); break;
+        case FUNC_PS1LARGEGEAR: scriptText[0] = '\0'; PS1LargeGearUpdate(); break;
+        case FUNC_PS1LARGEGEARDRAW: scriptText[0] = '\0'; PS1LargeGearDraw(); break;
+        case FUNC_PS1MTZBELTPLATFORM: scriptText[0] = '\0'; PS1MTZBeltPlatformUpdate(); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -14271,6 +14586,22 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPLOSERINGDRAW: // a whole sub: End follows
                 opcodeSize = 0;
                 PS1SpLoseRingDraw();
+                break;
+            case FUNC_PS1JELLYGNITEDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1JellygniteDraw();
+                break;
+            case FUNC_PS1LARGEGEAR: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1LargeGearUpdate();
+                break;
+            case FUNC_PS1LARGEGEARDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1LargeGearDraw();
+                break;
+            case FUNC_PS1MTZBELTPLATFORM: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1MTZBeltPlatformUpdate();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;

@@ -53,6 +53,8 @@ struct Window {
     volatile bool ahead;               // filled by the load stream, not yet read
 };
 static Window s_win[WINDOWS];
+static int s_winCount = WINDOWS; // windows a load may fill (PS1FsSetWindowCount: 2 during Sonic 2's special stage loads)
+void PS1FsSetWindowCount(int n) { s_winCount = n > 0 && n <= WINDOWS ? n : WINDOWS; }
 static bool readViaWindows(uint32_t lba, uint32_t bytes, uint8_t *dst);
 static uint32_t s_winClock    = 0;
 static uint32_t s_volumeEnd   = 0; // sectors in the volume (PVD): read-ahead never goes past it
@@ -732,7 +734,8 @@ static bool readViaWindows(uint32_t lba, uint32_t bytes, uint8_t *dst) {
 
 // One more window buffer for the load stream (its IRQ may move into it once it is visible).
 static void growWindows() {
-    for (auto &w : s_win) {
+    for (int i = 0; i < s_winCount; ++i) {
+        Window &w = s_win[i];
         if (w.buf)
             continue;
         uint8_t *buf = (uint8_t *)malloc(WINDOW_SECTORS * ISO_SECTOR);
@@ -792,7 +795,7 @@ static Window *streamWindowFor(uint32_t sector) {
         }
         // The least recently used window, an empty slot first (allocated now, as the blocking path did).
         int victim = -1;
-        for (int i = 0; i < WINDOWS; ++i)
+        for (int i = 0; i < s_winCount; ++i)
             if (victim < 0 || s_win[i].age < s_win[victim].age)
                 victim = i;
         if (!s_win[victim].buf && !(s_win[victim].buf = (uint8_t *)malloc(WINDOW_SECTORS * ISO_SECTOR))) {
@@ -821,7 +824,7 @@ static Window *windowFor(uint32_t sector) {
             g_ps1FsWindowHits = g_ps1FsWindowHits + 1;
             return &w;
         }
-        if (w.age < victim->age)
+        if (w.age < victim->age && &w - s_win < s_winCount)
             victim = &w;
     }
     if (!victim->buf && !(victim->buf = (uint8_t *)malloc(WINDOW_SECTORS * ISO_SECTOR))) {

@@ -152,6 +152,7 @@ void PS1Scene3DReadList()
         fclose(f);
     }
 }
+void PS1FsSetWindowCount(int n); // ps1/cdrom_fs.cpp (0 = all)
 #define PS1_SCENE3D_ARENA_WORDS (40 * 1024 / 4) // the chain arenas' size while the block is loaded (below)
 // First thing in a stage load's bracket (RSDKv4/Scene.cpp), after PS1LoadingBegin freed the chain arenas: the block takes
 // the bottom of the free heap and the load's staging buffers, then the arenas, stack above it, as they did above the
@@ -172,6 +173,7 @@ void PS1Scene3DPrepare(const char *folder)
         s_ps1Scene3DBlock = nullptr;
         PS1Scene3DPoint(nullptr);
         PS1ChainSetArenaWords(0); // the normal 64 KB arenas again
+        PS1FsSetWindowCount(0);   // and the loads' three CD read-ahead windows
         g_ps1Scene3DFrees = g_ps1Scene3DFrees + 1;
         return;
     }
@@ -193,6 +195,12 @@ void PS1Scene3DPrepare(const char *folder)
     // which pays for the separate stack (ps1/stack.hh) and lifts the stage's thin headroom (V4-067). Overflow counts
     // in g_ps1ChainOverflow.
     PS1ChainSetArenaWords(PS1_SCENE3D_ARENA_WORDS);
+#if PS1_GAME != 1
+    // V4-110 / V4-111: this stage's loads fill two of the three CD read-ahead windows (ps1/cdrom_fs.cpp): the load's heap
+    // peak (the Scene3D block, the stage's files, the windows) is the lowest headroom of a session, and the third 32 KB
+    // window is what the zones' natives' code took from it.
+    PS1FsSetWindowCount(2);
+#endif
     g_ps1Scene3DAllocs = g_ps1Scene3DAllocs + 1;
 }
 #else

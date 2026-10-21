@@ -1616,6 +1616,27 @@ static int PS1TileQuadWords(uint32_t *w, int sx, int sy, int tileIndex, int ty0,
 // overlap, so they are grouped: whole unflipped tiles per texture page (texpage + bulk 16x16 sprites),
 // then flipped / partial tiles as raw quads (each carries its texpage).
 static void PS1ChainFlipTiles(const uint32_t *f, int n, int sy, int ty0, int h);
+// V4-110: a layer pass's tile bands chained per texture page once at the pass's end (DrawHLineScrollLayer sets
+// s_tileAccum), not per band: tiles of one layer plane never overlap on screen, so only the per-band chain calls (a
+// texpage and two batches per page, ~12 calls a band) go. Hidden Palace under water: ~70 thin bands a frame. The
+// accumulators live in the strip run buffers (s_stripRuns / s_stripWalk, defined with the strips below), which only the
+// strip draw at the pass's end uses: PS1TileAccumFlush runs before it. A full accumulator flushes early.
+#define PS1_ACC_CAP  192 // sprites per page (whole, partial)
+#define PS1_ACC_QUAD 768 // quad words (flipped tiles on the old GPU, 9 or 18 a tile)
+static bool s_tileAccum = false;
+static int s_accN[4], s_accPN[4], s_accQW;
+static uint32_t *PS1AccXY(int page);
+static uint32_t *PS1AccTex(int page);
+static uint32_t *PS1AccPart(int page);
+static uint32_t *PS1AccQuad();
+static void PS1TileAccumFlush();
+// Room for one more band (<= 24 tiles a page): every count below 128 (one OR: 128 + 24 <= PS1_ACC_CAP) and the quads'.
+static_assert(128 + 24 <= PS1_ACC_CAP, "tile accumulator room");
+static inline bool PS1TileAccumFull()
+{
+    return ((s_accN[0] | s_accN[1] | s_accN[2] | s_accN[3] | s_accPN[0] | s_accPN[1] | s_accPN[2] | s_accPN[3]) & ~127)
+           || s_accQW > PS1_ACC_QUAD - 24 * 18;
+}
 // FLIP (docs/43 G3): flipped tiles recorded for PS1ChainFlipTiles' flip rects; else textured quads written in the loop,
 // as before (two instances: the quad path keeps its registers).
 template <bool FLIP>
@@ -1636,14 +1657,20 @@ static void PS1DrawTileBandT(const TileLayer *layer, byte above, int sy, int h, 
     bool whole             = h == TILE_SIZE;
     int prims              = 0;
     uint16_t rowBit        = 1 << ((tileRow >> 3) * 2 + (above ? 1 : 0));
-    uint32_t pageXY[4][24], pageTex[4][24]; // one band: <= 21 tiles across 320 px
-    int pageN[4] = { 0, 0, 0, 0 };
-    uint32_t partial[4][24 * 3]; // unflipped partial rows: variable sprites {xy, uv|clut, wh} per page
-    int partialN[4] = { 0, 0, 0, 0 };
+    uint32_t pageXYl[4][24], pageTexl[4][24]; // one band: <= 21 tiles across 320 px (no accumulator)
+    int pageNl[4] = { 0, 0, 0, 0 };
+    uint32_t partiall[4][24 * 3]; // unflipped partial rows: variable sprites {xy, uv|clut, wh} per page
+    int partialNl[4] = { 0, 0, 0, 0 };
     uint32_t whWord = (uint32_t)TILE_SIZE | ((uint32_t)h << 16);
     uint32_t flipped[FLIP ? 24 : 1]; // FLIP: flipped tiles, x | tile index << 16 | dir << 28
-    uint32_t quads[FLIP ? 1 : 24 * 18];
-    int quadWords = 0, quadN = 0;
+    uint32_t quadsl[FLIP ? 1 : 24 * 18];
+    int quadWordsl = 0, quadN = 0;
+    const bool acc = s_tileAccum;
+    if (acc && PS1TileAccumFull())
+        PS1TileAccumFlush();
+    int *pageN = acc ? s_accN : pageNl, *partialN = acc ? s_accPN : partialNl;
+    int &quadWords = acc ? s_accQW : quadWordsl;
+    uint32_t *quads = acc ? PS1AccQuad() : quadsl;
     int px = chunkX & ~0xF;
     int sx = -(chunkX & 0xF);
     // Chunk by chunk: one chunk-row lookup, then its tiles' packed visuals read in sequence.
@@ -1663,12 +1690,12 @@ static void PS1DrawTileBandT(const TileLayer *layer, byte above, int sy, int h, 
                 if (dir == FLIP_NONE) {
                     int page = tileIndex >> 8, pt = tileIndex & 0xFF;
                     if (whole) {
-                        int n            = pageN[page]++;
-                        pageXY[page][n]  = yWord | (uint16_t)x;
-                        pageTex[page][n] = (uint32_t)(((pt & 0xF) << 4) | ((pt & 0xF0) << 8)) | clutWord;
+                        int n = pageN[page]++;
+                        (acc ? PS1AccXY(page) : pageXYl[page])[n]   = yWord | (uint16_t)x;
+                        (acc ? PS1AccTex(page) : pageTexl[page])[n] = (uint32_t)(((pt & 0xF) << 4) | ((pt & 0xF0) << 8)) | clutWord;
                     }
                     else { // rows [ty0, ty0 + h): a sprite (4 words) instead of a quad (9)
-                        uint32_t *w = &partial[page][partialN[page]++ * 3];
+                        uint32_t *w = &(acc ? PS1AccPart(page) : partiall[page])[partialN[page]++ * 3];
                         w[0]        = yWord | (uint16_t)x;
                         w[1]        = (uint32_t)(((pt & 0xF) << 4) | ((((pt & 0xF0)) + ty0) << 8)) | clutWord;
                         w[2]        = whWord;
@@ -1690,17 +1717,19 @@ static void PS1DrawTileBandT(const TileLayer *layer, byte above, int sy, int h, 
     }
     g_ps1TileFlipped = g_ps1TileFlipped + quadN;
     if (!(g_ps1DebugDrawMask & 2)) {
-        for (int p = 0; p < 4; ++p)
-            if (pageN[p] || partialN[p]) {
-                PS1ChainTPage(s_tileTPage[p]);
-                PS1ChainSprite16RawN(pageXY[p], pageTex[p], pageN[p]);
-                PS1ChainSpriteRawN(partial[p], partialN[p]);
-            }
+        if (!acc) {
+            for (int p = 0; p < 4; ++p)
+                if (pageN[p] || partialN[p]) {
+                    PS1ChainTPage(s_tileTPage[p]);
+                    PS1ChainSprite16RawN(pageXYl[p], pageTexl[p], pageN[p]);
+                    PS1ChainSpriteRawN(partiall[p], partialN[p]);
+                }
+        }
         if constexpr (FLIP) {
             if (quadN)
                 PS1ChainFlipTiles(flipped, quadN, sy, ty0, h);
         }
-        else
+        else if (!acc)
             PS1ChainPrimsRawN(quads, 9, quadWords / 9);
     }
     g_ps1LayerPrims = g_ps1LayerPrims + prims;
@@ -1917,6 +1946,28 @@ static uint32_t s_stripRuns[PS1_STRIP_RUNS * 3];   // grouped by piece
 static uint32_t s_stripWalk[PS1_STRIP_RUNS * 3];   // band order
 static uint8_t s_stripWalkPiece[PS1_STRIP_RUNS];
 static int s_stripWalkCount = 0;
+// The tile accumulators (V4-110, above): s_stripRuns = 4 pages x PS1_ACC_CAP partial sprites (3 words), s_stripWalk = 4 x
+// PS1_ACC_CAP whole-tile xy, then as many tex words, then PS1_ACC_QUAD quad words.
+static_assert(4 * PS1_ACC_CAP * 3 <= PS1_STRIP_RUNS * 3 && 8 * PS1_ACC_CAP + PS1_ACC_QUAD <= PS1_STRIP_RUNS * 3, "tile accumulators");
+static uint32_t *PS1AccPart(int page) { return &s_stripRuns[page * PS1_ACC_CAP * 3]; }
+static uint32_t *PS1AccXY(int page) { return &s_stripWalk[page * PS1_ACC_CAP]; }
+static uint32_t *PS1AccTex(int page) { return &s_stripWalk[(4 + page) * PS1_ACC_CAP]; }
+static uint32_t *PS1AccQuad() { return &s_stripWalk[8 * PS1_ACC_CAP]; }
+static void PS1TileAccumFlush()
+{
+    if (!(g_ps1DebugDrawMask & 2)) {
+        for (int p = 0; p < 4; ++p)
+            if (s_accN[p] || s_accPN[p]) {
+                PS1ChainTPage(s_tileTPage[p]);
+                PS1ChainSprite16RawN(PS1AccXY(p), PS1AccTex(p), s_accN[p]);
+                PS1ChainSpriteRawN(PS1AccPart(p), s_accPN[p]);
+            }
+        if (s_accQW)
+            PS1ChainPrimsRawN(PS1AccQuad(), 9, s_accQW / 9);
+    }
+    for (int p = 0; p < 4; ++p) s_accN[p] = s_accPN[p] = 0;
+    s_accQW = 0;
+}
 
 // Walks a band of lines [ly, ly + h) in a strip region scrolled to chunkX (period from chunkX % period
 // across 320 px; a run <= 256 texels = one piece = one page): runs appended in band order, counted per piece.
@@ -1965,6 +2016,8 @@ static short s_lineX[SCREEN_YSIZE];
 // drawn as bands of lines sharing one X (a band never crosses a tile row).
 // docs/43 C9: the per-line loops at -O2 (the rest of this file is -Os; the tile band itself measured slower at -O2:
 // Hidden Palace S&T tiles 109.6 -> 116.9)
+extern volatile uint32_t g_ps1PerfFrames; // frames drawn (below): the FG line-X key's frame
+extern int16_t g_ps1LayerOneEntry[LAYER_COUNT]; // RSDKv4/Scene.cpp LoadStageBackground
 __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
 {
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
@@ -2040,6 +2093,7 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
         int chunkX = xScrollOffset % fullW;
         if (chunkX < 0)
             chunkX += fullW;
+        s_tileAccum = true;
         for (int y = 0; y < SCREEN_YSIZE;) {
             int h = TILE_SIZE - (ly & 0xF);
             if (h > SCREEN_YSIZE - y)
@@ -2050,12 +2104,41 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
             if (ly >= fullH)
                 ly -= fullH;
         }
+        PS1TileAccumFlush();
+        s_tileAccum = false;
         g_ps1LayerHbl              = g_ps1LayerHbl + PS1HblanksSince(t0);
         g_ps1ProfLayer[0]          = g_ps1ProfLayer[0] + PS1HblanksSince(t0);
         g_ps1ProfSlot[layerID & 3] = PS1HblanksSince(t0);
         return;
     }
-    for (int y = 0; y < SCREEN_YSIZE; ++y) {
+    // The FG's low and high planes (two draw slots, the same layer) get the same per-line X in one frame: the second
+    // call reuses s_lineX when nothing changed it (every other caller resets the key). V4-110: ~5 hblanks under water.
+    static struct {
+        const TileLayer *layer;
+        const int *d, *dw;
+        int frame, xs, ys, wdp, deform, fullW;
+    } s_fgLineKey;
+    bool reuse = fg && s_fgLineKey.layer == layer && s_fgLineKey.frame == (int)g_ps1PerfFrames && s_fgLineKey.xs == xScrollOffset
+                 && s_fgLineKey.ys == yscrollOffset && s_fgLineKey.wdp == waterDrawPos && s_fgLineKey.d == deformationData
+                 && s_fgLineKey.dw == deformationDataW && s_fgLineKey.deform == hParallax.deform[0] && s_fgLineKey.fullW == fullW;
+    s_fgLineKey.layer = fg ? layer : nullptr;
+    s_fgLineKey.d = deformationData, s_fgLineKey.dw = deformationDataW, s_fgLineKey.frame = (int)g_ps1PerfFrames;
+    s_fgLineKey.xs = xScrollOffset, s_fgLineKey.ys = yscrollOffset, s_fgLineKey.wdp = waterDrawPos;
+    s_fgLineKey.deform = hParallax.deform[0], s_fgLineKey.fullW = fullW;
+    // V4-111: a BG layer whose every line uses one parallax entry (g_ps1LayerOneEntry, set at its load) without its deform
+    // flag gives every line that entry's X (wrapped as below), filled in without the per-line pass. Metropolis' BG: ~8
+    // hblanks a frame.
+    int one   = fg ? -1 : g_ps1LayerOneEntry[activeTileLayers[layerID]];
+    bool flat = one >= 0 && !hParallax.deform[one];
+    if (flat) {
+        int flatX = hParallax.linePos[one];
+        if (flatX < 0)
+            flatX += fullW;
+        if (flatX >= fullW)
+            flatX -= fullW;
+        for (int y = 0; y < SCREEN_YSIZE; ++y) s_lineX[y] = (short)flatX;
+    }
+    for (int y = 0; !reuse && !flat && y < SCREEN_YSIZE; ++y) {
         byte idx   = fg || ly >= TILELAYER_LINESCROLL_COUNT ? 0 : layer->lineScroll[ly];
         int chunkX = hParallax.linePos[idx];
         if (y < waterDrawPos) {
@@ -2082,6 +2165,7 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
     int layerIdx            = activeTileLayers[layerID];
     const uint8_t *stripRow = s_stripCount && !fg ? s_stripRow[layerIdx][above] : nullptr;
     ly                      = tileYPos;
+    s_tileAccum             = true;
     for (int y = 0; y < SCREEN_YSIZE;) {
         int chunkX = s_lineX[y];
         int ri     = stripRow ? stripRow[ly >> 4] : 0;
@@ -2116,6 +2200,12 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
         ly += h;
         if (ly >= fullH)
             ly -= fullH;
+    }
+    {
+        uint32_t tb = PS1Hblanks();
+        PS1TileAccumFlush(); // before the strip draw: the accumulators are its buffers
+        s_tileAccum = false;
+        tTiles += PS1HblanksSince(tb);
     }
     g_ps1ProfLayer[2]   = g_ps1ProfLayer[2] + tTiles;
     g_ps1StripBandCount = g_ps1StripBandCount + stripBands;
