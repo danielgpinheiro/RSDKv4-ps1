@@ -2603,17 +2603,27 @@ static void PS1DrawSprite(int XPos, int YPos, int width, int height, int sprX, i
 {
     if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden() || PS1SpriteOffScreen(XPos, YPos, width, height))
         return;
-    // the cache: opaque, unmodulated, one CLUT set (no bank split), a frame of one resident piece
-    const bool plain = s_ink == PS1_INK_OPAQUE && s_inkMod == 0x80 && !s_splitY && g_ps1SpriteCacheOn && PS1SurfaceSheet(sheetID) >= 0;
+    // the cache: opaque, unmodulated, one CLUT set (no bank split, or the sprite wholly above / below the split line: set
+    // A / B, PS1ChainPieceSprite's choice; V4-046, Aquatic Ruin's water line was on screen and every sprite missed it), a
+    // frame of one resident piece
+    const int y0     = s_splitY;
+    const bool below = y0 && YPos >= y0;
+    const bool plain = s_ink == PS1_INK_OPAQUE && s_inkMod == 0x80 && (!y0 || below || YPos + height <= y0) && g_ps1SpriteCacheOn
+                       && PS1SurfaceSheet(sheetID) >= 0;
     PS1SpriteCacheEntry *e = nullptr;
     if (plain) {
         uint32_t h = (uint32_t)sheetID * 31 + (uint32_t)sprX * 7 + (uint32_t)sprY * 13 + (uint32_t)width * 3 + (uint32_t)height;
         e          = &s_spriteCache[(h ^ (h >> 6)) & 63];
         if (e->sheetID == sheetID && e->sprX == sprX && e->sprY == sprY && e->w == width && e->h == height) {
+            uint32_t tex = e->tex; // set A's CLUT; set B's is PS1_CLUT_B_DY rows lower (ClutIndex = y << 6 | x >> 4)
+            if (below) {
+                PS1EnsureSetB();
+                tex += (uint32_t)PS1_CLUT_B_DY << 22;
+            }
             psyqo::PrimPieces::TPageAttr attr;
             memcpy(&attr, &e->tpage, 2);
             PS1ChainTPage(attr);
-            PS1ChainSpriteWords((uint32_t)(uint16_t)XPos | (uint32_t)(uint16_t)YPos << 16, e->tex,
+            PS1ChainSpriteWords((uint32_t)(uint16_t)XPos | (uint32_t)(uint16_t)YPos << 16, tex,
                                 (uint32_t)(uint16_t)width | (uint32_t)(uint16_t)height << 16);
             g_ps1DrawSprites    = g_ps1DrawSprites + 1;
             g_ps1SpriteCacheHits = g_ps1SpriteCacheHits + 1;
