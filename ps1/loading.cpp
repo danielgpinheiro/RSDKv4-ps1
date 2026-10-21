@@ -96,6 +96,14 @@ void tickBody() {
         return;
     if (g_ps1GPU->isChainTransferring())
         return; // the previous frame's chain is still drawing: next tick
+    // V4-108: a load's blocking uploadToVRAM (the tile pages, the atlas, the BG strips) pumps callbacks while its DMA
+    // runs, and this timer fires there: the icon's own upload would be a second GPU DMA (psyqo's "Only one GPU DMA
+    // transfer at a time" abort: Sonic 1's credits froze on a black screen in PCSX-ReARMed loading Credits after a demo,
+    // where a GPU DMA ends later than in PCSX-Redux / DuckStation; Mania MA-097 eb496d2b). DMA2 CHCR bit 24 (psx-spx
+    // DMA, 1F8010A8h) is set until the transfer ends, DICR bit 26 (1F8010F4h) until its IRQ is acknowledged, and psyqo
+    // clears its callback in that IRQ: next tick.
+    if ((*(volatile uint32_t *)0xBF8010A8 & 0x01000000) || (*(volatile uint32_t *)0xBF8010F4 & (1u << 26)))
+        return;
     if (!s_shown) {
         s_dispY     = displayedY();
         int16_t hid = (int16_t)(256 - s_dispY);
