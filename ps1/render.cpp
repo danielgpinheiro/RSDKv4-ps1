@@ -1780,24 +1780,23 @@ static void PS1DrawTileBandSplit(const TileLayer *layer, byte above, int sy, int
 // VRAM the stage's atlas leaves free. A band of lines in a strip region costs 1-3 sprites instead of ~21
 // tiles (per-line parallax would otherwise make one band per line). From the Nexus / Sonic CD ports.
 #define PS1_STRIP_MAX    32 // Sonic 2: 18 at most (Wing Fortress with Tails); tools/bgstrips MAX_REGIONS
+// 'BGS3' strips (tools/bgstrips build_stage_seg; Sonic 1 docs/37 phase 3, Sonic 2 since V4-110): a region's period is a
+// map of 256-texel pieces (Sonic 1 up to 32, Sonic 2 up to 9), pieces with the same content share one VRAM spot, and
+// rows of <= 15 colours are 4-bit with their own CLUT (appended to the atlas' CLUTs, filled with the palette like them).
+// Flags bit 7 (Sonic 2): the region's rows equal rows an earlier region stored, its spots point there, no data in the
+// file. Green Hill's water (Sonic 1), Hidden Palace's under-water ripple (Sonic 2): ~100+ tile bands a frame -> strips.
 #if PS1_GAME == 1
-// Sonic 1: 'BGS3' strips (tools/bgstrips build_stage_seg, docs/37 phase 3): a region's period is a map of up to 32
-// 256-texel pieces, pieces with the same content share one VRAM spot, and rows of <= 15 colours are 4-bit with their
-// own CLUT (appended to the atlas' CLUTs, filled with the palette like them). Green Hill's water: ~100 tile bands a
-// frame -> strip bands.
 #define PS1_STRIP_PIECES 32 // tools/bgstrips SEG_PIECES
-#define PS1_STRIP_MAGIC  "BGS3"
 #else
 #define PS1_STRIP_PIECES 9 // tools/bgstrips MAX_PIECES
-#define PS1_STRIP_MAGIC  "BGS2"
 #endif
+#define PS1_STRIP_MAGIC  "BGS3"
+#define PS1_STRIP_NO_DATA 0x80
 struct PS1StripRegion {
     uint8_t layer, plane, pieces, pad; // pad (BGS3): flags, bit 0 = 4-bit
     uint16_t line0, lines, period;
     uint16_t x[PS1_STRIP_PIECES], y[PS1_STRIP_PIECES], w[PS1_STRIP_PIECES]; // piece VRAM origin (hw) + width (texels)
-#if PS1_GAME == 1
     uint32_t clut[2]; // 4-bit regions: the CLUT word for set A / set B (bank split)
-#endif
 };
 static PS1StripRegion s_strips[PS1_STRIP_MAX];
 static int s_stripCount = 0;
@@ -1825,7 +1824,6 @@ void PS1LoadBGStrips(const char *folder, int player)
         count = head[4] | (head[5] << 8);
         ok    = count <= PS1_STRIP_MAX;
     }
-#if PS1_GAME == 1
     // the file's CLUTs go after the atlas' (PS1BuildPalette / PS1ReservePaletteRows fill and chain them)
     int clutBase = g_ps1AtlasClutCount, clutCount = ok ? head[6] | (head[7] << 8) : 0;
     ok = ok && clutBase + clutCount <= PS1_ATLAS_MAX_CLUTS;
@@ -1837,7 +1835,6 @@ void PS1LoadBGStrips(const char *folder, int player)
         dst.y = c[2] | (c[3] << 8);
         memcpy(dst.map, c + 4, 16);
     }
-#endif
     for (int i = 0; ok && i < count; ++i) {
         uint8_t e[10 + 6 * PS1_STRIP_PIECES];
         ok = fread(e, 1, sizeof(e), f) == sizeof(e);
@@ -1854,10 +1851,9 @@ void PS1LoadBGStrips(const char *folder, int player)
             r.w[k] = e[14 + 6 * k] | (e[15 + 6 * k] << 8);
         }
         ok = ok && r.pieces <= PS1_STRIP_PIECES && r.layer < LAYER_COUNT && r.line0 + r.lines <= TILELAYER_LINESCROLL_COUNT;
-#if PS1_GAME == 1
         r.pad = e[9];
         if (r.pad & 1) {
-            int k = r.pad >> 1;
+            int k = (r.pad >> 1) & 63;
             ok    = ok && k < clutCount;
             if (ok) {
                 const PS1AtlasClut &c = g_ps1AtlasCluts[clutBase + k];
@@ -1869,7 +1865,6 @@ void PS1LoadBGStrips(const char *folder, int player)
                 }
             }
         }
-#endif
     }
     const int stagingBytes = 16 * 1024;
     uint8_t *staging       = ok ? (uint8_t *)psyqo_malloc(stagingBytes) : nullptr;
@@ -1878,8 +1873,7 @@ void PS1LoadBGStrips(const char *folder, int player)
         PS1GpuImmediate();
         for (int i = 0; ok && i < count; ++i) {
             PS1StripRegion &r = s_strips[i];
-            for (int k = 0; ok && k < r.pieces; ++k) {
-#if PS1_GAME == 1
+            for (int k = 0; ok && !(r.pad & PS1_STRIP_NO_DATA) && k < r.pieces; ++k) {
                 bool shared = false; // an earlier piece's spot: stored once
                 for (int j = 0; j < k; ++j) shared = shared || (r.x[j] == r.x[k] && r.y[j] == r.y[k]);
                 if (shared)
@@ -1894,17 +1888,6 @@ void PS1LoadBGStrips(const char *folder, int player)
                                                psyqo::Rect{ { (int16_t)r.x[k], (int16_t)(r.y[k] + row) }, { (int16_t)(rowBytes / 2), (int16_t)n } });
                     bytes += n * rowBytes;
                 }
-#else
-                int rowsPerChunk = stagingBytes / r.w[k];
-                for (int row = 0; ok && row < r.lines; row += rowsPerChunk) {
-                    int n = r.lines - row < rowsPerChunk ? r.lines - row : rowsPerChunk;
-                    ok    = fread(staging, 1, n * r.w[k], f) == (size_t)(n * r.w[k]);
-                    if (ok)
-                        g_ps1GPU->uploadToVRAM((const uint16_t *)staging,
-                                               psyqo::Rect{ { (int16_t)r.x[k], (int16_t)(r.y[k] + row) }, { (int16_t)(r.w[k] / 2), (int16_t)n } });
-                    bytes += n * r.w[k];
-                }
-#endif
             }
             for (int row = r.line0 >> 4; row < (r.line0 + r.lines) >> 4; ++row) s_stripRow[r.layer][r.plane][row] = (uint8_t)(i + 1);
         }
@@ -1922,9 +1905,7 @@ void PS1LoadBGStrips(const char *folder, int player)
     s_stripCount      = count;
     g_ps1StripRegions = count;
     g_ps1StripBytes   = bytes;
-#if PS1_GAME == 1
     g_ps1AtlasClutCount = clutBase + clutCount;
-#endif
 }
 
 // Strip sprites of one region, grouped by piece: one walk writes the runs in band order with their
@@ -2147,17 +2128,11 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
         int count[PS1_STRIP_PIECES]      = {};
         int pos[PS1_STRIP_PIECES], total = 0;
         s_stripWalkCount                 = 0;
-#if PS1_GAME == 1
         const uint32_t *clut = (r.pad & 1) ? r.clut : stripClut;
         auto mode = (r.pad & 1) ? psyqo::Prim::TPageAttr::ColorMode::Tex4Bits : psyqo::Prim::TPageAttr::ColorMode::Tex8Bits;
         for (int b = i; b < j; ++b)
             PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX,
                              clut[s_stripBands[b].setB], count);
-#else
-        for (int b = i; b < j; ++b)
-            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX,
-                             stripClut[s_stripBands[b].setB], count);
-#endif
         for (int k = 0; k < r.pieces; ++k) {
             pos[k] = total;
             total += count[k];
@@ -2174,11 +2149,7 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
             if (n <= 0)
                 continue;
             psyqo::PrimPieces::TPageAttr attr;
-#if PS1_GAME == 1
             attr.set(mode);
-#else
-            attr.set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
-#endif
             attr.setPageX((uint8_t)(r.x[k] >> 6));
             attr.setPageY((uint8_t)(r.y[k] >> 8));
             PS1ChainTPage(attr);
