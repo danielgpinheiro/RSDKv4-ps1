@@ -2204,7 +2204,11 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
     else { // FG Layer
         lastXSize     = layer->xsize;
         yscrollOffset = yScrollOffset;
-        for (int i = 0; i < PARALLAX_COUNT; ++i) hParallax.linePos[i] = xScrollOffset;
+        {
+            int *lp = hParallax.linePos, v = xScrollOffset; // four stores a step (two FG passes a frame)
+            static_assert(PARALLAX_COUNT % 4 == 0, "linePos fill");
+            for (int i = 0; i < PARALLAX_COUNT; i += 4) lp[i] = lp[i + 1] = lp[i + 2] = lp[i + 3] = v;
+        }
         deformationData  = &bgDeformationData0[(byte)(yscrollOffset + layer->deformationOffset)];
         deformationDataW = &bgDeformationData1[(byte)(yscrollOffset + waterDrawPos + layer->deformationOffsetW)];
     }
@@ -2366,18 +2370,25 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
                 }
                 continue;
             }
-            for (; y < yEnd; ++y, ++d) {
+            // By runs of one parallax entry (V4-046: Aquatic Ruin's BG lines sit on a few entries for hundreds of lines;
+            // ~13 hblanks a frame line by line): an entry without the deform flag gives every line of its run the same X.
+            while (y < yEnd) {
                 byte idx   = ls[ly];
                 int chunkX = hParallax.linePos[idx];
-                if (hParallax.deform[idx])
+                bool def   = hParallax.deform[idx];
+                if (def)
                     chunkX += *d;
                 if (chunkX < 0)
                     chunkX += fullW;
                 if (chunkX >= fullW)
                     chunkX -= fullW;
-                s_lineX[y] = (short)chunkX;
-                if (++ly >= fullH)
-                    ly = 0;
+                short sx = (short)chunkX;
+                do {
+                    s_lineX[y++] = sx;
+                    ++d;
+                    if (++ly >= fullH)
+                        ly = 0;
+                } while (!def && y < yEnd && ls[ly] == idx);
             }
         }
     }
@@ -2416,7 +2427,10 @@ __attribute__((optimize("O2"))) void DrawHLineScrollLayer(int layerID)
         }
         else {
             int rowLeft = TILE_SIZE - (ly & 0xF);
-            while (h < rowLeft && y + h < SCREEN_YSIZE && s_lineX[y + h] == chunkX) ++h;
+            int lim         = rowLeft < SCREEN_YSIZE - y ? rowLeft : SCREEN_YSIZE - y; // the scan's bounds, once a band
+            const short *lx = &s_lineX[y];
+            const short cx  = (short)chunkX; // chunkX is s_lineX[y]
+            while (h < lim && lx[h] == cx) ++h;
             uint32_t tb = PS1Hblanks();
             PS1DrawTileBandSplit(layer, above, y, h, ly, chunkX, fullW);
             tTiles += PS1HblanksSince(tb);

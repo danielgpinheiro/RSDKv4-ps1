@@ -966,6 +966,14 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1Brick", 0),
     FunctionInfo("PS1Grounder", 0),
     FunctionInfo("PS1Springboard", 0),
+    FunctionInfo("PS1ARZSetupDraw", 0),
+    FunctionInfo("PS1ARZWaterDraw", 0),
+    FunctionInfo("PS1DrawFrame", 0),
+    FunctionInfo("PS1DrawFrame0", 0),
+    FunctionInfo("PS1DrawProp", 0),
+    FunctionInfo("PS1DrawFlipFrame", 0),
+    FunctionInfo("PS1DrawFlip0", 0),
+    FunctionInfo("PS1DrawInkFrame", 0),
 #endif
 #endif
 };
@@ -1563,6 +1571,14 @@ enum ScrFunc {
     FUNC_PS1BRICK,
     FUNC_PS1GROUNDER,
     FUNC_PS1SPRINGBOARD,
+    FUNC_PS1ARZSETUPDRAW,
+    FUNC_PS1ARZWATERDRAW,
+    FUNC_PS1DRAWFRAME,
+    FUNC_PS1DRAWFRAME0,
+    FUNC_PS1DRAWPROP,
+    FUNC_PS1DRAWFLIPFRAME,
+    FUNC_PS1DRAWFLIP0,
+    FUNC_PS1DRAWINKFRAME,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -5904,6 +5920,83 @@ __attribute__((optimize("Os"))) static void PS1SpringboardUpdate()
         }
         t[2]++;
     }
+}
+// Aquatic Ruin's ARZ Setup draw sub (Zone03 stage object: the palette banks above / below the water line, LOCAL 63679
+// picks the bottom one; 14 VM instructions, ~4.6 hblanks with Sonic & Tails, V4-046), as Sonic 1's LZ Setup draw.
+// Natively, one statement per script instruction. Patched in only on ARZSETUP_DRAW_SIG.
+__attribute__((optimize("Os"))) static void PS1ARZSetupDraw()
+{
+    int *t = scriptEng.temp;
+    t[0]   = waterLevel;
+    t[0] -= yScrollOffset;
+    if (t[0] < 0)
+        t[0] = 0;
+    if (t[0] > SCREEN_YSIZE)
+        t[0] = SCREEN_YSIZE;
+    SetActivePalette(0, 0, t[0]);
+    if (scriptCode[63679] > 0)
+        SetActivePalette(2, t[0], SCREEN_YSIZE);
+    else
+        SetActivePalette(1, t[0], SCREEN_YSIZE);
+}
+// FUNC_DRAWSPRITE(SCREEN)FX's FX_INK switch: frame f of e's script at (x, y) (pivot not yet added).
+__attribute__((noinline, optimize("Os"))) static void PS1DrawInk(const Entity &e, const ObjectScript *o, const SpriteFrame *f, int x, int y)
+{
+    x += f->pivotX;
+    y += f->pivotY;
+    switch (e.inkEffect) {
+        case INK_NONE: DrawSprite(x, y, f->width, f->height, f->sprX, f->sprY, o->spriteSheetID); break;
+        case INK_BLEND: DrawBlendedSprite(x, y, f->width, f->height, f->sprX, f->sprY, o->spriteSheetID); break;
+        case INK_ALPHA: DrawAlphaBlendedSprite(x, y, f->width, f->height, f->sprX, f->sprY, e.alpha, o->spriteSheetID); break;
+        case INK_ADD: DrawAdditiveBlendedSprite(x, y, f->width, f->height, f->sprX, f->sprY, e.alpha, o->spriteSheetID); break;
+        case INK_SUB: DrawSubtractiveBlendedSprite(x, y, f->width, f->height, f->sprX, f->sprY, e.alpha, o->spriteSheetID); break;
+    }
+}
+// The Water draw sub (Aquatic Ruin, Chemical Plant and Hidden Palace share it: the surface strip at the water line, two
+// 256-pixel frames; 11 VM instructions, V4-046). Natively, one statement per script instruction; DrawSpriteScreenFX FX_INK's ink switch as the VM
+// has it. Patched in only on ARZWATER_DRAW_SIG.
+__attribute__((optimize("Os"))) static void PS1ARZWaterDraw()
+{
+    int *t             = scriptEng.temp;
+    Entity &me         = objectEntityList[objectEntityPos];
+    ObjectScript *o    = &objectScriptList[me.type];
+    SpriteFrame *f     = &scriptFrames[o->frameListOffset + me.frame];
+    t[0] = xScrollOffset;
+    t[1] = Sin512(globalVariables[17]);
+    t[1] >>= 5;
+    t[0] += t[1];
+    t[0] &= 63;
+    t[0] = -t[0];
+    t[1] = waterLevel;
+    t[1] -= yScrollOffset;
+    PS1DrawInk(me, o, f, t[0], t[1]); // DrawSpriteScreenFX OBJECTFRAME FX_INK TEMP0 TEMP1
+    t[0] += 256;
+    PS1DrawInk(me, o, f, t[0], t[1]);
+}
+// One-sprite draw subs (V4-046; ~200 Sonic 2 objects: badniks, platforms, effects, rings): `DrawSprite OBJECTFRAME | 0 |
+// OBJECTPROPERTYVALUE`, `DrawSpriteFX OBJECTFRAME | 0 FX_FLIP OBJECTXPOS OBJECTYPOS` and `DrawSpriteFX OBJECTFRAME FX_INK
+// OBJECTXPOS OBJECTYPOS` (the Lose Ring), then End. As natives they take the one-native-sub path (PS1S2TopSub: no
+// ProcessScript entry) and draw what the VM's FUNC_DRAWSPRITE / FUNC_DRAWSPRITEFX cases draw, from the same frame.
+// Patched in only on the exact two-line listings (patch_draw_subs).
+__attribute__((optimize("Os"))) static void PS1DrawSub(int kind)
+{
+    Entity &e             = objectEntityList[objectEntityPos];
+    const ObjectScript *o = &objectScriptList[e.type];
+    int frame             = kind == 1 || kind == 4 ? 0 : kind == 2 ? e.propertyValue : e.frame;
+    const SpriteFrame *f  = &scriptFrames[o->frameListOffset + frame];
+    int x = (e.xpos >> 16) - xScrollOffset, y = (e.ypos >> 16) - yScrollOffset;
+    if (kind <= 2) { // FUNC_DRAWSPRITE
+        DrawSprite(x + f->pivotX, y + f->pivotY, f->width, f->height, f->sprX, f->sprY, o->spriteSheetID);
+        return;
+    }
+    if (kind == 5) { // FX_INK
+        PS1DrawInk(e, o, f, x, y);
+        return;
+    }
+    // FX_FLIP: the VM's four direction cases (any other direction draws as FLIP_NONE), one call
+    int dir = e.direction <= FLIP_XY ? e.direction : FLIP_NONE;
+    DrawSpriteFlipped((dir & FLIP_X) ? x - f->width - f->pivotX : x + f->pivotX, (dir & FLIP_Y) ? y - f->height - f->pivotY : y + f->pivotY,
+                      f->width, f->height, f->sprX, f->sprY, dir, o->spriteSheetID);
 }
 // Metropolis' M Platform (Zone09; V4-111): a platform moving by a 4-leg table (87247 x / 87252 y velocities, 87257
 // durations) while ridden, carrying its riders; ~20 VM instructions a player. Natively, one statement per script
@@ -13211,6 +13304,14 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1BRICK: scriptText[0] = '\0'; PS1BrickUpdate(); break;
         case FUNC_PS1GROUNDER: scriptText[0] = '\0'; PS1GrounderUpdate(); break;
         case FUNC_PS1SPRINGBOARD: scriptText[0] = '\0'; PS1SpringboardUpdate(); break;
+        case FUNC_PS1ARZSETUPDRAW: scriptText[0] = '\0'; PS1ARZSetupDraw(); break;
+        case FUNC_PS1ARZWATERDRAW: scriptText[0] = '\0'; PS1ARZWaterDraw(); break;
+        case FUNC_PS1DRAWFRAME: scriptText[0] = '\0'; PS1DrawSub(0); break;
+        case FUNC_PS1DRAWFRAME0: scriptText[0] = '\0'; PS1DrawSub(1); break;
+        case FUNC_PS1DRAWPROP: scriptText[0] = '\0'; PS1DrawSub(2); break;
+        case FUNC_PS1DRAWFLIPFRAME: scriptText[0] = '\0'; PS1DrawSub(3); break;
+        case FUNC_PS1DRAWFLIP0: scriptText[0] = '\0'; PS1DrawSub(4); break;
+        case FUNC_PS1DRAWINKFRAME: scriptText[0] = '\0'; PS1DrawSub(5); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -15661,6 +15762,38 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPRINGBOARD: // a whole sub: End follows
                 opcodeSize = 0;
                 PS1SpringboardUpdate();
+                break;
+            case FUNC_PS1ARZSETUPDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1ARZSetupDraw();
+                break;
+            case FUNC_PS1ARZWATERDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1ARZWaterDraw();
+                break;
+            case FUNC_PS1DRAWFRAME: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1DrawSub(0);
+                break;
+            case FUNC_PS1DRAWFRAME0: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1DrawSub(1);
+                break;
+            case FUNC_PS1DRAWPROP: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1DrawSub(2);
+                break;
+            case FUNC_PS1DRAWFLIPFRAME: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1DrawSub(3);
+                break;
+            case FUNC_PS1DRAWFLIP0: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1DrawSub(4);
+                break;
+            case FUNC_PS1DRAWINKFRAME: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1DrawSub(5);
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;

@@ -46,8 +46,9 @@ natively, leaving the same temps and table / local writes behind.
   motion functions 103 / 104 (their variable CallFunction).
 - Aquatic Ruin's Leaf, Leaf Spawner (its function 140 inlined) and Brick update subs -> PS1Leaf / PS1LeafSpawner /
   PS1Brick / End when LEAF_SIG / LEAFSPAWNER_SIG (+ LEAFSPAWN_FN_SIG) / BRICK_SIG match, its Grounder / Grounder2 ->
-  PS1Grounder (GROUNDER_SIG), and GlobalCode's Springboard -> PS1Springboard (SPRINGBOARD_SIG), jump-table entries
-  included (V4-046).
+  PS1Grounder (GROUNDER_SIG), GlobalCode's Springboard -> PS1Springboard (SPRINGBOARD_SIG), and the ARZ Setup / Water
+  draw subs -> PS1ARZSetupDraw / PS1ARZWaterDraw (ARZSETUP_DRAW_SIG / ARZWATER_DRAW_SIG), jump-table entries included
+  (V4-046).
 
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected stops the
 build. Already patched files are recognised and left alone.
@@ -55,7 +56,7 @@ build. Already patched files are recognised and left alone.
 Usage: patch_bytecode.py BYTECODE_DIR [--game 1|2]   (the disc tree's Bytecode/, e.g. build/iso/Bytecode;
        --game 1: Sonic 1's list, docs/37 -- default 2, Sonic 2's)
 """
-import os, struct, sys
+import collections, os, struct, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
@@ -11074,6 +11075,102 @@ SPRINGBOARD_SIG = [  # GlobalCode's Springboard update sub, with its jump-table 
 ]
 
 
+ARZSETUP_DRAW_SIG = [  # Aquatic Ruin's ARZ Setup draw sub (Zone03), with its jump-table entries (V4-046)
+    'Equal TEMP0 STAGEWATERLEVEL',
+    'Sub TEMP0 SCREENYOFFSET',
+    'IfLower 0 TEMP0 0',
+    'Equal TEMP0 0',
+    'endif',
+    'IfGreater 2 TEMP0 SCREENYSIZE',
+    'Equal TEMP0 SCREENYSIZE',
+    'endif',
+    'SetActivePalette 0 0 TEMP0',
+    'IfGreater 4 LOCAL[1,0,63679] 0',
+    'SetActivePalette 2 TEMP0 SCREENYSIZE',
+    'else',
+    'SetActivePalette 1 TEMP0 SCREENYSIZE',
+    'endif',
+    'End',
+    'JT 2 IfLower @4 @5',
+    'JT 5 IfGreater @7 @8',
+    'JT 9 IfGreater @12 @14',
+]
+
+
+ARZWATER_DRAW_SIG = [  # Aquatic Ruin's Water draw sub (Zone03) (V4-046)
+    'Equal TEMP0 SCREENXOFFSET',
+    'Sin TEMP1 GLOBAL[1,0,17]',
+    'ShR TEMP1 5',
+    'Add TEMP0 TEMP1',
+    'And TEMP0 63',
+    'FlipSign TEMP0',
+    'Equal TEMP1 STAGEWATERLEVEL',
+    'Sub TEMP1 SCREENYOFFSET',
+    'DrawSpriteScreenFX OBJECTFRAME 3 TEMP0 TEMP1',
+    'Add TEMP0 256',
+    'DrawSpriteScreenFX OBJECTFRAME 3 TEMP0 TEMP1',
+    'End',
+]
+
+
+DRAW_SUB_OPS = {  # one-sprite draw subs -> a native (RSDKv4/Script.cpp PS1DrawSub; V4-046)
+    ('DrawSprite OBJECTFRAME', 'End'): 'PS1DrawFrame',
+    ('DrawSprite 0', 'End'): 'PS1DrawFrame0',
+    ('DrawSprite OBJECTPROPERTYVALUE', 'End'): 'PS1DrawProp',
+    ('DrawSpriteFX OBJECTFRAME 5 OBJECTXPOS OBJECTYPOS', 'End'): 'PS1DrawFlipFrame',
+    ('DrawSpriteFX 0 5 OBJECTXPOS OBJECTYPOS', 'End'): 'PS1DrawFlip0',
+    ('DrawSpriteFX OBJECTFRAME 3 OBJECTXPOS OBJECTYPOS', 'End'): 'PS1DrawInkFrame',
+}
+
+
+def patch_draw_subs(bcdir):
+    """Every object's draw sub (GlobalCode's and each stage file's own objects) that is exactly one of DRAW_SUB_OPS ->
+    its native / End."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    end = fn.index('End')
+    ops = {k: fn.index(v) for k, v in DRAW_SUB_OPS.items()}
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    data = os.path.join(bcdir, '..', 'Data')
+    done = collections.Counter()
+
+    def patch_file(path, objs, base):
+        raw = open(path, 'rb').read()
+        own, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        full = bs.full_code(path)[0] if base else own
+        subs = bs.load(path)[2]
+        n = 0
+        for i, _ in enumerate(objs):
+            ptr = subs[i][1]
+            if ptr < base or ptr >= base + len(own) or full[ptr] in ops.values():
+                continue
+            key = tuple(listing(instructions(full, ptr, names, vars_)))
+            if key in ops:
+                own[ptr - base:ptr - base + 2] = [ops[key], end]
+                done[DRAW_SUB_OPS[key]] += 1
+                n += 1
+        if n:
+            open(path, 'wb').write(encode(own) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+        return n
+
+    total = patch_file(os.path.join(bcdir, 'GlobalCode.bin'), global_objects(bcdir), 0)
+    glen = len(bs.load(os.path.join(bcdir, 'GlobalCode.bin'))[0])
+    for f in sorted(os.listdir(bcdir)):
+        folder = f[:-4]
+        if not f.endswith('.bin') or folder == 'GlobalCode':
+            continue
+        if not os.path.exists(os.path.join(data, 'Stages', folder, 'StageConfig.bin')):
+            continue
+        path = os.path.join(bcdir, f)
+        _, _, objs = object_sheets.stage_config(data, folder)
+        base = glen if len(bs.full_code(path)[0]) > len(bs.load(path)[0]) else 0
+        total += patch_file(path, objs, base)
+    return '%d draw subs native (%s)' % (total, ', '.join('%s %d' % kv for kv in sorted(done.items())))
+
+
 def s1_patches():
     """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
@@ -11156,6 +11253,9 @@ def main():
                       + ', ' + patch_stage_sub(d, 'Grounder2', 0, GROUNDER_SIG, 'PS1Grounder', with_jumps=True, calls=(44,))),
                      ('springboard', lambda d: patch_global_sub(d, 'Springboard', 0, SPRINGBOARD_SIG, 'PS1Springboard',
                                                                 with_jumps=True)),
+                     ('arzdraw', lambda d: patch_stage_sub(d, 'ARZ Setup', 1, ARZSETUP_DRAW_SIG, 'PS1ARZSetupDraw', with_jumps=True)
+                      + ', ' + patch_stage_sub(d, 'Water', 1, ARZWATER_DRAW_SIG, 'PS1ARZWaterDraw', with_jumps=True)),
+                     ('drawsubs', patch_draw_subs),
                      ('stagesetup', lambda d: patch_global_sub(d, 'Stage Setup', 0, STAGESETUP_SIG, 'PS1StageSetup',
                                                                with_jumps=True, calls=(71, 50))),
                      ('hud', lambda d: patch_global_function(d, HUD_FN_SIG, 'PS1HUDDraw')),
