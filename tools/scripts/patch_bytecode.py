@@ -9600,6 +9600,79 @@ def patch_keep_options(bcdir, s1=False):
     return 'Stage Setup keeps %s in save mode (saveSlot test 0 -> %d)' % (' / '.join(want[1:]), KEEPOPTIONS_NEVER)
 
 
+COCONUTS_RESPAWN_SIG = [  # Coconuts' update, its out-of-bounds respawn (listing lines 104-118, Zone01)
+    'IfEqual 44 OBJECTOUTOFBOUNDS 1',
+    'Equal TEMP0 OBJECTXPOS',
+    'Equal TEMP1 OBJECTYPOS',
+    'Equal OBJECTXPOS OBJECTVALUE3',
+    'Equal OBJECTYPOS OBJECTVALUE4',
+    'IfEqual 46 OBJECTOUTOFBOUNDS 1',
+    'Equal OBJECTVALUE1 0',
+    'Equal OBJECTVALUE0 16',
+    'Equal OBJECTSTATE 0',
+    'Equal OBJECTPRIORITY 0',
+    'else',
+    'Equal OBJECTXPOS TEMP0',
+    'Equal OBJECTYPOS TEMP1',
+    'endif',
+    'endif',
+]
+
+
+def patch_coconuts(bcdir):
+    """V4-112 (tester 2026-10-20: Emerald Hill's trees look short, Coconuts clips through the floor): Coconuts climbs his
+    palm tree by a 6-entry table of moves (value2 = the entry, up on even ones), from his spawn point (value3 / 4).
+    When he and his spawn are out of bounds the respawn puts him back at the spawn but keeps value2, so he restarts the
+    cycle mid-way: up to 16 px above it (into the leaves) or 33 px below (into the grass). Upstream's script does the
+    same; the PS1's 320-pixel screen sends him out of bounds more often. The respawn's `Equal OBJECTVALUE1 0` becomes
+    `Equal OBJECTVALUE2 0` (same length: the variable id only): value1 is his throw cooldown (<= 32 frames, counted down
+    in state 0 anyway), value2 now restarts with the cycle. Exact listing of the whole respawn block."""
+    names, vars_ = bs.tables(3)
+    vid = {v.replace('VAR_', ''): i for i, v in enumerate(vars_)}
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    data = os.path.join(bcdir, '..', 'Data')
+    glen = len(bs.load(os.path.join(bcdir, 'GlobalCode.bin'))[0])
+    fixed = COCONUTS_RESPAWN_SIG[:6] + ['Equal OBJECTVALUE2 0'] + COCONUTS_RESPAWN_SIG[7:]
+    done, already = [], []
+    for f in sorted(os.listdir(bcdir)):
+        folder = f[:-4]
+        if not f.endswith('.bin') or folder == 'GlobalCode':
+            continue
+        if not os.path.exists(os.path.join(data, 'Stages', folder, 'StageConfig.bin')):
+            continue
+        objs = object_sheets.stage_config(data, folder)[2]
+        if 'Coconuts' not in objs:
+            continue
+        path = os.path.join(bcdir, f)
+        raw = open(path, 'rb').read()
+        own, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        full = bs.full_code(path)[0]
+        base = glen if len(full) > len(own) else 0
+        ptr = bs.load(path)[2][objs.index('Coconuts')][0]
+        ins = instructions(full, ptr, names, vars_)
+        lst = listing(ins)
+        n = len(COCONUTS_RESPAWN_SIG)
+        hits = [k for k in range(len(lst) - n + 1) if lst[k:k + n] == COCONUTS_RESPAWN_SIG]
+        if not hits and any(lst[k:k + n] == fixed for k in range(len(lst) - n + 1)):
+            already.append(folder)
+            continue
+        if len(hits) != 1:
+            raise SystemExit('coconuts: %d matches of the respawn block in %s' % (len(hits), folder))
+        _, _, ops = ins[hits[0] + 6]
+        pos = ops[0][2]
+        assert full[pos] == vid['OBJECTVALUE1']
+        own[pos - base] = vid['OBJECTVALUE2']
+        open(path, 'wb').write(encode(own) + rest)
+        assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+        done.append(folder)
+    if not done and not already:
+        raise SystemExit('coconuts: no stage has Coconuts')
+    return 'Coconuts respawn restarts the climb table (value2 = 0): %s%s' % (
+        ' '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def s1_patches():
     """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
@@ -9670,6 +9743,7 @@ def main():
                      ('earthquake', lambda d: patch_stage_sub(d, 'Earthquake', 0, EARTHQUAKE_SIG, 'PS1Earthquake',
                                                               with_jumps=True, calls=(46, 50))),
                      ('entitylayout', patch_entity_layout),
+                     ('coconuts', patch_coconuts),
                      ('clearall', patch_clear_all),
                      ('backpause', patch_back_pause),  # before playerinput: its signature has the patched If
                      ('playerinput', patch_player_input),
