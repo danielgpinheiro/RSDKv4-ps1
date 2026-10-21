@@ -455,6 +455,53 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
     }
 }
 
+// PS1ChainSprite16RawN with each sprite's xy and texinfo words next to each other ({xy, tex} pairs: render.cpp's tile
+// accumulators, V4-110).
+void PS1ChainSprite16RawPairs(const uint32_t *pairs, int n) {
+    static uint32_t cmd = 0;
+    if (!cmd) {
+        psyqo::Prim::Sprite16x16 s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
+        memcpy(&cmd, &s, 4);
+    }
+    if (g_ps1ChainSkipPrims || n <= 0)
+        return;
+    runHook();
+    flushBatch();
+    if (uint32_t *h = runBegin((n + PS1_TILE_BATCH - 1) / PS1_TILE_BATCH, 3 * n)) {
+        uint32_t *first = h, *last = h;
+        unsigned lastWords = 0;
+        while (n > 0) {
+            int k       = n < PS1_TILE_BATCH ? n : PS1_TILE_BATCH;
+            uint32_t *w = h + 1;
+            for (int i = 0; i < k; ++i, w += 3, pairs += 2) {
+                w[0] = cmd;
+                w[1] = pairs[0];
+                w[2] = pairs[1];
+            }
+            last = h, lastWords = 3 * k;
+            *h   = (lastWords << 24) | (reinterpret_cast<uintptr_t>(w) & 0xffffff);
+            h    = w;
+            n -= k;
+        }
+        runEnd(first, last, h, lastWords);
+        return;
+    }
+    while (n > 0) {
+        int k = n < PS1_TILE_BATCH ? n : PS1_TILE_BATCH;
+        VarFragment *f = allocVar(3 * k);
+        if (!f)
+            return;
+        uint32_t *w = f->data;
+        for (int i = 0; i < k; ++i, w += 3, pairs += 2) {
+            w[0] = cmd;
+            w[1] = pairs[0];
+            w[2] = pairs[1];
+        }
+        chainFrag(*f);
+        n -= k;
+    }
+}
+
 void PS1ChainSpriteRawN(const uint32_t *words, int n) {
     static uint32_t cmd = 0;
     if (!cmd) {
@@ -819,6 +866,23 @@ bool PS1ChainCaptureEnd(uint32_t **first, uint32_t **last, uint32_t *countWord) 
     *last        = reinterpret_cast<uint32_t *>(s_capLast);
     *countWord   = s_capCount;
     return s_capFirst != nullptr;
+}
+
+// A captured sub-list (PS1ChainCaptureEnd's first / last / countWord) linked into the frame's chain here, as one run.
+namespace {
+struct SpliceNode {
+    uintptr_t head;
+    size_t getActualFragmentSize() const;
+};
+size_t s_spliceSize = 0;
+size_t SpliceNode::getActualFragmentSize() const { return s_spliceSize; }
+} // namespace
+void PS1ChainSplice(uint32_t *first, uint32_t *last, uint32_t countWord) {
+    runHook();
+    flushBatch();
+    s_spliceSize = countWord >> 24;
+    s_gpu->chain(reinterpret_cast<SpliceNode *>(first), reinterpret_cast<SpliceNode *>(last));
+    s_tpageValid = false;
 }
 
 uint32_t *PS1ChainOTBegin(int n) {

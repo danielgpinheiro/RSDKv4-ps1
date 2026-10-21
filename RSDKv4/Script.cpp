@@ -8,6 +8,7 @@
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/video.hh"
 void PS1TileChanged(int chunkTile); // ps1/render.cpp
+extern volatile uint32_t g_ps1TileInputGen; // ps1/render.cpp: bumped by every change to what a tile layer pass reads
 
 // Guards for the PS1-sized arrays and the VM (for GDB; tools/*_test.sh read them).
 volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table / big values past the PS1-sized arrays
@@ -951,6 +952,9 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1LargeGear", 0),
     FunctionInfo("PS1LargeGearDraw", 0),
     FunctionInfo("PS1MTZBeltPlatform", 0),
+    FunctionInfo("PS1BeltActivation", 0),
+    FunctionInfo("PS1BeltActivationDraw", 0),
+    FunctionInfo("PS1VPlatform2", 0),
 #endif
 #endif
 };
@@ -1534,6 +1538,9 @@ enum ScrFunc {
     FUNC_PS1LARGEGEAR,
     FUNC_PS1LARGEGEARDRAW,
     FUNC_PS1MTZBELTPLATFORM,
+    FUNC_PS1BELTACTIVATION,
+    FUNC_PS1BELTACTIVATIONDRAW,
+    FUNC_PS1VPLATFORM2,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -5072,6 +5079,77 @@ __attribute__((optimize("Os"))) static void PS1MTZBeltPlatformUpdate()
     }
     me.xpos = t[2];
     me.ypos = t[3];
+}
+// Metropolis' Belt Activation (Zone09; V4-111): the update keeps its belt's platforms (entity slots value1 to value0 - 1)
+// active, the draw sets them to priority 5 while the stage runs, else 1; 16 slots x 3-4 VM instructions each, twice a
+// frame. Natively, one statement per script instruction. Patched in only on BELTACT_SIG / BELTACT_DRAW_SIG.
+static void PS1BeltActivationUpdate()
+{
+    int *ap    = scriptEng.arrayPosition;
+    Entity &me = objectEntityList[objectEntityPos];
+    ap[0]      = me.values[1];
+    while (ap[0] < me.values[0]) {
+        PS1_OBJ(ap[0]).priority = 1;
+        ap[0]++;
+    }
+}
+static void PS1BeltActivationDraw()
+{
+    int *ap    = scriptEng.arrayPosition;
+    Entity &me = objectEntityList[objectEntityPos];
+    ap[0]      = me.values[1];
+    while (ap[0] < me.values[0]) {
+        if (stageMode == 1)
+            PS1_OBJ(ap[0]).priority = 5;
+        else
+            PS1_OBJ(ap[0]).priority = 1;
+        ap[0]++;
+    }
+}
+// V Platform 2 (Zone09's, the same script in Emerald Hill, Chemical Plant, Aquatic Ruin, Hill Top, Wing Fortress where it
+// matches; V4-111): a platform bobbing on global table 24760 entry 14, carrying its riders; ~25 VM instructions with
+// Sonic & Tails. Natively, one statement per script instruction; GlobalCode function 50 (crushed) runs in the VM.
+// Patched in only on VPLAT2_SIG.
+__attribute__((optimize("Os"))) static void PS1VPlatform2Update()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    t[6] = me.ypos;
+    if (14 < scriptCode[24760]) // GetTableValue TEMP0 14 24760
+        t[0] = scriptCode[24760 + 14 + 1];
+    if (me.propertyValue == 1) {
+        t[0] = -t[0];
+        t[0] += 32768;
+    }
+    t[0] <<= 8;
+    me.ypos = v[0];
+    me.ypos += v[31];
+    me.ypos -= t[0];
+    t[6] &= -65536;
+    t[7] = me.ypos;
+    t[7] &= -65536;
+    t[7] -= t[6];
+    t[2] = 0;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[0]      = (v[1] & (1 << t[2])) >> t[2];
+        if (t[0] == 1)
+            p.ypos += t[7];
+        v[1] &= ~(1 << t[2]);
+        BoxCollision(&me, -32, -12, 32, 12, &p, 65536, 65536, 65536, 65536);
+        switch (cr) {
+            case 1: v[1] |= 1 << t[2]; break;
+            case 4:
+                if (p.gravity == 0)
+                    PS1CallScriptFunction(50, 1);
+                break;
+        }
+        t[2]++;
+    }
 }
 
 // Hidden Palace's Bridge (stage object "Bridge" in Zone08, not Emerald Hill's; update 188 VM instructions, draw 49
@@ -12214,6 +12292,9 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1LARGEGEAR: scriptText[0] = '\0'; PS1LargeGearUpdate(); break;
         case FUNC_PS1LARGEGEARDRAW: scriptText[0] = '\0'; PS1LargeGearDraw(); break;
         case FUNC_PS1MTZBELTPLATFORM: scriptText[0] = '\0'; PS1MTZBeltPlatformUpdate(); break;
+        case FUNC_PS1BELTACTIVATION: scriptText[0] = '\0'; PS1BeltActivationUpdate(); break;
+        case FUNC_PS1BELTACTIVATIONDRAW: scriptText[0] = '\0'; PS1BeltActivationDraw(); break;
+        case FUNC_PS1VPLATFORM2: scriptText[0] = '\0'; PS1VPlatform2Update(); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -14247,6 +14328,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             case FUNC_SETLAYERDEFORMATION:
                 opcodeSize = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+                g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
                 SetLayerDeformation(scriptEng.operands[0], scriptEng.operands[1], scriptEng.operands[2], scriptEng.operands[3], scriptEng.operands[4],
                                     scriptEng.operands[5]);
                 break;
@@ -14266,6 +14350,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             case FUNC_SETTILELAYERENTRY:
                 stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
+#if RETRO_PLATFORM == RETRO_PS1
+                g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
                 break;
             case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
             case FUNC_SETBIT:
@@ -14602,6 +14689,18 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1MTZBELTPLATFORM: // a whole sub: End follows
                 opcodeSize = 0;
                 PS1MTZBeltPlatformUpdate();
+                break;
+            case FUNC_PS1BELTACTIVATION: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1BeltActivationUpdate();
+                break;
+            case FUNC_PS1BELTACTIVATIONDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1BeltActivationDraw();
+                break;
+            case FUNC_PS1VPLATFORM2: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1VPlatform2Update();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;
@@ -15771,10 +15870,30 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                             newYBoundary2 = scriptEng.operands[i];
                         }
                         break;
-                    case VAR_STAGEDEFORMATIONDATA0: bgDeformationData0[arrayVal] = scriptEng.operands[i]; break;
-                    case VAR_STAGEDEFORMATIONDATA1: bgDeformationData1[arrayVal] = scriptEng.operands[i]; break;
-                    case VAR_STAGEDEFORMATIONDATA2: bgDeformationData2[arrayVal] = scriptEng.operands[i]; break;
-                    case VAR_STAGEDEFORMATIONDATA3: bgDeformationData3[arrayVal] = scriptEng.operands[i]; break;
+                    case VAR_STAGEDEFORMATIONDATA0:
+                        bgDeformationData0[arrayVal] = scriptEng.operands[i];
+#if RETRO_PLATFORM == RETRO_PS1
+                        g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
+                        break;
+                    case VAR_STAGEDEFORMATIONDATA1:
+                        bgDeformationData1[arrayVal] = scriptEng.operands[i];
+#if RETRO_PLATFORM == RETRO_PS1
+                        g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
+                        break;
+                    case VAR_STAGEDEFORMATIONDATA2:
+                        bgDeformationData2[arrayVal] = scriptEng.operands[i];
+#if RETRO_PLATFORM == RETRO_PS1
+                        g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
+                        break;
+                    case VAR_STAGEDEFORMATIONDATA3:
+                        bgDeformationData3[arrayVal] = scriptEng.operands[i];
+#if RETRO_PLATFORM == RETRO_PS1
+                        g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
+                        break;
                     case VAR_STAGEWATERLEVEL: waterLevel = scriptEng.operands[i]; break;
                     case VAR_STAGEACTIVELAYER: activeTileLayers[arrayVal] = scriptEng.operands[i]; break;
                     case VAR_STAGEMIDPOINT: tLayerMidPoint = scriptEng.operands[i]; break;
