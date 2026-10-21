@@ -409,7 +409,9 @@ inline void runEnd(uint32_t *first, uint32_t *last, uint32_t *end, unsigned last
 }
 } // namespace
 
-void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
+// stride: words from one sprite's xy (tex) to the next's: 1 for separate arrays, 2 for {xy, tex} pairs (render.cpp's tile
+// accumulators, V4-110: PS1ChainSprite16RawPairs).
+void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n, int stride) {
     static uint32_t cmd = 0;
     if (!cmd) {
         psyqo::Prim::Sprite16x16 s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
@@ -427,8 +429,9 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
             uint32_t *w = h + 1;
             for (int i = 0; i < k; ++i, w += 3) {
                 w[0] = cmd;
-                w[1] = *xy++;
-                w[2] = *tex++;
+                w[1] = *xy;
+                w[2] = *tex;
+                xy += stride, tex += stride;
             }
             last = h, lastWords = 3 * k;
             *h   = (lastWords << 24) | (reinterpret_cast<uintptr_t>(w) & 0xffffff);
@@ -446,56 +449,10 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
         uint32_t *w = f->data;
         for (int i = 0; i < k; ++i) {
             w[0] = cmd;
-            w[1] = *xy++;
-            w[2] = *tex++;
+            w[1] = *xy;
+            w[2] = *tex;
+            xy += stride, tex += stride;
             w += 3;
-        }
-        chainFrag(*f);
-        n -= k;
-    }
-}
-
-// PS1ChainSprite16RawN with each sprite's xy and texinfo words next to each other ({xy, tex} pairs: render.cpp's tile
-// accumulators, V4-110).
-void PS1ChainSprite16RawPairs(const uint32_t *pairs, int n) {
-    static uint32_t cmd = 0;
-    if (!cmd) {
-        psyqo::Prim::Sprite16x16 s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
-        memcpy(&cmd, &s, 4);
-    }
-    if (g_ps1ChainSkipPrims || n <= 0)
-        return;
-    runHook();
-    flushBatch();
-    if (uint32_t *h = runBegin((n + PS1_TILE_BATCH - 1) / PS1_TILE_BATCH, 3 * n)) {
-        uint32_t *first = h, *last = h;
-        unsigned lastWords = 0;
-        while (n > 0) {
-            int k       = n < PS1_TILE_BATCH ? n : PS1_TILE_BATCH;
-            uint32_t *w = h + 1;
-            for (int i = 0; i < k; ++i, w += 3, pairs += 2) {
-                w[0] = cmd;
-                w[1] = pairs[0];
-                w[2] = pairs[1];
-            }
-            last = h, lastWords = 3 * k;
-            *h   = (lastWords << 24) | (reinterpret_cast<uintptr_t>(w) & 0xffffff);
-            h    = w;
-            n -= k;
-        }
-        runEnd(first, last, h, lastWords);
-        return;
-    }
-    while (n > 0) {
-        int k = n < PS1_TILE_BATCH ? n : PS1_TILE_BATCH;
-        VarFragment *f = allocVar(3 * k);
-        if (!f)
-            return;
-        uint32_t *w = f->data;
-        for (int i = 0; i < k; ++i, w += 3, pairs += 2) {
-            w[0] = cmd;
-            w[1] = pairs[0];
-            w[2] = pairs[1];
         }
         chainFrag(*f);
         n -= k;
