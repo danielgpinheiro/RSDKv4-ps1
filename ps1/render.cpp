@@ -292,47 +292,88 @@ static const uint16_t *PS1PaletteFor(int bank)
 #endif
 
 #if PS1_GAME != 1
-// Sonic 2 (docs/43: ~4 hblanks a frame converted all 255 colours): s_pal kept with the RGB565 colours it came from, as
-// Sonic 1's slots but one (s_pal itself). A fill of the same bank, atlas load and CLUT count converts only the entries
-// that changed and redoes the CLUT maps if any did; anything else, or a fade in progress, builds it whole.
-static uint16_t s_palSrc[256];
-static int s_palSrcBank = -1, s_palSrcCluts = -1;
-static uint32_t s_palSrcAtlas = 0;
-static uint s_palSrcVersion = 0; // g_ps1PalVersion when s_palSrc was last compared (no write since: nothing changed)
-__attribute__((noinline, optimize("Os"))) static void PS1BuildPaletteCached(int bank)
+// Sonic 2 (docs/43: ~4 hblanks a frame converted all 255 colours): the converted palette kept with the RGB565 colours it
+// came from, in two slots (s_pal, and s_palB for a stage with <= PS1_PALB_CLUTS atlas CLUTs: every Sonic 2 atlas has
+// <= 19): a water frame fills the top and the bottom bank, and with one slot both were converted whole every frame
+// (V4-046: ~14 hblanks in Aquatic Ruin). A fill of a slot's bank, atlas load and CLUT count converts only the entries
+// that changed and redoes the CLUT maps if any did; anything else, or a fade in progress, builds a slot whole.
+#define PS1_PALB_CLUTS 24
+static uint16_t s_palB[256 + PS1_PALB_CLUTS * 16];
+static uint16_t s_palSrcA[256], s_palSrcB[256];
+struct PS1PalSlot {
+    uint16_t *out, *src;
+    int bank, cluts;
+    uint32_t atlas;
+    uint version; // g_ps1PalVersion when src was last compared (no write since: nothing changed)
+};
+static PS1PalSlot s_palSlot[2] = { { s_pal, s_palSrcA, -1, -1, 0, 0 }, { s_palB, s_palSrcB, -1, -1, 0, 0 } };
+static int s_palSlotNext = 0; // the slot a new bank replaces (the other one was filled last)
+__attribute__((noinline, optimize("Os"))) static const uint16_t *PS1BuildPaletteCached(int bank)
 {
-    if (s_fadePending || bank != s_palSrcBank || g_ps1AtlasLoads != s_palSrcAtlas || g_ps1AtlasClutCount != s_palSrcCluts) {
-        PS1BuildPalette(bank);
-        if (s_fadePending) {
-            s_palSrcBank = -1;
-            return;
+    int nSlots = g_ps1AtlasClutCount <= PS1_PALB_CLUTS ? 2 : 1;
+    PS1PalSlot *s = nullptr;
+    for (int k = 0; k < nSlots && !s; ++k)
+        if (s_palSlot[k].bank == bank)
+            s = &s_palSlot[k];
+    if (s_fadePending || !s || g_ps1AtlasLoads != s->atlas || g_ps1AtlasClutCount != s->cluts) {
+        if (!s) {
+            s             = &s_palSlot[nSlots == 2 ? s_palSlotNext : 0];
+            s_palSlotNext = (int)(s == &s_palSlot[0]);
         }
-        memcpy(s_palSrc, fullPalette[bank], sizeof(s_palSrc));
-        s_palSrcBank = bank, s_palSrcAtlas = g_ps1AtlasLoads, s_palSrcCluts = g_ps1AtlasClutCount;
-        s_palSrcVersion = g_ps1PalVersion;
-        return;
+        uint16_t *out = s->out; // PS1BuildPalette's, into the slot
+        out[0]        = 0x0000;
+        if (s_fadePending) {
+            const PaletteEntry *pal = fullPalette32[bank];
+            int a = s_fadeA, na = 255 - a;
+            for (int i = 1; i < 256; ++i)
+                out[i] = PS1Conv((pal[i].r * na + s_fadeR * a) / 255, (pal[i].g * na + s_fadeG * a) / 255, (pal[i].b * na + s_fadeB * a) / 255);
+        }
+        else {
+            const ushort *p565 = fullPalette[bank];
+            for (int i = 1; i < 256; ++i) {
+                uint32_t c = p565[i];
+                out[i]     = (uint16_t)(0x8000 | (c >> 11) | ((c >> 1) & 0x3E0) | ((c & 0x1F) << 10));
+            }
+        }
+        for (int k = 0; k < g_ps1AtlasClutCount; ++k) {
+            const uint8_t *map = g_ps1AtlasCluts[k].map;
+            uint16_t *dst      = &out[256 + k * 16];
+            dst[0]             = 0x0000;
+            for (int i = 1; i < 16; ++i) dst[i] = out[map[i]];
+        }
+        if (s_fadePending) {
+            s->bank = -1;
+            return out;
+        }
+        memcpy(s->src, fullPalette[bank], 256 * sizeof(uint16_t));
+        s->bank = bank, s->atlas = g_ps1AtlasLoads, s->cluts = g_ps1AtlasClutCount;
+        s->version = g_ps1PalVersion;
+        return out;
     }
-    if (s_palSrcVersion == g_ps1PalVersion) // no palette write since the last compare: s_palSrc is the palette
-        return;
-    s_palSrcVersion    = g_ps1PalVersion;
+    s_palSlotNext = (int)(s == &s_palSlot[0]);
+    if (s->version == g_ps1PalVersion) // no palette write since the last compare: src is the palette
+        return s->out;
+    s->version         = g_ps1PalVersion;
     const ushort *p565 = fullPalette[bank];
+    uint16_t *out      = s->out;
     bool changed       = false;
     for (int i = 1; i < 256; ++i) {
         uint32_t c = p565[i];
-        if (c == s_palSrc[i])
+        if (c == s->src[i])
             continue;
-        s_palSrc[i] = (uint16_t)c;
-        s_pal[i]    = (uint16_t)(0x8000 | (c >> 11) | ((c >> 1) & 0x3E0) | ((c & 0x1F) << 10)); // PS1BuildPalette's
-        changed     = true;
+        s->src[i] = (uint16_t)c;
+        out[i]    = (uint16_t)(0x8000 | (c >> 11) | ((c >> 1) & 0x3E0) | ((c & 0x1F) << 10)); // PS1BuildPalette's
+        changed   = true;
     }
     if (!changed)
-        return;
+        return out;
     for (int k = 0; k < g_ps1AtlasClutCount; ++k) {
         const uint8_t *map = g_ps1AtlasCluts[k].map;
-        uint16_t *dst      = &s_pal[256 + k * 16];
+        uint16_t *dst      = &out[256 + k * 16];
         dst[0]             = 0x0000;
-        for (int i = 1; i < 16; ++i) dst[i] = s_pal[map[i]];
+        for (int i = 1; i < 16; ++i) dst[i] = out[map[i]];
     }
+    return out;
 }
 #endif
 
@@ -345,10 +386,10 @@ static void PS1FillPalette(int bank, int first = 0, int end = -1)
         end = s_palChunkCount;
     for (int i = first; i < end; ++i) memcpy(s_palChunks[i].dst, &pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
 #else
-    PS1BuildPaletteCached(bank);
+    const uint16_t *pal = PS1BuildPaletteCached(bank);
     if (end < 0)
         end = s_palChunkCount;
-    for (int i = first; i < end; ++i) memcpy(s_palChunks[i].dst, &s_pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
+    for (int i = first; i < end; ++i) memcpy(s_palChunks[i].dst, &pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
 #endif
 }
 
