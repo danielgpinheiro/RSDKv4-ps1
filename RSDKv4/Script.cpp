@@ -961,6 +961,11 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1OneWayDoor", 0),
     FunctionInfo("PS1WheelPlatform", 0),
     FunctionInfo("PS1WheelPlatformDraw", 0),
+    FunctionInfo("PS1Leaf", 0),
+    FunctionInfo("PS1LeafSpawner", 0),
+    FunctionInfo("PS1Brick", 0),
+    FunctionInfo("PS1Grounder", 0),
+    FunctionInfo("PS1Springboard", 0),
 #endif
 #endif
 };
@@ -1553,6 +1558,11 @@ enum ScrFunc {
     FUNC_PS1ONEWAYDOOR,
     FUNC_PS1WHEELPLATFORM,
     FUNC_PS1WHEELPLATFORMDRAW,
+    FUNC_PS1LEAF,
+    FUNC_PS1LEAFSPAWNER,
+    FUNC_PS1BRICK,
+    FUNC_PS1GROUNDER,
+    FUNC_PS1SPRINGBOARD,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -5513,6 +5523,387 @@ __attribute__((optimize("Os"))) static void PS1WheelPlatformDraw()
     PS1DrawSpriteXY(0, v[6], v[7]);
     PS1DrawSpriteXY(2, v[4], v[5]);
     PS1DrawSpriteXY(1, v[8], v[9]);
+}
+static void PS1CreateTempObject(int type, int prop, int x, int y); // below (FUNC_CREATETEMPOBJECT's body)
+// Aquatic Ruin's Leaf (Zone03 stage object: the leaves a Leaf Spawner scatters; 29 VM instructions a frame each, up to
+// eight at once: ~34 hblanks, V4-046). Natively, one statement per script instruction. Patched in only on LEAF_SIG.
+__attribute__((optimize("Os"))) static void PS1LeafUpdate()
+{
+    int *t     = scriptEng.temp;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    v[3] += v[4];
+    t[0] = globalVariables[17];
+    t[0] &= 31;
+    if (t[0] == 0) {
+        t[0] = rand() % 2;
+        if (t[0] == 1)
+            v[4] = -v[4];
+    }
+    v[1] += me.xvel;
+    v[2] += me.yvel;
+    t[0] = v[2];
+    t[0] &= 768;
+    t[0] += 1024;
+    me.yvel += t[0];
+    me.xpos = Cos512(v[3]);
+    me.xpos <<= 2;
+    me.xpos += v[1];
+    me.ypos = Sin512(v[3]);
+    me.ypos <<= 2;
+    me.ypos += v[2];
+    me.animationTimer--;
+    if (me.animationTimer < 0) {
+        me.animationTimer = 11;
+        me.frame ^= 2;
+    }
+    if (PS1ObjectOutOfBounds(&me) == 1)
+        me.type = 0;
+}
+// Aquatic Ruin's Leaf Spawner (Zone03 stage object: a bush that scatters four leaves when a player runs through it; 31
+// VM instructions with Sonic & Tails), natively: one statement per script instruction, its function 140 (create a leaf
+// at the player) inlined. Patched in only on LEAFSPAWNER_SIG with function 140 == LEAFSPAWN_FN_SIG.
+__attribute__((optimize("Os"))) static void PS1LeafSpawnerUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    static const int vels[8] = { -32768, -32768, 49152, -16384, -49152, 16384, 32768, 32768 };
+    if (v[0] == 0) {
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6]     = players.entityRefs[loop];
+            Entity &p = PS1_OBJ(ap[6]);
+            TouchCollision(&me, v[2], -32, v[1], 32, &p, 65536, 65536, 65536, 65536);
+            if (cr == 1) {
+                t[0] = p.xvel;
+                t[0] = abs(t[0]);
+                t[1] = p.yvel;
+                t[1] = abs(t[1]);
+                t[0] |= t[1];
+                if (t[0] > 131072) {
+                    v[0] = 15;
+                    PlaySfx(54, 0);
+                    for (int k = 0; k < 8; k += 2) { // CallFunction 140, then the new leaf's velocity
+                        PS1CreateTempObject(62, 0, p.xpos, p.ypos);
+                        Entity &n = PS1_OBJ(ap[8]);
+                        t[2]      = rand() % 16;
+                        t[2] -= 8;
+                        t[2] <<= 16;
+                        n.xpos += t[2];
+                        t[2] = rand() % 16;
+                        t[2] -= 8;
+                        t[2] <<= 16;
+                        n.ypos += t[2];
+                        n.frame     = rand() % 2;
+                        n.values[1] = p.xpos;
+                        n.values[2] = p.ypos;
+                        n.values[3] = 2;
+                        n.values[4] = 4;
+                        n.xvel      = vels[k];
+                        n.yvel      = vels[k + 1];
+                    }
+                }
+            }
+        }
+    }
+    else {
+        v[0]--;
+    }
+}
+// Aquatic Ruin's Brick (Zone03 stage object: the rubble a Grounder throws out of a wall, nine at once; 17 VM
+// instructions each, ~28 hblanks, V4-046). Natively, one statement per script instruction. Patched in only on BRICK_SIG.
+__attribute__((optimize("Os"))) static void PS1BrickUpdate()
+{
+    int *t     = scriptEng.temp;
+    Entity &me = objectEntityList[objectEntityPos];
+    me.xpos += me.xvel;
+    me.ypos += me.yvel;
+    me.yvel += 14336;
+    t[0] = me.xpos;
+    t[0] >>= 16;
+    t[0] -= cameraXPos;
+    t[0] = abs(t[0]);
+    t[0] -= 32;
+    t[1] = me.ypos;
+    t[1] >>= 16;
+    t[1] -= cameraYPos;
+    t[1] = abs(t[1]);
+    t[1] -= 32;
+    if (t[0] >= SCREEN_CENTERX)
+        me.type = 0;
+    if (t[1] >= SCREEN_CENTERY)
+        me.type = 0;
+}
+// Aquatic Ruin's Grounder and Grounder2 (Zone03 stage objects, the same update sub: a badnik that bursts out of a wall in
+// nine Bricks, then walks to the nearest player; ~28 VM instructions a frame walking, more with Sonic & Tails, V4-046).
+// Natively, one statement per script instruction; GlobalCode function 44 (the badnik hit) runs in the VM. Patched in
+// only on GROUNDER_SIG.
+__attribute__((optimize("Os"))) static void PS1GrounderUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    // the nine CreateTempObject 63 <prop> OBJECTXPOS OBJECTYPOS: prop, x / y offset (0: none), xvel, yvel
+    static const int bricks[9][5] = { { 1, 0, 0, -65536, -262144 },         { 3, 0, 0, 262144, -196608 },
+                                      { 1, 0, 0, 131072, 0 },               { 2, 0, 0, -196608, -65536 },
+                                      { 1, 0, 0, -196608, -196608 },        { 0, 0, -1310720, 65536, -131072 },
+                                      { 0, 1048576, -262144, 65536, -65536 }, { 0, 0, 786432, -65536, -131072 },
+                                      { 0, -1048576, -262144, -65536, -65536 } };
+    switch (me.state) {
+        case 0:
+            me.priority = 1;
+            if (me.propertyValue == 1) {
+                ObjectFloorGrip(0, 20, 0);
+                me.state = 1;
+                v[0]     = 17;
+            }
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                TouchCollision(&me, -96, -256, 96, 256, &PS1_OBJ(ap[6]), -1, -1, 1, 1);
+                if (cr == 1) {
+                    for (int k = 0; k < 9; ++k) {
+                        PS1CreateTempObject(63, bricks[k][0], me.xpos, me.ypos);
+                        Entity &n = PS1_OBJ(ap[8]);
+                        n.xpos += bricks[k][1];
+                        n.ypos += bricks[k][2];
+                        n.xvel = bricks[k][3];
+                        n.yvel = bricks[k][4];
+                    }
+                    ObjectFloorGrip(0, 20, 0);
+                    me.state = 1;
+                }
+            }
+            break;
+        case 1:
+            v[0]++;
+            if (v[0] == 8)
+                me.frame = 1;
+            if (v[0] == 18) {
+                v[0]     = 0;
+                me.frame = 2;
+                me.state = 2;
+                v[4]     = 2147483647;
+                v[3]     = 0;
+                for (int loop = 0; loop < players.listSize; ++loop) {
+                    ap[6] = players.entityRefs[loop];
+                    t[0]  = PS1_OBJ(ap[6]).xpos;
+                    t[0] -= me.xpos;
+                    if (t[0] < 0) {
+                        t[1] = 0;
+                        t[0] = -t[0];
+                    }
+                    else {
+                        t[1] = 1;
+                    }
+                    if (t[0] < v[4]) {
+                        v[4]         = t[0];
+                        v[3]         = ap[6];
+                        me.direction = t[1];
+                    }
+                }
+                if (me.direction == 0)
+                    me.xvel = -65536;
+                else
+                    me.xvel = 65536;
+            }
+            break;
+        case 2:
+            me.xpos += me.xvel;
+            t[0] = me.ypos;
+            t[1] = me.ypos;
+            ObjectFloorGrip(0, 20, 0);
+            t[2] = cr;
+            t[1] -= me.ypos;
+            if (t[1] <= -786432) {
+                me.ypos = t[0];
+                t[2]    = 0;
+            }
+            if (t[1] > 65536) {
+                me.ypos = t[0];
+                t[2]    = 0;
+            }
+            if (t[2] == 0) {
+                v[0]     = 60;
+                me.state = 3;
+            }
+            me.animationTimer++;
+            if (me.animationTimer == 12)
+                me.animationTimer = 0;
+            me.frame = me.animationTimer;
+            me.frame >>= 2;
+            me.frame += 2;
+            break;
+        case 3:
+            v[0]--;
+            if (v[0] == 0) {
+                me.direction ^= 1;
+                me.xvel  = -me.xvel;
+                me.state = 2;
+            }
+            break;
+    }
+    if (PS1ObjectOutOfBounds(&me) == 1) {
+        t[0]    = me.xpos;
+        t[1]    = me.ypos;
+        me.xpos = v[1];
+        me.ypos = v[2];
+        if (PS1ObjectOutOfBounds(&me) == 1) {
+            me.state          = 0;
+            v[0]              = 0;
+            me.animationTimer = 0;
+            me.frame          = 0;
+            me.priority       = 0;
+        }
+        else {
+            me.xpos = t[0];
+            me.ypos = t[1];
+        }
+    }
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        TouchCollision(&me, -12, -20, 12, 20, &p, p.values[40], p.values[38], p.values[41], p.values[39]);
+        if (cr == 1)
+            PS1CallScriptFunction(44, 1);
+    }
+}
+// The Springboard (GlobalCode object: Aquatic Ruin's and Chemical Plant's seesaw springs; a solid box test per player
+// shaped by the board's slope table, then the launch three frames after a player lands on the high end; ~60 VM
+// instructions a frame with Sonic & Tails, ~11 hblanks, V4-046). Natively, one statement per script instruction,
+// switch cases (and their fall-throughs) as the jump table lists them. Patched in only on SPRINGBOARD_SIG.
+__attribute__((optimize("Os"))) static void PS1SpringboardUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    auto get = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    auto land = [&](Entity &p) { // GetBit TEMP3 OBJECTVALUE2 TEMP2 .. Equal CHECKRESULT 1 (both directions)
+        t[3] = (v[2] & (1 << t[2])) >> t[2];
+        if (t[3] == 1) {
+            t[3] = p.xpos;
+            t[3] -= me.xpos;
+            t[3] >>= 16;
+            t[3] = abs(t[3]);
+            if (t[3] < 28) {
+                if (p.yvel >= 0) {
+                    p.ypos = PS1CollisionBottom(p) << 16;
+                    p.ypos = -p.ypos;
+                    t[1] <<= 16;
+                    p.ypos += t[1];
+                    p.ypos += me.ypos;
+                    cr = 1;
+                }
+            }
+        }
+    };
+    if (v[0] != 0) {
+        v[0]--;
+        switch (v[0]) {
+            case 0:
+                t[2] = 0;
+                for (int loop = 0; loop < players.listSize; ++loop) {
+                    ap[6]     = players.entityRefs[loop];
+                    Entity &p = PS1_OBJ(ap[6]);
+                    t[3]      = (v[2] & (1 << t[2])) >> t[2];
+                    if (t[3] == 1) {
+                        t[0] = p.xpos;
+                        t[0] -= me.xpos;
+                        t[0] += 1835008;
+                        t[0] >>= 17;
+                        t[3] = (me.direction & 1) >> 0;
+                        if (t[3] == 1) {
+                            t[0] -= 28;
+                            t[0] = -t[0];
+                        }
+                        if (t[0] >= 8) {
+                            p.values[10] = globalVariables[62];
+                            if (p.animation == globalVariables[63])
+                                p.values[10] = globalVariables[63];
+                            if (p.animation == globalVariables[65])
+                                p.values[10] = globalVariables[65];
+                            v[0]             = 1;
+                            p.state          = 12;
+                            p.tileCollisions = 1;
+                            p.gravity        = 1;
+                            p.speed          = p.xvel;
+                            t[0] -= 8;
+                            t[0] <<= 1;
+                            if (t[0] > 39)
+                                t[0] = 39;
+                            get(62459, t[0], p.yvel);
+                            p.yvel -= 262144;
+                            p.yvel -= p.values[25];
+                            p.animation      = globalVariables[90];
+                            p.prevAnimation  = globalVariables[90];
+                            p.frame          = 0;
+                            p.animationSpeed = 80;
+                            p.values[1]      = 0;
+                            PlaySfx(11, 0);
+                        }
+                    }
+                    t[2]++;
+                }
+                break;
+            case 1: me.frame = 0; break;
+            default: me.frame = 1; break;
+        }
+    }
+    t[2] = 0;
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[0]      = p.xpos;
+        t[0] -= me.xpos;
+        t[0] += 1835008;
+        t[0] >>= 17;
+        if (t[0] < 0)
+            t[0] = 0;
+        if (t[0] > 27)
+            t[0] = 27;
+        if (me.direction <= 1) { // switch OBJECTDIRECTION: cases 0 and 1 (2, 3: break)
+            if (me.direction == 1) {
+                t[0] -= 27;
+                t[0] = abs(t[0]);
+            }
+            if (me.frame == 0)
+                get(62500, t[0], t[1]);
+            else
+                get(62529, t[0], t[1]);
+            t[1] = -t[1];
+            t[4] = p.speed;
+            t[5] = p.xpos;
+            BoxCollision(&me, -28, t[1], 28, -8, &p, 65536, 65536, 65536, 65536);
+            // switch CHECKRESULT: 0 / 2 / 3 / 4 -> the landing test, with the push undone first on the board's back
+            // side (direction 0: case 2 falls into it, direction 1: case 3); 1 and the default: endswitch
+            if (cr >= 0 && cr <= 4 && cr != 1) {
+                if (cr == (me.direction == 0 ? 2 : 3)) {
+                    p.speed = t[4];
+                    p.xpos  = t[5];
+                }
+                land(p);
+            }
+        }
+        if (cr == 1) {
+            v[2] |= 1 << t[2];
+            if (t[0] >= 8) {
+                if (v[0] == 0)
+                    v[0] = 6;
+            }
+        }
+        else {
+            v[2] &= ~(1 << t[2]);
+        }
+        t[2]++;
+    }
 }
 // Metropolis' M Platform (Zone09; V4-111): a platform moving by a 4-leg table (87247 x / 87252 y velocities, 87257
 // durations) while ridden, carrying its riders; ~20 VM instructions a player. Natively, one statement per script
@@ -12815,6 +13206,11 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1ONEWAYDOOR: scriptText[0] = '\0'; PS1OneWayDoorUpdate(); break;
         case FUNC_PS1WHEELPLATFORM: scriptText[0] = '\0'; PS1WheelPlatformUpdate(); break;
         case FUNC_PS1WHEELPLATFORMDRAW: scriptText[0] = '\0'; PS1WheelPlatformDraw(); break;
+        case FUNC_PS1LEAF: scriptText[0] = '\0'; PS1LeafUpdate(); break;
+        case FUNC_PS1LEAFSPAWNER: scriptText[0] = '\0'; PS1LeafSpawnerUpdate(); break;
+        case FUNC_PS1BRICK: scriptText[0] = '\0'; PS1BrickUpdate(); break;
+        case FUNC_PS1GROUNDER: scriptText[0] = '\0'; PS1GrounderUpdate(); break;
+        case FUNC_PS1SPRINGBOARD: scriptText[0] = '\0'; PS1SpringboardUpdate(); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -15245,6 +15641,26 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1WHEELPLATFORMDRAW: // a whole sub: End follows
                 opcodeSize = 0;
                 PS1WheelPlatformDraw();
+                break;
+            case FUNC_PS1LEAF: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1LeafUpdate();
+                break;
+            case FUNC_PS1LEAFSPAWNER: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1LeafSpawnerUpdate();
+                break;
+            case FUNC_PS1BRICK: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1BrickUpdate();
+                break;
+            case FUNC_PS1GROUNDER: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1GrounderUpdate();
+                break;
+            case FUNC_PS1SPRINGBOARD: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1SpringboardUpdate();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;
