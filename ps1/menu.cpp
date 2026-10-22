@@ -305,6 +305,18 @@ void drawBackground() {
     drawImage(g_ps1MenuScreens.images[PS1_MENU_WATERMARK], 110, 10, 3);
 }
 
+// A save file's character icon(s) on its 32-pixel bar (SubMenuButton: each icon centred at x -76; Sonic & Tails: Tails
+// there, Sonic 8 left of it drawn on top), centred at x 23, y + 16 (V4-118)
+void drawSaveIcons(const PS1MenuPack &mp, int characterID, int y) {
+    static const int icons[4] = { PS1_MENU_ICON_SONIC, PS1_MENU_ICON_TAILS, PS1_MENU_ICON_KNUX, PS1_MENU_ICON_TAILS };
+    const PS1MenuImage &icon = mp.images[icons[characterID & 3]];
+    drawImage(icon, 23 - icon.w / 2, y + 16 - icon.h / 2);
+    if ((characterID & 3) == 3) {
+        const PS1MenuImage &sonic = mp.images[PS1_MENU_ICON_SONIC];
+        drawImage(sonic, 15 - sonic.w / 2, y + 16 - sonic.h / 2);
+    }
+}
+
 void drawBar(int y, int h, bool selected) {
     if (selected)
         drawRect(0, y, 320, h, 200, 160, 0, 0); // B/2 + F/2: the mockup's translucent yellow
@@ -682,7 +694,6 @@ void mainScreen(int move, bool ok, bool back) {
 void saveScreen(int move, int moveX, bool ok, bool back, bool select) {
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
-    static const int icons[4] = { PS1_MENU_ICON_SONIC, PS1_MENU_ICON_TAILS, PS1_MENU_ICON_KNUX, PS1_MENU_ICON_SONIC };
     // SubMenuButton S1's six; the 7th (options.superStates) in its special-stage sprite's purple (Special/Objects.gif
     // 0xA440FF, brightened like the six)
     static const uint32_t emeralds[7] = { 0x8080FF, 0xFFFF00, 0xFF60C0, 0xA0FF00, 0xFF4060, 0xFFFFFF, 0xBA49FF };
@@ -706,10 +717,7 @@ void saveScreen(int move, int moveX, bool ok, bool back, bool select) {
                    : f.stageID - 1 > 18 ? PS1_STR_SAVE_STAGE_NAME26 : PS1_STR_SAVE_STAGE_NAME1 + f.stageID - 1;
         if (name > PS1_STR_SAVE_STAGE_NAME26)
             name = PS1_STR_SAVE_STAGE_NAME26;
-        const PS1MenuImage &icon = mp.images[icons[f.characterID & 3]];
-        drawImage(icon, 14, y + 2);
-        if ((f.characterID & 3) == 3)
-            drawImage(mp.images[PS1_MENU_ICON_TAILS], 28, y + 2);
+        drawSaveIcons(mp, f.characterID, y);
         drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(name), 60, y + 3);
         if (i == s_m.sel && !s_m.delDialog)
             saveDeleteHint(mp, y);
@@ -959,7 +967,6 @@ void recordsScreen(int moveX, bool ok, bool back) {
 void saveScreen(int move, int moveX, bool ok, bool back, bool select) {
     const PS1MenuPack &mp = g_ps1MenuScreens;
     SaveGame *saveGame    = (SaveGame *)saveRAM;
-    static const int icons[4] = { PS1_MENU_ICON_SONIC, PS1_MENU_ICON_TAILS, PS1_MENU_ICON_KNUX, PS1_MENU_ICON_SONIC };
     // SubMenuButton emeraldColorsS2
     static const uint32_t emeralds[7] = { 0x00C0FF, 0x8000C0, 0xFF0000, 0xFF60FF, 0xFFC000, 0x60C000, 0xFFFFFF };
     if (!s_m.delDialog)
@@ -981,10 +988,7 @@ void saveScreen(int move, int moveX, bool ok, bool back, bool select) {
         int name = f.stageID >= 0x80 ? PS1_STR_SAVE_STAGE_NAME1 + f.specialStageID + 19 : PS1_STR_SAVE_STAGE_NAME1 + f.stageID - 1;
         if (name > PS1_STR_SAVE_STAGE_NAME25)
             name = PS1_STR_SAVE_STAGE_NAME25;
-        const PS1MenuImage &icon = mp.images[icons[f.characterID & 3]];
-        drawImage(icon, 14, y + 2);
-        if ((f.characterID & 3) == 3)
-            drawImage(mp.images[PS1_MENU_ICON_TAILS], 28, y + 2);
+        drawSaveIcons(mp, f.characterID, y);
         drawText(mp, PS1_FONT_LABEL_M, PS1MenuString(name), 60, y + 3);
         if (i == s_m.sel && !s_m.delDialog)
             saveDeleteHint(mp, y);
