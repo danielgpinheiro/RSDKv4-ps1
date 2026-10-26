@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact A/B check of two tools/perf_scene.sh SHOTS= runs (docs/perf-43-tracker.md): for every frame both runs saved,
+"""Exact A/B check of two tools/perf_scene.sh SHOTS= runs (docs/perf/perf-43-tracker.md): for every frame both runs saved,
 compare both framebuffers (VRAM 0,0 and 0,256, 320 x 240) and the entity table. Exit 1 on any difference.
 Usage: shots_cmp.py REF_OUT NEW_OUT"""
 import glob, os, re, sys

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Load-time profile (docs/30 phase 9.1), from the Sonic CD port's tool: one emulator session over GDB logs
+# Load-time profile (docs/ports/sonic-2/30 phase 9.1), from the Sonic CD port's tool: one emulator session over GDB logs
 #   REQ   every file-system CD request (PS1FsProfileHook: a blocking read, or one load-stream session = one seek)
 #   OPEN  every fopen, LOAD every outermost load end (PS1LoadingDoneHook), GOTO every stage switch below,
 # all stamped with the vblank count (exact; psyqo's `us` under-counts CPU-bound work), then tools/load_profile.py

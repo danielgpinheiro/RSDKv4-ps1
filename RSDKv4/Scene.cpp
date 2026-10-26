@@ -827,7 +827,7 @@ void LoadStageFiles(void)
                 SetFileInfo(&infoStore);
             }
 #if RETRO_PLATFORM == RETRO_PS1
-            // The samples: the stage's SFX bank (every SFX its scripts can play, global ones included; docs/30 5.1).
+            // The samples: the stage's SFX bank (every SFX its scripts can play, global ones included; docs/ports/sonic-2/30 5.1).
             GetFileInfo(&infoStore);
             CloseFile();
             PS1SfxLoadStageBank();
@@ -909,7 +909,7 @@ void LoadStageFiles(void)
         }
 
 #if RETRO_PLATFORM == RETRO_PS1
-        // Pre-converted at build time (tools/tiles, tools/atlas; docs/30 phase 3.1): the tile pages and the stage's
+        // Pre-converted at build time (tools/tiles, tools/atlas; docs/ports/sonic-2/30 phase 3.1): the tile pages and the stage's
         // sprite atlas for the player variant go straight to VRAM, never decoded here; the tile GIF's colours
         // 0x80-0xFF go into the active palette as upstream LoadStageGIFFile does.
         {
@@ -1272,7 +1272,7 @@ void LoadStageBackground()
     }
 }
 #if RETRO_PLATFORM == RETRO_PS1 && !defined RETRO_PS1_HOST_TOOL
-// Build-time copies of what LoadStageChunks / LoadStageCollisions below leave in RAM (docs/30 phase 7.3): the host
+// Build-time copies of what LoadStageChunks / LoadStageCollisions below leave in RAM (docs/ports/sonic-2/30 phase 7.3): the host
 // build of this same code writes them (tools/rsdkmanifest, PS1 configuration), as a 4-byte tag + the arrays, read
 // straight in here instead of 32,768 three-byte reads / the per-byte mask decode. A stage without them loads as upstream.
 static bool PS1LoadStagePacked(const char *file, const char *tag, void *dst, int size)
@@ -1284,14 +1284,14 @@ static bool PS1LoadStagePacked(const char *file, const char *tag, void *dst, int
         return false;
     char head[4];
     bool ok = fread(head, 1, 4, f) == 4 && memcmp(head, tag, 4) == 0;
-    if (ok) { // stored up to the last non-zero byte (tools/rsdkmanifest, docs/30 9.3): the rest is zeros
+    if (ok) { // stored up to the last non-zero byte (tools/rsdkmanifest, docs/ports/sonic-2/30 9.3): the rest is zeros
         size_t got = fread(dst, 1, size, f);
         memset((uint8_t *)dst + got, 0, size - got);
     }
     fclose(f);
     return ok;
 }
-// CollisionMasks.ps1 (tools/rsdkmanifest): "PCM1" + both paths as the PS1 array, or "PCM2" (docs/30 phase 9.3: the loads
+// CollisionMasks.ps1 (tools/rsdkmanifest): "PCM1" + both paths as the PS1 array, or "PCM2" (docs/ports/sonic-2/30 phase 9.3: the loads
 // are transfer-bound, and path B equals path A on 94-99.9 % of its bytes): path A, then u32 n and n records of (u16 tile,
 // its 16 floor / 16 left / 16 right / 16 roof mask bytes, u32 angles, u8 flags) where path B differs. Path B = a copy of
 // path A with those tiles patched: ~70 KB less to read.

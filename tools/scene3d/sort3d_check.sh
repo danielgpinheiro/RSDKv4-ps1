@@ -1,5 +1,5 @@
 #!/bin/bash
-# Host check: PS1SortDrawList3D (RSDKv4/Scene3D.cpp) == upstream's bubble sort (docs/30 phase 2.3; from the Sonic CD port).
+# Host check: PS1SortDrawList3D (RSDKv4/Scene3D.cpp) == upstream's bubble sort (docs/ports/sonic-2/30 phase 2.3; from the Sonic CD port).
 set -eu
 cd "$(dirname "$0")/../.."
 T=$(mktemp -d)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exact A/B check of the frames' GPU chains between two tools/perf_scene.sh runs made with GPU="f ..." KEEP_RAM=1
-(docs/43 C1): for every frame both runs dumped, walk the chain from psyqo's head as tools/gpu_cost.py does and compare
+(docs/perf/43 C1): for every frame both runs dumped, walk the chain from psyqo's head as tools/gpu_cost.py does and compare
 the payload words in the order the GPU reads them. Link words are left out (node addresses move with code size), so this
 checks the primitives, their words and their draw order. Exit 1 on any difference.
 Usage: chain_cmp.py REF_OUT NEW_OUT"""

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Scene timing over a measured window (docs/30 / docs/37 "Mania lessons pass"): a `make BOOT=<folder> [BOOT_PLAYER=n]`
+# Scene timing over a measured window (docs/ports/sonic-2/30 / docs/ports/sonic-1/37 "Mania lessons pass"): a `make BOOT=<folder> [BOOT_PLAYER=n]`
 # build (and, for EMU=ds, its disc: `make disc`) runs the scripted chase -- Right from frame 240, Right + A (jump) from
 # 420 to 432, then Right to the end -- and the window counters (RSDKv4/main.cpp g_ps1PerfWin*) sum frames [FROM, TO):
 # CPU hblanks a frame (avg / worst; 262 = one NTSC frame), vblanks a frame (avg / worst: 1.00 = 60 fps), frames whose
@@ -11,10 +11,10 @@
 #   other session runs it (exit 2 otherwise). PRE runs before the game starts: on DuckStation that is before the EXE is
 #   read from the disc (a .data switch set there is overwritten), so FROM must be > 240 (the window is set at frame 240).
 #   GPU="f1 f2 ...": at these frames dump RAM + the frame's chain (psyqo's head / tail) and price it with
-#   tools/gpu_cost.py (docs/43: DuckStation's GPU model) -> OUT_gpu_F.txt, one "GPUCOST" line each.
+#   tools/gpu_cost.py (docs/perf/43: DuckStation's GPU model) -> OUT_gpu_F.txt, one "GPUCOST" line each.
 #   SHOTS="f1 f2 ..." (PCSX-Redux only): at these frames save VRAM (web API: both framebuffers, the frame before f
 #   complete) to OUT_shot_F.vram and the entity table to OUT_ent_F.bin, for exact A/B checks between builds
-#   (tools/shots_cmp.py REF_OUT NEW_OUT; docs/perf-43-tracker.md).
+#   (tools/shots_cmp.py REF_OUT NEW_OUT; docs/perf/perf-43-tracker.md).
 #   PAD="f:mask ...": more pad masks at engine frames (after the chase's own at 240 / 420 / 432).
 #   LOG=1: the window's frames one by one (PERF_SPLIT builds: CPU hblanks | vsyncs << 12, uint16) into OUT_log.bin.
 #   HOLD=0x18: the pad mask held from frame 240 instead of Right (0x08), e.g. Right + A to keep jumping.

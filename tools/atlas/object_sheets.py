@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What each object of an RSDKv4 stage draws with (docs/30 phase 1.3), from the bytecode alone.
+"""What each object of an RSDKv4 stage draws with (docs/ports/sonic-2/30 phase 1.3), from the bytecode alone.
 
 Ported from the Sonic CD tool. v4 differences: the bytecode is Bytecode/<folder>.bin (+ GlobalCode.bin
 when the StageConfig loads the global objects), 3 subs per object, and most sprite frames are script

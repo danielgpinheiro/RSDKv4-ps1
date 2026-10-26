@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Which SFX each Sonic 2 stage can play (docs/30 phase 5.1): the PS1 loads only those.
+"""Which SFX each Sonic 2 stage can play (docs/ports/sonic-2/30 phase 5.1): the PS1 loads only those.
 
 The 44 global SFX alone are 1.13 MB at 44.1 kHz (phase 1), twice the SPU RAM, so the Sonic CD model (globals
 resident, stage SFX after them) does not fit. Per stage folder:

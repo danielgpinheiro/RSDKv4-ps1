@@ -1,5 +1,5 @@
 /*
- * Phase 0 smoke test (docs/28): proves the PS1 platform layer copied from RSDKv2-ps1 works in this
+ * Phase 0 smoke test (docs/ports/sonic-cd/28): proves the PS1 platform layer copied from RSDKv2-ps1 works in this
  * repo before the RSDKv3 engine is ported (phase 2 replaces this app with RSDKv3/main.cpp).
  *
  * - GPU: 320x240, a test pattern drawn through the DMA chain (ps1/gpu_chain) every frame.

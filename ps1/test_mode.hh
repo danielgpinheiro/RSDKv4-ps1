@@ -1,6 +1,6 @@
 #pragma once
 /*
- * Regression test mode (`make TEST=1`, docs/45; never in a release build: make dist / export_builder refuse it).
+ * Regression test mode (`make TEST=1`, docs/regression/45; never in a release build: make dist / export_builder refuse it).
  *
  * The test disc carries TEST.SEL (32 KB, tools from ../tests): zero = no scenario (the EXE plays like the release
  * game), else a compiled scenario (../tests/tools/scn.py): boot target, RNG seed, input track, checkpoints, pokes,

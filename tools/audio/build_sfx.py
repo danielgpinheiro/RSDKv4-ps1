@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time SFX for the Sonic 2 PS1 port (docs/30 phase 5.1): SPU-ADPCM banks, one per stage.
+"""Build-time SFX for the Sonic 2 PS1 port (docs/ports/sonic-2/30 phase 5.1): SPU-ADPCM banks, one per stage.
 
 Sonic 2's 44 global SFX alone need 1.13 MB at 44.1 kHz, over twice the SPU sample area, so the Sonic CD model (globals
 resident) does not fit. Instead (tools/audio/sfx_sets.py):
@@ -11,7 +11,7 @@ Rates: one per sample per bank (the Sonic CD solver, tools/audio in RSDKv3-ps1):
 (<= 44.1 kHz) and, while resident + the stage's bank is over the SPU sample area, the largest sample steps down one
 rate (RATES), none below FLOOR while another is above it; short, bright sounds keep theirs. Each stage is solved on
 its own (its bank holds its own copies).
-Stage banks are capped at STAGE_CAP = 400 KB (docs/30, user decision 2026-09-27: shorter loads; the zones' ~481 KB banks
+Stage banks are capped at STAGE_CAP = 400 KB (docs/ports/sonic-2/30, user decision 2026-09-27: shorter loads; the zones' ~481 KB banks
 were ~1.6 s of each zone load at 2x; 300 KB was measured and rejected: most zones ~11 kHz, some 8-9 kHz): the solver's budget is min(SPU area left, STAGE_CAP), the same largest-first steps. The log gives each
 bank's size without / with the cap and every sound whose rate the cap lowered (the listening check); the full list
 per stage goes to OUT_DATA_DIR/../../sfx_rates.txt (build/, not on the disc).

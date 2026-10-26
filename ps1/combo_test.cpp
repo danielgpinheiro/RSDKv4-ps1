@@ -1,6 +1,6 @@
 /*
  * 1-up jingle + music event test (`make BOOT=<stage> COMBO=1|2 [GAP=n]`; test harness, make dist refuses it).
- * The tester's freeze (docs/30 / docs/37 "Tester report fixes", 2026-10-11) needs a 1-up jingle and a track started
+ * The tester's freeze (docs/ports/sonic-2/30 / docs/ports/sonic-1/37 "Tester report fixes", 2026-10-11) needs a 1-up jingle and a track started
  * inside its pause window. The GDB runs did it with breakpoints; this does the same with no debugger, for emulators
  * without a GDB stub (RetroArch's PCSX-ReARMed / SwanStation cores):
  *   frame 240:       COMBO=2: the seven emeralds (+ Sonic 1's options.superStates)

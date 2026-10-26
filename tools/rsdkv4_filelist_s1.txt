@@ -1,5 +1,5 @@
 # Paths in Sonic 1's RSDKvB datapack (Android/iOS 2013, 38,198,396 B, SHA-256 fed2403f352186e7...): names only, no game
-# data. tools/extract_rsdk.py hashes each (MD5 of the lower-case path) to find its entry; all 345 resolve (docs/37).
+# data. tools/extract_rsdk.py hashes each (MD5 of the lower-case path) to find its entry; all 345 resolve (docs/ports/sonic-1/37).
 Bytecode/Continue.bin
 Bytecode/Credits.bin
 Bytecode/Ending.bin

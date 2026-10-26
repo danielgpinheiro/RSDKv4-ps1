@@ -2,7 +2,7 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 /*
- * PS1 app (docs/30 phase 2): psyqo owns the loop. start() boots the engine (Engine.Init: GameConfig,
+ * PS1 app (docs/ports/sonic-2/30 phase 2): psyqo owns the loop. start() boots the engine (Engine.Init: GameConfig,
  * global scripts, first stage) inside a bracketed load (loading icon); frame() runs one engine frame
  * (RetroEngine::RunFrame) and updates the GDB counters below. Rendering, audio and the menus arrive in
  * phases 3-5; until then the game logic runs headless (ps1/render_headless.cpp, ps1/audio_headless.cpp).
@@ -35,13 +35,13 @@ volatile uint32_t g_ps1HeapTotal           = 0; // bytes between bss end and the
 volatile uint32_t g_ps1HeapHeadroom        = 0; // bytes never reached by the heap high-water mark
 volatile uint32_t g_ps1InitDone            = 0; // Engine.Init() returned
 static uint32_t s_ps1PerfLastCount         = 0;
-// Measuring window (tools/perf_scene.sh, docs/30 "Mania lessons pass"): GDB sets From / To (frame numbers as
+// Measuring window (tools/perf_scene.sh, docs/ports/sonic-2/30 "Mania lessons pass"): GDB sets From / To (frame numbers as
 // g_ps1PerfFrames counts them; .data, so a run sets them before the game starts); frames in [From, To) are summed.
 volatile uint32_t g_ps1PerfWinFrom = 0xFFFFFFFFu, g_ps1PerfWinTo = 0;
 volatile uint32_t g_ps1PerfWinFrames = 0, g_ps1PerfWinHbl = 0, g_ps1PerfWinMaxHbl = 0; // frames, CPU hblanks sum / worst
 volatile uint32_t g_ps1PerfWinVbl = 0, g_ps1PerfWinMaxVbl = 0, g_ps1PerfWinOver = 0;   // vblanks sum / worst, CPU > 262
 #ifdef PS1_PERF_SPLIT
-// `make PERF_SPLIT=1` (docs/43, harness only): the frame time besides the CPU's. psyqo sends a frame's chain right after
+// `make PERF_SPLIT=1` (docs/perf/43, harness only): the frame time besides the CPU's. psyqo sends a frame's chain right after
 // the flip, so the GPU draws it while the CPU builds the next frame, and the flip waits for that chain and a new vblank.
 // GpuTail: hblanks the GPU was still drawing the previous frame's chain (its DMA, up to the GPU FIFO's last 16 words)
 // after this frame's CPU work ended; 0 in PCSX-Redux, which draws instantly, modelled by DuckStation. Flip: hblanks from
@@ -149,18 +149,18 @@ class RSDKv4PS1App final : public psyqo::Application {
                              .set(psyqo::GPU::MiscSetting::CLEAR_VRAM));
         g_ps1GPU = &gpu();
         m_cdrom.prepare();
-        PS1McPrepare(); // memory card saves (RSDKv4/Userdata.cpp, docs/30 phase 8)
+        PS1McPrepare(); // memory card saves (RSDKv4/Userdata.cpp, docs/ports/sonic-2/30 phase 8)
     }
 
     void start() override
     {
         m_cdrom.resetBlocking(gpu());
         g_ps1CDRom = &m_cdrom;
-        PS1IrqGuardInstall(); // re-raises CD / DMA IRQ edges lost to psyqo's I_STAT read-modify-write (docs/31)
+        PS1IrqGuardInstall(); // re-raises CD / DMA IRQ edges lost to psyqo's I_STAT read-modify-write (docs/ports/rsdk-common/31)
 #if PS1_PC_SAMPLER
         PS1PcSamplerInstall();
 #endif
-        m_pad.initialize(); // psyqo AdvancedPad's driver on port 1 only (ps1/pad.hh, docs/43 C11); never SimplePad (Nexus docs/26 F14)
+        m_pad.initialize(); // psyqo AdvancedPad's driver on port 1 only (ps1/pad.hh, docs/perf/43 C11); never SimplePad (Nexus docs/history/26 F14)
         g_ps1Pad = &m_pad;
         PS1ProfTicksInit(); // per-object-type CPU profile (Object.cpp g_ps1TypeTicks)
         memset(&scriptEng, 0, sizeof(scriptEng)); // the VM state in the scratchpad (Script.hpp)
@@ -169,7 +169,7 @@ class RSDKv4PS1App final : public psyqo::Application {
         StrCopy(Engine.startSceneID, PS1_BOOT_ID);
 #endif
 #if PS1_TEST
-        PS1TestInit(); // TEST.SEL: the scenario (docs/45)
+        PS1TestInit(); // TEST.SEL: the scenario (docs/regression/45)
         if (PS1TestBootStage()) {
             StrCopy(Engine.startSceneFolder, PS1TestBootFolder());
             StrCopy(Engine.startSceneID, PS1TestBootId());
@@ -179,7 +179,7 @@ class RSDKv4PS1App final : public psyqo::Application {
         // calls get the cached result): a card read inside the load left the heap split under the chain arenas
         // (47 KB less headroom at the load peak).
         ReadSaveRAMData();
-        PS1DetectGpu();    // flip-bit rectangles for flipped tiles and sprites if the GPU draws them (ps1/render.cpp, docs/43 G3)
+        PS1DetectGpu();    // flip-bit rectangles for flipped tiles and sprites if the GPU draws them (ps1/render.cpp, docs/perf/43 G3)
 #if PS1_TEST
         PS1TestNote("gpu", g_ps1GpuType, g_ps1GpuQuery7, g_ps1FlipTest); // "gpu type q7 readback" (0 = not tested)
 #endif
@@ -197,13 +197,13 @@ class RSDKv4PS1App final : public psyqo::Application {
         PS1TestAfterInit();
 #endif
         PS1LoadingEnd();
-        // The menus' resident fonts + strings (VRAM rows 242-255; docs/30 phase 4.2).
+        // The menus' resident fonts + strings (VRAM rows 242-255; docs/ports/sonic-2/30 phase 4.2).
         PS1MenuResidentLoad();
 #if !defined(PS1_BOOT_FOLDER) && PS1_MENUS
 #if PS1_TEST
         if (!PS1TestBootStage())
 #endif
-        PS1MenuOpen(PS1_MENU_TITLE); // the mobile front end's flow (docs/30 phase 4): menus first, the scripted Title
+        PS1MenuOpen(PS1_MENU_TITLE); // the mobile front end's flow (docs/ports/sonic-2/30 phase 4): menus first, the scripted Title
                                      // comes when a game starts
 #endif
         g_ps1InitDone = 1;

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Refresh the public Sonic-2-PS1-ISO-Builder (docs/30 phase 11) from this port, as Sonic CD's: the prebuilt executable,
+# Refresh the public Sonic-2-PS1-ISO-Builder (docs/ports/sonic-2/30 phase 11) from this port, as Sonic CD's: the prebuilt executable,
 # the build-time converters tools/build_assets.py runs, and the RSDKv4 sources + PS1 headers the host manifest tool
 # (tools/rsdkmanifest) compiles on the user's machine. No game data. The builder's own files (build_iso.py, README.md,
 # LICENSE.md, licenses/, requirements.txt) live in its repository and are not touched here.
 # The executable must be the natural game (`make`, not a BOOT= / PROFILE / MEMCARD_TEST / PLATFORM_TEST build).
-# GAME=1: the Sonic 1 builder (docs/37 phase 11): its file list, boot trace and executable name (Sonic1-PS1.exe); the
+# GAME=1: the Sonic 1 builder (docs/ports/sonic-1/37 phase 11): its file list, boot trace and executable name (Sonic1-PS1.exe); the
 # executable must be a GAME=1 build.
 # Usage: [GAME=1] tools/export_builder.sh DEST   (e.g. ../Sonic-2-PS1-ISO-Builder, GAME=1 ../Sonic-1-PS1-ISO-Builder)
 set -e

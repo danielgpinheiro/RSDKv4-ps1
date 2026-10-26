@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sonic 2 (RSDKv4) PS1 feasibility report (docs/30 phase 1.3): SPU RAM, disc size, script/stage RAM.
+"""Sonic 2 (RSDKv4) PS1 feasibility report (docs/ports/sonic-2/30 phase 1.3): SPU RAM, disc size, script/stage RAM.
 Ported from the Sonic CD tool. (VRAM for sprites: tools/atlas/static_manifest.py + build_atlas.py --report.)
 
 - SPU RAM: every stage's global (GameConfig) + stage (StageConfig) SFX as SPU-ADPCM (16 bytes per 28 samples,

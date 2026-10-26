@@ -1,7 +1,7 @@
 #!/bin/bash
 # Game disc from the extracted Sonic 2 data (phase 2): Data/ + Bytecode/ into build/iso without the PC source
 # assets (tools/disc/build_disc.py SOURCE_ONLY: .gif .wav .ogg), the native menus' art and meshes
-# (Data/Game/Menu, Data/Game/Models: docs/30, 2D PS1 menus in phase 4), Egg Gauntlet (ZoneM: left out,
+# (Data/Game/Menu, Data/Game/Models: docs/ports/sonic-2/30, 2D PS1 menus in phase 4), Egg Gauntlet (ZoneM: left out,
 # user decision 2026-09-25) and macOS metadata, then `make disc` (mkpsxiso + verify_disc, no license).
 # SRC = the extracted tree holding Data/ and Bytecode/: ../Sonic2_Extracted, or tools/extract_rsdk.py's output.
 # The bytecode gets its PS1 edits (tools/scripts/patch_bytecode.py). Sprite atlases (phase 3.1): the engine's own
@@ -15,9 +15,9 @@
 # Since phase 11 the steps live in tools/build_assets.py (shared with the public builder); this runs it on SRC.
 set -eu
 cd "$(dirname "$0")/.."
-# GAME=1: Sonic 1 (docs/37) from ../Sonic1_Extracted; default GAME=2, Sonic 2.
+# GAME=1: Sonic 1 (docs/ports/sonic-1/37) from ../Sonic1_Extracted; default GAME=2, Sonic 2.
 GAME=${GAME:-2}
 SRC=${SRC:-../Sonic${GAME}_Extracted}
-# one pipeline for the port and the public builder (docs/30 phase 11): tools/build_assets.py
+# one pipeline for the port and the public builder (docs/ports/sonic-2/30 phase 11): tools/build_assets.py
 /usr/bin/python3 tools/build_assets.py --src "$SRC" --game "$GAME"
 make -s disc GAME="$GAME"

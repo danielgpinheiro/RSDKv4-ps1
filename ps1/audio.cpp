@@ -1,4 +1,4 @@
-// RSDKv4 PS1 audio (docs/30 phase 5): RSDKv4/Audio.cpp's functions on the PS1 hardware. Upstream's Audio.cpp (Ogg
+// RSDKv4 PS1 audio (docs/ports/sonic-2/30 phase 5): RSDKv4/Audio.cpp's functions on the PS1 hardware. Upstream's Audio.cpp (Ogg
 // streaming + a software mixer) is not built; this file keeps its state and semantics.
 //
 // SFX (5.1): SPU-ADPCM samples in banks built by tools/audio/build_sfx.py. Sonic 2's global SFX don't fit SPU RAM

@@ -11,9 +11,9 @@
 
 #include "gpu_chain.hh"
 #if PS1_GAME == 1
-#include "loading_icon_s1.h" // sonic-1-loading.gif (docs/37)
+#include "loading_icon_s1.h" // sonic-1-loading.gif (docs/ports/sonic-1/37)
 #else
-#include "loading_icon.h"    // sonic-2-loading.gif (docs/30)
+#include "loading_icon.h"    // sonic-2-loading.gif (docs/ports/sonic-2/30)
 #endif
 
 extern psyqo::GPU *g_ps1GPU;

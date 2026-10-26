@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sheet regions of the frames Sonic 2's scripts change at runtime (docs/30 phase 3.1, user decision 2026-09-26:
+"""Sheet regions of the frames Sonic 2's scripts change at runtime (docs/ports/sonic-2/30 phase 3.1, user decision 2026-09-26:
 per-object regions).
 
 tools/rsdkmanifest lists the frames the object startups define. An `EditFrame` in an update / draw sub (or an
@@ -41,11 +41,11 @@ RUNTIME = {
     # Special: rings and bombs are TEXTURED_C faces in the half-pipe's Scene3D (centre +- extent 17 x 16: 34 x 32 texel
     # boxes, one wider than the 32 x 32 sprite frames): the ring frames (centres from the Ring's U / V tables: U 17..215,
     # V 17 / 50 -> x 1..231, y 1..66), the bomb (centre 83, 50) and the shadows (row V 50) (Ring / Bomb update subs) ->
-    # the sheet's top-left 232 x 67 (134 wide missed the late spin frames: face misses at frame 900, docs/30 phase 7).
+    # the sheet's top-left 232 x 67 (134 wide missed the late spin frames: face misses at frame 900, docs/ports/sonic-2/30 phase 7).
     'Ring': {'add': [('Special/Objects.gif', 0, 0, 232, 67)]},
     'Bomb': {'add': [('Special/Objects.gif', 0, 0, 232, 67)]},
     # Special: the checkpoint gates are TEXTURED_C faces too (Special function 11): U centres from table 16929 by frame
-    # (165..330), V 256, extent 16 -> x 149..346, y 240..272 (missed at the first checkpoint: docs/30 phase 7).
+    # (165..330), V 256, extent 16 -> x 149..346, y 240..272 (missed at the first checkpoint: docs/ports/sonic-2/30 phase 7).
     'Checkpoint': {'add': [('Special/Objects.gif', 149, 240, 198, 33)]},
     'Checkpoint 2PVS': {'add': [('Special/Objects.gif', 149, 240, 198, 33)]},
     # Special: the emerald line reads x 403 when specialStage.emeralds > 127 (the startup only saw 0).

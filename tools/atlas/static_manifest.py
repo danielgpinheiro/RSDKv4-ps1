@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sprite manifests from the bytecode alone (docs/30 phase 1.3 feasibility), in the format
+"""Sprite manifests from the bytecode alone (docs/ports/sonic-2/30 phase 1.3 feasibility), in the format
 build_atlas.py reads (`sheet <id> <path>`, `frame <id> x y w h ani <name>`), one per stage folder and
 player variant, until the engine can list its frames itself (as RSDKv3-ps1's tools/rsdkmanifest does).
 

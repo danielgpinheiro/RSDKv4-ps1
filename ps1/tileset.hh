@@ -24,7 +24,7 @@ extern uint8_t g_ps1TileSolid[1024 / 8];
 extern volatile uint32_t g_ps1TileSetLoads; // tile sets loaded (GDB)
 extern volatile uint32_t g_ps1TileSetBytes; // texel bytes uploaded by the last load
 
-// Far-floor texture of a special stage (docs/28 phase 7, tools/floor/build_floor.py): Data/Stages/<folder>/
+// Far-floor texture of a special stage (docs/ports/sonic-cd/28 phase 7, tools/floor/build_floor.py): Data/Stages/<folder>/
 // Floor.vram -> tile page 3 (VRAM X 704, Y 256; free in the special stages). Call after PS1TileSetLoad (it
 // fills page 3 with the tile set's zeros). g_ps1FloorTexW = 0: the stage has none.
 bool PS1FloorLoad(const char *folder);

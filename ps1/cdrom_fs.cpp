@@ -553,7 +553,7 @@ int PS1FsPreloadDir(const char *dir, uint32_t maxSize) {
     return loaded;
 }
 
-/* Load pins (docs/30 phase 9.2): inside a bracketed load, a file of up to PIN_MAX bytes that gets re-opened is read whole
+/* Load pins (docs/ports/sonic-2/30 phase 9.2): inside a bracketed load, a file of up to PIN_MAX bytes that gets re-opened is read whole
  * into the heap, and every later open of it is served from RAM. The engine re-opens files around nested reads (GetFileInfo /
  * SetFileInfo: StageConfig.bin 5-7 times a stage load, GameConfig.bin, each .ani 5 times); once a bigger read (the SFX
  * bank, the scripts) had pushed them out of the read-ahead windows, each re-open cost a seek. A file is pinned at its
@@ -617,7 +617,7 @@ static uint8_t *pinFor(const char *path, uint32_t lba, uint32_t size) {
     return d;
 }
 
-/* Stage-local copies (docs/30 phase 9.2, tools/disc/stage_local.py): while a stage loads, a file that has a copy in
+/* Stage-local copies (docs/ports/sonic-2/30 phase 9.2, tools/disc/stage_local.py): while a stage loads, a file that has a copy in
  * Data/Stages/<stage>/PS1Local/ (GameConfig, GlobalCode, the players' .ani) is read from there, laid out between the
  * stage's own files, instead of from its own place on the disc (a seek each). A miss costs nothing (the index answers). */
 static char s_localDir[40]; // "Data/Stages/<folder>/PS1Local/", empty outside stage loads

@@ -1,5 +1,5 @@
 /*
- * CD-XA music (Sonic CD docs/28 phase 5.2; Sonic 2 docs/30 phase 5.2): plays one track of Data/Music/Music.xa (tools/audio/build_music.py)
+ * CD-XA music (Sonic CD docs/ports/sonic-cd/28 phase 5.2; Sonic 2 docs/ports/sonic-2/30 phase 5.2): plays one track of Data/Music/Music.xa (tools/audio/build_music.py)
  * through the CD drive's XA-ADPCM decoder into the SPU's CD input. No CPU decoding, no SPU RAM.
  * Sonic CD: 68 tracks in 8 channels, back to back per channel; a track starts at its start row, loops
  * at its loop row (the script's loop point, row-aligned at build time) and ends at its end marker.

@@ -1,5 +1,5 @@
 /*
- * Build-time trig tables for the RSDKv4 PS1 port (docs/30 phase 2; from the Sonic CD port).
+ * Build-time trig tables for the RSDKv4 PS1 port (docs/ports/sonic-2/30 phase 2; from the Sonic CD port).
  *
  * RSDKv4's CalculateTrigAngles (RSDKv4/Math.cpp) fills sin/cos tables and a 64 KB atan table with
  * 65,536 atan2f calls at boot: ~26 s on the R3000A (no FPU, soft-float). This host program runs
@@ -55,7 +55,7 @@ int main(void) {
     dump("int cos512LookupTable[0x200]", cos512, 0x200);
     dump("int sin256LookupTable[0x100]", sin256, 0x100);
     dump("int cos256LookupTable[0x100]", cos256, 0x100);
-    // The atan table as its triangle x <= y (docs/30 "Mania lessons pass": -32,640 B of RAM in every stage). The other
+    // The atan table as its triangle x <= y (docs/ports/sonic-2/30 "Mania lessons pass": -32,640 B of RAM in every stage). The other
     // half follows from truncation: T[x][y] = 63 - T[y][x] for x > y (atan2(y, x) + atan2(x, y) = 64 units, both
     // truncated), except the y = 0 column (exact angles: 0 and 64). Checked here for every entry; the build stops
     // otherwise. Index of T[a][b], a <= b: b * (b + 1) / 2 + a (RSDKv4/Math.cpp PS1ArcTan256).

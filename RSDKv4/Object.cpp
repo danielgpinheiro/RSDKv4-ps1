@@ -29,12 +29,12 @@ Entity objectEntityList[ENTITY_COUNT * 2]; //"regular" list & "storage" list
 int processObjectFlag[ENTITY_COUNT];
 TypeGroupList objectTypeGroupList[TYPEGROUP_COUNT];
 #if RETRO_PLATFORM == RETRO_PS1
-// PS1 (docs/30 phase 2): the type/group lists share one pool instead of ENTITY_COUNT refs each (0x103 lists x
+// PS1 (docs/ports/sonic-2/30 phase 2): the type/group lists share one pool instead of ENTITY_COUNT refs each (0x103 lists x
 // 4.7 KB = 1.2 MB upstream). Every interacting entity joins at most 3 lists (its custom group, its type, "all"),
 // so the pool holds 3 x ENTITY_COUNT refs. Two passes (count, then place) give each list the same entities in
 // the same (ascending slot) order as upstream's single pass.
 static short s_ps1TypeGroupPool[3 * ENTITY_COUNT];
-// Only the groups that have members are cleared and placed (a list of them, docs/30 7.2b): the other lists of the 259
+// Only the groups that have members are cleared and placed (a list of them, docs/ports/sonic-2/30 7.2b): the other lists of the 259
 // keep listSize 0 (a script walking one reads no refs); each list gets the same entities in the same order.
 static short s_ps1UsedGroups[TYPEGROUP_COUNT];
 static int s_ps1UsedGroupCount = 0;
@@ -94,7 +94,7 @@ static void PS1BuildTypeGroups()
 #if PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
 bool PS1S1TopSub(int ptr); // Script.cpp: a sub that is one native opcode, run without ProcessScript
 #elif !defined(RETRO_PS1_HOST_TOOL)
-bool PS1S2TopSub(int ptr); // Script.cpp: Sonic 2's (docs/43)
+bool PS1S2TopSub(int ptr); // Script.cpp: Sonic 2's (docs/perf/43)
 #endif
 static void PS1BuildTypeGroupsFrom(const short *cand, int n)
 {
@@ -138,7 +138,7 @@ const int OBJECT_BORDER_Y4 = SCREEN_YSIZE + 0x80;
 int playerListPos = 0;
 
 #if RETRO_PLATFORM == RETRO_PS1
-// GDB hook before each object type's startup sub (load-time profiles: break here, print the vblank counter; docs/30 7.3)
+// GDB hook before each object type's startup sub (load-time profiles: break here, print the vblank counter; docs/ports/sonic-2/30 7.3)
 __attribute__((noinline)) void PS1StartupTypeHook(int type) { asm volatile("" : : "r"(type)); }
 #endif
 void ProcessStartupObjects()
@@ -188,7 +188,7 @@ volatile uint32_t g_ps1ObjSlotsWalked = 0;
 #endif
 
 #if RETRO_PLATFORM == RETRO_PS1
-// PS1 ProcessObjects (docs/30 CPU work): upstream's loop with (1) the activity bounds kept in locals, refreshed after
+// PS1 ProcessObjects (docs/ports/sonic-2/30 CPU work): upstream's loop with (1) the activity bounds kept in locals, refreshed after
 // every script run (a script may move the camera or the borders), instead of re-reading five globals for each of
 // the ~400 live slots, and (2) the slots whose process flag it sets recorded in order: only this loop sets the flag,
 // so the type groups are built from that list (PS1BuildTypeGroupsFrom) instead of another walk of all slots.
@@ -254,7 +254,7 @@ void ProcessObjects()
     };
     bounds();
 #if PS1_GAME != 1
-    // The flags cleared up front (the true ones only): a blank or inactive slot then costs two loads (docs/43; the
+    // The flags cleared up front (the true ones only): a blank or inactive slot then costs two loads (docs/perf/43; the
     // special stage walks ~1,100 of them every frame)
     if (s_ps1FlagsAll) {
         memset(processObjectFlag, 0, sizeof(processObjectFlag));
@@ -265,11 +265,11 @@ void ProcessObjects()
     }
 #endif
     // The slot index is a local (the global objectEntityPos, which scripts read, is set only around their runs and left
-    // at ENTITY_COUNT as upstream's loop leaves it): no global load / store for each of the 896 slots (docs/30 7.2b).
+    // at ENTITY_COUNT as upstream's loop leaves it): no global load / store for each of the 896 slots (docs/ports/sonic-2/30 7.2b).
 #if PS1_GAME != 1
     // A blank slot does nothing below (see the #else), nor does an inactive one (the switch below leaves its flag false;
     // objectEntityPos is set again before any script runs): the special stage's ~700 rings and bombs the pipe hasn't
-    // reached (docs/43 C7). Each next slot is read after the previous one's script ran, as before.
+    // reached (docs/perf/43 C7). Each next slot is read after the previous one's script ran, as before.
     // A live slot is tested here (most of a zone's typed slots); a blank or inactive one starts the asm scan, and the
     // index is worked out once per run it skips.
     Entity *const ps1End = objectEntityList + ENTITY_COUNT;
@@ -286,7 +286,7 @@ void ProcessObjects()
     for (int pos = 0; pos < ENTITY_COUNT; ++pos, ++entity) {
         processObjectFlag[pos] = false;
         // A blank slot does nothing below (the priority switch only decides whether a typed object runs; its
-        // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/28).
+        // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/ports/sonic-cd/28).
         if (entity->type == OBJ_TYPE_BLANKOBJECT)
             continue;
 #endif
@@ -363,7 +363,7 @@ void ProcessObjects()
         Entity *entity = &objectEntityList[objectEntityPos];
 #if RETRO_PLATFORM == RETRO_PS1
         // A blank slot does nothing below (the priority switch only decides whether a typed object runs; its
-        // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/28).
+        // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/ports/sonic-cd/28).
         if (entity->type == OBJ_TYPE_BLANKOBJECT)
             continue;
 #endif

@@ -1,5 +1,5 @@
 /*
- * rsdkmanifest — host-side sprite manifest for the RSDKv4 (Sonic 2) PS1 port (docs/30 phase 3.1), after the Sonic CD
+ * rsdkmanifest — host-side sprite manifest for the RSDKv4 (Sonic 2) PS1 port (docs/ports/sonic-2/30 phase 3.1), after the Sonic CD
  * port's tool (RSDKv3-ps1/tools/rsdkmanifest).
  *
  * Sonic 2 ships its scripts as bytecode only, so the frames a stage can draw come from running them: for every stage
@@ -132,7 +132,7 @@ int main(int argc, char **argv)
     std::set<std::string> written; // list positions sharing a folder: append (the atlas takes the union)
     for (int list = 0; list < STAGELIST_MAX; ++list) {
         for (int pos = 0; pos < stageListCount[list]; ++pos) {
-            char bytecode[0x80]; // stages left off the disc (Egg Gauntlet, docs/30) have no bytecode there: skip
+            char bytecode[0x80]; // stages left off the disc (Egg Gauntlet, docs/ports/sonic-2/30) have no bytecode there: skip
             snprintf(bytecode, sizeof(bytecode), "Bytecode/%s.bin", stageList[list][pos].folder);
             if (access(bytecode, R_OK)) {
                 printf("skip  %-8s (no %s)\n", stageList[list][pos].folder, bytecode);
@@ -174,7 +174,7 @@ int main(int argc, char **argv)
                 if ((hasPlayer && (playerListPos == 0 || playerListPos == 3)) || StrComp(stageList[list][pos].folder, "Ending"))
                     AddAnimationFile("SuperSonic.ani");
                 if (!written.count(out + "/" + stageList[list][pos].folder + ".txt")) {
-                    // docs/30 phase 7.3: what LoadStageChunks / LoadStageCollisions left (the PS1 arrays, this same
+                    // docs/ports/sonic-2/30 phase 7.3: what LoadStageChunks / LoadStageCollisions left (the PS1 arrays, this same
                     // code) as 128x128Tiles.ps1 / CollisionMasks.ps1 beside the originals: the console reads them in.
                     auto pack = [&](const char *bin, const char *name, const char *tag, const void *data, size_t size) {
                         std::string dir = std::string("Data/Stages/") + stageList[list][pos].folder + "/";
@@ -187,7 +187,7 @@ int main(int argc, char **argv)
                         }
                         fclose(pf);
                     };
-                    // up to the last non-zero byte (docs/30 9.3: the special stage's 96 KB are 92 KB of zeros); the
+                    // up to the last non-zero byte (docs/ports/sonic-2/30 9.3: the special stage's 96 KB are 92 KB of zeros); the
                     // console zero-fills the rest (RSDKv4/Scene.cpp PS1LoadStagePacked)
                     size_t ctSize = sizeof(tiles128x128.ps1Tile) + sizeof(tiles128x128.ps1Collision);
                     const uint8_t *ct = (const uint8_t *)tiles128x128.ps1Tile;
@@ -236,7 +236,7 @@ int main(int argc, char **argv)
                             return 1;
                         }
                     }
-                    if (const char *dd = getenv("PS1_MASK_DUMP_DIR")) { // raw arrays for the console A/B (docs/30 9.3)
+                    if (const char *dd = getenv("PS1_MASK_DUMP_DIR")) { // raw arrays for the console A/B (docs/ports/sonic-2/30 9.3)
                         std::string dp = std::string(dd) + "/" + stageList[list][pos].folder + ".masks";
                         if (FILE *df = fopen(dp.c_str(), "wb")) {
                             fwrite(collisionMasks, 1, sizeof(collisionMasks), df);

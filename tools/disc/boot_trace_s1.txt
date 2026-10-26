@@ -1,4 +1,4 @@
-# Sonic 1's natural boot (docs/37 phase 9: GDB trace of fopen, 2026-09-29; each file once, in first-open order):
+# Sonic 1's natural boot (docs/ports/sonic-1/37 phase 9: GDB trace of fopen, 2026-09-29; each file once, in first-open order):
 # input of tools/disc/gen_load_order.py. OPEN lines only are read.
 OPEN Data/Game/PS1Scene3D.bin
 OPEN settings.ini

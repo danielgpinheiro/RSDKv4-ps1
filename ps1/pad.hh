@@ -1,4 +1,4 @@
-// PS1Pad: psyqo's AdvancedPad reduced to what the game reads (docs/43 C11). The engine reads only pad 1 (Pad1a: port 1,
+// PS1Pad: psyqo's AdvancedPad reduced to what the game reads (docs/perf/43 C11). The engine reads only pad 1 (Pad1a: port 1,
 // or pad A of a multitap there), but AdvancedPad's Fast mode polled both ports every frame, and an empty port 2 never
 // sends /ACK: each frame waited out its whole timeout (~105 us) after one byte, about half of the ~5 hblanks readPad
 // cost (nocash psx-spx "Controller and Memory Card I/O Ports"; "PSX expects No-connection if not returned Acknowledge

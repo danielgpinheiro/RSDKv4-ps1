@@ -12,13 +12,13 @@ What upstream LoadStageGIFFile does at runtime, done here once:
 768-byte palette (the GIF's, 256 x RGB), then 4 texture pages of 256x256 8-bit texels (65,536 B
 each, row-major); page p holds tiles 256p..256p+255 in a 16x16 grid, tile n at texel
 (16*(n%16), 16*(n/16)): one DMA per page (128 halfwords x 256 lines), no CPU re-pack at runtime.
-The height field is the number of lines stored (docs/30 phase 9.3): the pages end at the last 16-line tile row with a
+The height field is the number of lines stored (docs/ports/sonic-2/30 phase 9.3): the pages end at the last 16-line tile row with a
 non-zero texel (the unused tile slots are empty: Zone01's last 120 KB); the loader uploads zeros for the rest, so VRAM
 holds exactly the full pages (animated tiles copy from those slots).
 Self-check: every page is unpacked back to the tile strip and compared with the fixed-up GIF pixels.
 A stage that never draws a tile layer (every Act*.bin's active layers are 9 and no script of the stage writes
 stage.activeLayer with anything but the constant 9: the special stage) gets the header (height 0) + palette only:
-its 256 KB of pages would be read at every load for nothing (docs/30 phase 7.3).
+its 256 KB of pages would be read at every load for nothing (docs/ports/sonic-2/30 phase 7.3).
 
 Usage: convert_tiles.py DATA_DIR [OUT_DATA_DIR]   (every DATA_DIR/Stages/*/16x16Tiles.gif; with OUT_DATA_DIR, the
        .vram goes to OUT_DATA_DIR/Stages/<stage>/ for the stages that directory has)

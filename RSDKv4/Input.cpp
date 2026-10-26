@@ -3,7 +3,7 @@
 #if RETRO_PLATFORM == RETRO_PS1
 #include <psyqo/advancedpad.hh>
 #include "../ps1/pad.hh"
-extern PS1Pad *g_ps1Pad; // main.cpp (initialized in start()); port 1 only (docs/43 C11)
+extern PS1Pad *g_ps1Pad; // main.cpp (initialized in start()); port 1 only (docs/perf/43 C11)
 volatile uint16_t g_ps1PadTestMask  = 0; // GDB-injected input, bit = INPUT_* index (test harness)
 volatile uint16_t g_ps1PadButtons   = 0; // last input mask (bit = INPUT_* index)
 volatile uint32_t g_ps1PadConnected = 0; // pad 1 seen by the BIOS driver
@@ -540,7 +540,7 @@ void CheckKeyPress(InputData *input)
 
 #if RETRO_REV03
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
-    // SetGlobalVariableByName's linear StrComp search over every global, each frame (~3 hblanks, docs/43): the index is
+    // SetGlobalVariableByName's linear StrComp search over every global, each frame (~3 hblanks, docs/perf/43): the index is
     // looked up once per game config (LoadGameConfig bumps g_ps1GameConfigGen)
     static int s_pressID = -1, s_pressGen = -1;
     extern int g_ps1GameConfigGen; // RetroEngine.cpp: bumped by every LoadGameConfig (the names' source)

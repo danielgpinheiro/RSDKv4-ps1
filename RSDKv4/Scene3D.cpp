@@ -8,7 +8,7 @@ Matrix matWorld = Matrix();
 Matrix matView  = Matrix();
 Matrix matTemp  = Matrix();
 
-// Sonic 2's code size (docs/43: every KB of code is a KB less heap at the special stage's load peak and in the zones):
+// Sonic 2's code size (docs/perf/43: every KB of code is a KB less heap at the special stage's load peak and in the zones):
 // cold paths at -Os. Sonic 1 keeps its code as it was.
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
 #define PS1_S2_SMALL __attribute__((optimize("Os")))
@@ -16,7 +16,7 @@ Matrix matTemp  = Matrix();
 #define PS1_S2_SMALL
 #endif
 // Sonic 2: the ordering table (PS1Draw3DSceneOT) is the only 3D path; the sort + Draw3DScene path (the GDB A/B switches
-// g_ps1Draw3DOT / g_ps1Sort3DExact) went for RAM (docs/43; OT_CHECK and tools/chain_cmp.py check the pass now). Sonic 1
+// g_ps1Draw3DOT / g_ps1Sort3DExact) went for RAM (docs/perf/43; OT_CHECK and tools/chain_cmp.py check the pass now). Sonic 1
 // keeps its code as it was.
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL) && !defined(PS1_SORT3D_CHECK)
 #define PS1_S2_OT_ONLY 1
@@ -47,13 +47,13 @@ Vertex vertexBufferT[VERTEXBUFFER_SIZE];
 #if RETRO_PLATFORM == RETRO_PS1
 DrawListEntry3D *drawList3D          = s_ps1DummyDraw;
 DrawListEntry3D *g_ps1Scene3DScratch = s_ps1DummyScratch; // the draw-list sort's scratch
-// The sorted draw list Draw3DScene walks: drawList3D, or the one-pass sort's scratch (no copy back; docs/30 7.2b).
+// The sorted draw list Draw3DScene walks: drawList3D, or the one-pass sort's scratch (no copy back; docs/ports/sonic-2/30 7.2b).
 const DrawListEntry3D *g_ps1DrawOrder = s_ps1DummyDraw;
 
 volatile uint32_t g_ps1Scene3DAllocs = 0, g_ps1Scene3DFrees = 0, g_ps1Scene3DAllocFail = 0; // GDB
 static void *s_ps1Scene3DBlock = nullptr;
 #if PS1_GAME != 1
-// A vertex left to the CPU: its exact screen position, made once a frame right after the transform (docs/43: the worst
+// A vertex left to the CPU: its exact screen position, made once a frame right after the transform (docs/perf/43: the worst
 // frames read ~500 such corners of ~340 vertices, through a cache and the exact transform each). The transform lists the
 // vertices it leaves to the CPU (s_ps1CpuList) and puts the list slot in the mark's upper half (.u = slot << 16 |
 // 0x8000; the tests read only the lower half); s_ps1ExactXY by slot. PS1_XY_N slots in the Scene3D block (5 KB): a
@@ -72,7 +72,7 @@ static int s_ps1XYCount = 0; // the vertices the last transform did (a mark past
 #if PS1_S2_OT_ONLY
 // Sonic 2: the scratch (the ordering table's captured sub-lists, one entry per face) is only read while the stage runs,
 // so it is allocated at the stage's first draw, after the load, as the chain arenas are (ps1/gpu_chain.cpp
-// PS1ChainBegin): in the block, its 6.6 KB raised the load's high-water (docs/43: the special stage's entry headroom).
+// PS1ChainBegin): in the block, its 6.6 KB raised the load's high-water (docs/perf/43: the special stage's entry headroom).
 // Freed first in every stage load (PS1Scene3DPrepare), so no load ever has it on the heap. Without it (the heap full)
 // a captured face is not drawn, as when its arena is full, and g_ps1Scene3DAllocFail counts it.
 static DrawListEntry3D *s_ps1OTSub = nullptr;
@@ -245,7 +245,7 @@ void MatrixMultiply(Matrix *matrixA, Matrix *matrixB)
 {
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
     // a row of A in registers, written back once its four entries are done (each output row reads only its own A row):
-    // upstream's terms in upstream's order, without the loop's i / 4, i % 4 and the output copy (docs/43: several calls a
+    // upstream's terms in upstream's order, without the loop's i / 4, i % 4 and the output copy (docs/perf/43: several calls a
     // frame in the special stage). A == B (in place) keeps upstream's loop below.
     if (matrixA != matrixB) {
         const int(*b)[4] = matrixB->values;
@@ -421,12 +421,12 @@ void MatrixRotateXYZ(Matrix *matrix, short rotationX, short rotationY, short rot
 }
 #if !RETRO_REV00
 #if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_INVERSE_UNDER_TEST)
-// PS1 (docs/30 phase 7.2b): upstream's MatrixInverse below works in doubles (soft-float here: hundreds of library calls,
+// PS1 (docs/ports/sonic-2/30 phase 7.2b): upstream's MatrixInverse below works in doubles (soft-float here: hundreds of library calls,
 // every frame for the special stage's view matrix). For a matrix with last column 0 0 0 and translation 0 (256 in the
 // corner: a rotation, as MatrixRotateXYZ makes) all of its products and sums are exact (integers over powers of two)
 // until 1.0 / det: integer cofactors, then the same double operations -> the same bits (tools/scene3d/inverse_check.sh,
 // 3,000,000 cases). Anything else takes upstream's code.
-// The doubles below in integers (docs/43: ~30 soft-float calls an inverse, every frame): RN(2^24 / A) for A > 0 as M * 2^ex
+// The doubles below in integers (docs/perf/43: ~30 soft-float calls an inverse, every frame): RN(2^24 / A) for A > 0 as M * 2^ex
 // (M in [2^52, 2^53), round to nearest even, as the soft-float division), by restoring long division.
 typedef unsigned long long PS1U64;
 #if PS1_GAME != 1 // Sonic 2 (Sonic 1's EXE stays as it was: its inverses keep the doubles)
@@ -545,7 +545,7 @@ PS1_S2_SMALL static bool PS1MatrixInverseRotation(Matrix *matrix)
     double det = 1.0 / ((double)D / 16777216.0);
     int out[16];
     for (int i = 0; i < 16; ++i) {
-        if (i != 15 && !N[i]) { // 0.0 * det * 256 truncates to 0 (det is finite): no soft-float calls (docs/43 C12;
+        if (i != 15 && !N[i]) { // 0.0 * det * 256 truncates to 0 (det is finite): no soft-float calls (docs/perf/43 C12;
             out[i] = 0;         // N[3], [7], [11]-[14] are always 0 here, the others when an entry is)
             continue;
         }
@@ -562,7 +562,7 @@ PS1_S2_SMALL static bool PS1MatrixInverseRotation(Matrix *matrix)
 // Sonic 2: upstream's 16 cofactors (MatrixInverse below) as a table: each one's six terms m[a] * m[b] * m[c] in
 // upstream's order, the first negated or not, the others added or subtracted (bit k of s_ps1InvNeg: term k has a minus):
 // the same double operations in the same order, so the same bits (tools/scene3d/inverse_check.sh). Unrolled they were
-// 6.3 KB of soft-float calls, for the inverses that are not rotations (none in the special stage): RAM (docs/43).
+// 6.3 KB of soft-float calls, for the inverses that are not rotations (none in the special stage): RAM (docs/perf/43).
 static const uint8_t s_ps1InvTerm[16][6][3] = {
     {{5, 10, 15}, {5, 11, 14}, {9, 6, 15}, {9, 7, 14}, {13, 6, 11}, {13, 7, 10}}, // inv[0]
     {{1, 10, 15}, {1, 11, 14}, {9, 2, 15}, {9, 3, 14}, {13, 2, 11}, {13, 3, 10}}, // inv[1]
@@ -613,7 +613,7 @@ PS1_S2_SMALL static void PS1MatrixInverseTable(Matrix *matrix)
     for (int i = 0; i < 0x10; ++i) matrix->values[i / 4][i % 4] = inv[i];
 }
 #endif
-// -Os (docs/43: RAM): its double fallback was 8.5 KB at -O2; the special stage's inverses take the rotation path above
+// -Os (docs/perf/43: RAM): its double fallback was 8.5 KB at -O2; the special stage's inverses take the rotation path above
 PS1_S2_SMALL void MatrixInverse(Matrix *matrix)
 {
 #if RETRO_PLATFORM == RETRO_PS1
@@ -680,7 +680,7 @@ PS1_S2_SMALL void MatrixInverse(Matrix *matrix)
 #include "../ps1/gpu_chain.hh"
 #include <psyqo/gte-kernels.hh>
 #include <psyqo/gte-registers.hh>
-// Scene3D CPU per call (hblanks, the last call; GDB, docs/30 phase 7): the vertex transform, the depth sort, the faces.
+// Scene3D CPU per call (hblanks, the last call; GDB, docs/ports/sonic-2/30 phase 7): the vertex transform, the depth sort, the faces.
 volatile uint32_t g_ps1Prof3DTransform = 0, g_ps1Prof3DSort = 0, g_ps1Prof3DDraw = 0, g_ps1Prof3DVertices = 0, g_ps1Prof3DFaces = 0;
 volatile uint32_t g_ps1Prof3DProject = 0; // the GTE projection pass (part of Draw)
 volatile uint32_t g_ps1Prof3DFaded = 0, g_ps1Prof3DGeneral = 0, g_ps1Prof3DGeneralN = 0; // Draw: faded runs vs the rest
@@ -705,7 +705,7 @@ const PS1VertexXYZ &PS1ExactTSlow(int v)
 }
 bool PS1Draw3DOpen(); // ps1/render.cpp: a frame is open and objects are shown
 extern volatile uint32_t g_ps1Faces;
-// Draw3DScene's transform + projection on the GTE (docs/30 phase 7.2b; RSDKv4/Scene3D.cpp TransformVertexBuffer), as
+// Draw3DScene's transform + projection on the GTE (docs/ports/sonic-2/30 phase 7.2b; RSDKv4/Scene3D.cpp TransformVertexBuffer), as
 // Sonic CD's special-stage floor: RTPT, three vertices a command (psx-spx "GTE Coordinate Calculation Commands").
 // Upstream: T = v * M >> 8 (per term) + translation; screen = SCREEN_CENTER + projectionX * T.x / T.z,
 // SCREEN_CENTER - projectionY * T.y / T.z. On the GTE, in units of 32 (the half-pipe's vertices are +-2^18, most of
@@ -723,7 +723,7 @@ volatile uint32_t g_ps1GteNear = 0, g_ps1GteFlagged = 0, g_ps1GteRange = 0; // C
 static void PS1CpuVertexT(int v)
 {
     // only the exact z (the sort's depth, PS1ExactTSlow's formula): x and y come from PS1ExactT if a face drawn by the
-    // general path reads them (docs/43 C4: 3 multiplies instead of 9 for the ~85 vertices a frame left to the CPU)
+    // general path reads them (docs/perf/43 C4: 3 multiplies instead of 9 for the ~85 vertices a frame left to the CPU)
     const Vertex &q = vertexBuffer[v];
 #if PS1_GAME != 1
     uint32_t k = 0xFFFF; // listed: its exact screen position after the transform (PS1ExactXYPass)
@@ -829,7 +829,7 @@ PS1_S2_SMALL void PS1TransformProject3D(int count) // -Os: the loop is RSDKv4/Sc
     const Vertex *const vb = vertexBuffer;
     PS1ProjEntry *const pj = g_ps1Proj;
 #if PS1_GAME != 1
-    // the triples the GTE can do in assembly (docs/43 C4: RSDKv4/Scene3DTf.S); it returns at a triple for the code below
+    // the triples the GTE can do in assembly (docs/perf/43 C4: RSDKv4/Scene3DTf.S); it returns at a triple for the code below
     PS1TfState ts;
     ts.vb = vb, ts.pj = pj, ts.end = count - count % 3, ts.ox = ox, ts.oy = oy, ts.oz = oz;
     ts.m02 = m.values[0][2], ts.m12 = m.values[1][2], ts.m22 = m.values[2][2], ts.m32 = m.values[3][2];
@@ -924,7 +924,7 @@ static inline int PS1Side2(uint32_t k)
     Kernels::nclip();
     return (int32_t)readRaw<Register::MAC0, Safe>();
 }
-// Draw3DScene's faded faces (the half-pipe: ~650 a frame) in one pass (docs/30 phase 7): from draw-list entry i, every
+// Draw3DScene's faded faces (the half-pipe: ~650 a frame) in one pass (docs/ports/sonic-2/30 phase 7): from draw-list entry i, every
 // following faded face whose four corners the GTE projected (vertexBufferT .u): upstream's fog (the depth's) and
 // DrawFadedFace early-outs, the fog blend (cached: runs of faces share colour and fog), the strip order from one or two
 // side tests, flat quads written straight into bulk runs of the chain. Returns the entry it stopped at (another kind of
@@ -1078,7 +1078,7 @@ void TransformVertexBuffer()
 void TransformVertices(Matrix *matrix, int startIndex, int endIndex)
 {
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1
-    // the matrix in locals (docs/43: GCC reloaded its 12 entries for every vertex, the stores below could alias it; the
+    // the matrix in locals (docs/perf/43: GCC reloaded its 12 entries for every vertex, the stores below could alias it; the
     // special stage's segment build transforms ~180 vertices a segment). The matrix is never one of the vertices.
     const int m00 = matrix->values[0][0], m10 = matrix->values[1][0], m20 = matrix->values[2][0], m30 = matrix->values[3][0];
     const int m01 = matrix->values[0][1], m11 = matrix->values[1][1], m21 = matrix->values[2][1], m31 = matrix->values[3][1];
@@ -1104,7 +1104,7 @@ void TransformVertices(Matrix *matrix, int startIndex, int endIndex)
 #if (RETRO_PLATFORM == RETRO_PS1 && !PS1_S2_OT_ONLY) || defined(PS1_SORT3D_CHECK)
 // Stable LSD radix sort, descending by depth (ties keep their order, like upstream's bubble sort): keys hi - depth
 // ascending, in as many 9-bit passes as the depth range needs (the half-pipe: 2). One counting loop fills every pass's
-// histogram (docs/30 phase 7.2b). Identical order to upstream's: tools/scene3d/sort3d_check.sh.
+// histogram (docs/ports/sonic-2/30 phase 7.2b). Identical order to upstream's: tools/scene3d/sort3d_check.sh.
 void PS1SortDrawList3DRange(DrawListEntry3D *list, int count, int lo, int hi)
 {
     if (count < 2)
@@ -1145,7 +1145,7 @@ void PS1SortDrawList3DRange(DrawListEntry3D *list, int count, int lo, int hi)
         for (int i = 0; i < count; ++i) list[i] = src[i];
 }
 #if RETRO_PLATFORM == RETRO_PS1
-// The special stage's draw-list sort (docs/30 phase 7.2b, a night choice like the GTE transform: visual only): one
+// The special stage's draw-list sort (docs/ports/sonic-2/30 phase 7.2b, a night choice like the GTE transform: visual only): one
 // stable counting pass on the top 10 bits of the depth range (1,024 buckets; the half-pipe's ~2^18 range -> 256 depth
 // units a bucket). Faces in the same bucket keep their list order (the pipe's in segment order, then the rings and the
 // player, which the scripts add after it), so only faces within one bucket's depth of each other can differ from
@@ -1214,7 +1214,7 @@ void Sort3DDrawList()
 
 #if RETRO_PLATFORM == RETRO_PS1
     // PS1: the bubble sort below is stable and descending, so any stable descending sort gives the same order: a radix
-    // sort (docs/30 phase 7; the half-pipe's 742 faces took 4,266 hblanks bubbled, 220 merge-sorted). Identical order
+    // sort (docs/ports/sonic-2/30 phase 7; the half-pipe's 742 faces took 4,266 hblanks bubbled, 220 merge-sorted). Identical order
     // checked on the host: tools/scene3d/sort3d_check.sh.
     g_ps1DrawOrder = drawList3D; // the exact sort (and a list under 2 faces) stays in place
     if (g_ps1Sort3DExact)
@@ -1306,8 +1306,8 @@ void Draw3DScene(int spriteSheetID)
 static void PS1Draw3DList(int spriteSheetID, int count)
 #if PS1_GAME != 1
     ;
-// Sort3DDrawList + Draw3DScene as an ordering table (docs/30 "Mania lessons pass", 2026-10-09; Driver 2's model, docs/38
-// 2.3, as Mania's UFO stages, docs/32 9f): one pass over the faces in list order computes each face's depth (the sort's
+// Sort3DDrawList + Draw3DScene as an ordering table (docs/ports/sonic-2/30 "Mania lessons pass", 2026-10-09; Driver 2's model, docs/38
+// 2.3, as Mania's UFO stages, docs/ports/mania/32 9f): one pass over the faces in list order computes each face's depth (the sort's
 // formula) and its primitives -- the faded fast path writes its flat quad into the arena unlinked, any other face is
 // drawn by Draw3DScene's own code on a one-entry draw order while the chain captures what it emits -- and a second pass
 // links every face, from the last to the first, as the new head of bucket (hi - depth) >> shift: the coarse sort's key,
@@ -1319,13 +1319,13 @@ volatile uint32_t g_ps1OTBuckets     = 0; // last frame: buckets in the table
 volatile uint32_t g_ps1OTCaptured    = 0; // last frame: faces drawn by the general path (captured sub-lists)
 volatile uint32_t g_ps1OTFailed      = 0; // frames whose table didn't fit the arena (total; primitives dropped)
 volatile uint32_t g_ps1Draw3DTexFast = 1; // GDB: 0 = TEXTURED_C / _BLEND faces through the general path (same-build A/B)
-volatile uint32_t g_ps1OTTexFast     = 0; // last frame: textured quads written directly (docs/43 C1)
+volatile uint32_t g_ps1OTTexFast     = 0; // last frame: textured quads written directly (docs/perf/43 C1)
 struct PS1OTRec {
     int depth;
     uint32_t *first; // the face's first node (bit 0: a captured sub-list, its last node in g_ps1Scene3DScratch), or null
 };
 static_assert(sizeof(PS1OTRec) == sizeof(DrawListEntry3D), "PS1OTRec reuses drawList3D");
-// The ordering table's faces other than the faded fast path (docs/43 C1): out of line, so the hot loop below keeps its
+// The ordering table's faces other than the faded fast path (docs/perf/43 C1): out of line, so the hot loop below keeps its
 // state in registers (with these paths inline GCC spilled ~30 values to the stack). Returns the face's record pointer
 // (tagged as in the link pass) or null. The caller has closed any open bulk run.
 static uint32_t s_ps1OTCaptured = 0, s_ps1OTTex = 0, s_ps1OTFadedGen[3];
@@ -1358,7 +1358,7 @@ static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int 
         return reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(h) | 2);
     }
     // a faded face with a corner left to the CPU (near the camera or beyond the GTE's screen range): upstream's general
-    // case (PS1Draw3DList: exact corners, fog, DrawFadedFace) as words when the quad fits the GPU limits (docs/43 C1)
+    // case (PS1Draw3DList: exact corners, fog, DrawFadedFace) as words when the quad fits the GPU limits (docs/perf/43 C1)
     if (f.flag == FACE_FLAG_FADED && g_ps1Draw3DFadedFast) {
         if (g_ps1Proj[f.a].v <= 0 || g_ps1Proj[f.b].v <= 0 || g_ps1Proj[f.c].v <= 0 || g_ps1Proj[f.d].v <= 0) // PS1_ZPOS
             return nullptr;
@@ -1368,7 +1368,7 @@ static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int 
         PS1ProjectedVertex(f.c, &quad[2].x, &quad[2].y);
         PS1ProjectedVertex(f.d, &quad[3].x, &quad[3].y);
         { // PS1FadedFaceWords' off-screen and degenerate tests here (each returns 0 there, as its other early-outs do):
-          // the worst frames have ~140 such near faces (docs/43)
+          // the worst frames have ~140 such near faces (docs/perf/43)
             const int x0 = quad[0].x, x1 = quad[1].x, x2 = quad[2].x, x3 = quad[3].x;
             const int y0 = quad[0].y, y1 = quad[1].y, y2 = quad[2].y, y3 = quad[3].y;
             if ((x0 < 0 && x1 < 0 && x2 < 0 && x3 < 0) || (x0 > SCREEN_XSIZE && x1 > SCREEN_XSIZE && x2 > SCREEN_XSIZE && x3 > SCREEN_XSIZE)
@@ -1420,7 +1420,7 @@ static __attribute__((noinline)) uint32_t *PS1OTOtherFace(int i, int depth, int 
     ++s_ps1OTCaptured;
     return reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(first) | 1);
 }
-// The faded fast path of the pass below, per face, in assembly (docs/43 C1: RSDKv4/Scene3DOT.S; GCC's loop spilled ~10
+// The faded fast path of the pass below, per face, in assembly (docs/perf/43 C1: RSDKv4/Scene3DOT.S; GCC's loop spilled ~10
 // values a face). The asm reads and writes this state; offsets are its S_* constants.
 struct PS1OTFastState {
     const Face *fb;
@@ -1526,7 +1526,7 @@ extern "C" uint32_t *PS1OTOtherC(PS1OTFastState *s, int i, int depth)
     if (f.flag == FACE_FLAG_FADED && g_ps1Draw3DFadedFast) {
         // PS1OTOtherFace's returns that draw nothing (a corner behind the camera; wholly off one side of the screen, or
         // degenerate: the tests it makes on the same corners) before the open run is closed: no run closed here and
-        // opened again for the next faded face (docs/43: ~140 such near faces a frame at the stage's start). The quads
+        // opened again for the next faded face (docs/perf/43: ~140 such near faces a frame at the stage's start). The quads
         // after it go on in the same run; their words and their order (through the ordering table) are the same.
         if (g_ps1Proj[f.a].v <= 0 || g_ps1Proj[f.b].v <= 0 || g_ps1Proj[f.c].v <= 0 || g_ps1Proj[f.d].v <= 0) // PS1_ZPOS
             return PS1_OT_REJECT;
@@ -1733,7 +1733,7 @@ void PS1Draw3DSceneOT(int spriteSheetID)
     g_ps1Prof3DGeneral  = g_ps1Prof3DDraw - s_ps1FadedHbl;
     g_ps1Prof3DGeneralN = s_ps1GeneralN;
 }
-// -Os (docs/43: RAM, 6.3 KB at -O2): with the ordering table it draws only the rare faces PS1OTOtherFace hands it
+// -Os (docs/perf/43: RAM, 6.3 KB at -O2): with the ordering table it draws only the rare faces PS1OTOtherFace hands it
 __attribute__((optimize("Os"))) static void PS1Draw3DList(int spriteSheetID, int count)
 #endif
 #else
@@ -1741,7 +1741,7 @@ void Draw3DScene(int spriteSheetID)
 #endif
 {
 #if RETRO_PLATFORM == RETRO_PS1
-// upstream's T.z > 0 without the exact transform (docs/30 "Mania lessons pass"): g_ps1Proj[v].v is the exact z for a
+// upstream's T.z > 0 without the exact transform (docs/ports/sonic-2/30 "Mania lessons pass"): g_ps1Proj[v].v is the exact z for a
 // vertex left to the CPU (PS1CpuVertexT), and SZ * 32 >= 8192 for one the GTE projected, whose exact z is within ~840 of
 // it (units of 32, a 4.12 matrix of entries < 8: the truncations' worst case) and so > 0 as well: the same decision.
 #define PS1_ZPOS(idx) (g_ps1Proj[idx].v > 0)

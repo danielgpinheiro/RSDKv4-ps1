@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load-time report from a tools/load_profile.sh log (docs/30 phase 9.1; from the Sonic CD port's tool).
+"""Load-time report from a tools/load_profile.sh log (docs/ports/sonic-2/30 phase 9.1; from the Sonic CD port's tool).
 
 Per load (from its GOTO, or the previous load's end, to its LOAD line): vblanks, requests (blocking reads + load-stream
 sessions: each one seek), stream starts, sectors, heap never reached at the load's end; then

@@ -127,7 +127,7 @@ static bool uploadBlock(FILE *f, uint32_t offset, int x, int y, int w, int h, ui
 bool PS1AtlasLoad(const char *folder, int player) {
     clearTables();
     char path[96];
-    // Per-player atlases (docs/30 3.1), by playerListPos: <Stage>.atl = Sonic, _t = Tails, _k = Knuckles,
+    // Per-player atlases (docs/ports/sonic-2/30 3.1), by playerListPos: <Stage>.atl = Sonic, _t = Tails, _k = Knuckles,
     // _st = Sonic & Tails.
     static const char *const suffix[4] = {"", "_t", "_k", "_st"};
     snprintf(path, sizeof(path), "Data/Sprites/Atlas/%s%s.atl", folder, player >= 0 && player < 4 ? suffix[player] : "");

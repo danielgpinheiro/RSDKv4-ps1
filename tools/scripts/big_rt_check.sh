@@ -1,5 +1,5 @@
 #!/bin/bash
-# Host check (docs/43): Sonic 2's two-run big-value table (RSDKv4/Script.cpp, PS1_BIG_RT: runtime insertions in a run at
+# Host check (docs/perf/43): Sonic 2's two-run big-value table (RSDKv4/Script.cpp, PS1_BIG_RT: runtime insertions in a run at
 # the array's top) == the one sorted table Sonic 1 keeps (the same code with PS1_GAME 1): random loads (ascending
 # stores, reloads at a lower position that truncate), runtime writes (small / big, new / existing slots, up to the
 # capacity) and reads; every read, the overflow count and the code slots must match.

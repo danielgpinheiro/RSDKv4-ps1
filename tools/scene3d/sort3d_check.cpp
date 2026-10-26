@@ -1,4 +1,4 @@
-// Host check (docs/30 phase 2.3 / 7; from the Sonic CD port): the PS1 sort (now radix) of the 3D draw list (RSDKv4/Scene3D.cpp,
+// Host check (docs/ports/sonic-2/30 phase 2.3 / 7; from the Sonic CD port): the PS1 sort (now radix) of the 3D draw list (RSDKv4/Scene3D.cpp,
 // PS1SortDrawList3D) gives exactly upstream's bubble-sort order, on random depths with many ties.
 // Run: tools/scene3d/sort3d_check.sh (extracts the function, builds and runs this).
 #include <cstdio>

@@ -27,7 +27,7 @@ if [ -n "${REDUX_PORTABLE:-}" ]; then
     # unchanged: only the host output is muted)
     /usr/bin/python3 -c "import json,sys;p=sys.argv[1];d=json.load(open(p));d.setdefault('SPU',{})['Mute']=True;json.dump(d,open(p,'w'),indent=4)" "$REDUX_PORTABLE/pcsx.json"
     REDUX_ARGS="$REDUX_ARGS -portable $REDUX_PORTABLE"
-    # Freshly formatted cards for every run (docs/37): a run that saves (the menus, a finished act) must not change the
+    # Freshly formatted cards for every run (docs/ports/sonic-1/37): a run that saves (the menus, a finished act) must not change the
     # next run's game through the card (Sonic 1's scripts read the spin dash option from the save). HARNESS_CARDS=0: the
     # script passes its own (tools/memcard/save_test.sh).
     if [ "${HARNESS_CARDS:-1}" = 1 ]; then

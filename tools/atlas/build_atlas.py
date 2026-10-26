@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Per-stage sprite atlas for the RSDKv3 (Sonic CD) PS1 port (golden rule: build time only).
 
-RSDKv4 (Sonic 2), docs/30: copied from RSDKv3-ps1 (1e583ad). Phase 1.3 fed it tools/atlas/static_manifest.py
+RSDKv4 (Sonic 2), docs/ports/sonic-2/30: copied from RSDKv3-ps1 (1e583ad). Phase 1.3 fed it tools/atlas/static_manifest.py
 (bytecode only, no `stage` lines) for the feasibility report; phase 3.1 feeds it the engine's manifests
 (tools/rsdkmanifest: v4 `stage` lines, one directory per player variant, both options.region values) plus the
 regions of frames scripts edit at runtime (tools/atlas/runtime_frames.py). The v3 VRAM map is kept.
@@ -32,7 +32,7 @@ Output: <Data>/Sprites/Atlas/<Stage>.atl (little-endian):
   block  : u16 x, y, w, h (VRAM halfwords), u32 offset of w*h u16 at dataOffset + offset
 Every frame is decoded back from the atlas and compared with its GIF (must be exact).
 
-On-demand pictures (docs/28 phase 4, user decision 2026-09-24): a stage whose frames don't fit (the
+On-demand pictures (docs/ports/sonic-cd/28 phase 4, user decision 2026-09-24): a stage whose frames don't fit (the
 Secrets gallery's full-screen pictures) streams its largest frame groups (merged rects) instead of
 keeping them resident: each is a picture of <Stage>.pic, loaded by ps1/sprite_atlas into one of
 two VRAM slots (same shape, columns SLOTS) when a draw first needs it, least recently used slot
@@ -86,7 +86,7 @@ class AtlasError(Exception):
 
 
 LANG_TAGS = {'en': 'EN', 'jp': 'JP', 'fr': 'FR', 'de': 'DE', 'es': 'ES', 'it': 'IT'}
-LANG = 'en'  # --lang: the disc's language (docs/28 phase 4: one disc per language)
+LANG = 'en'  # --lang: the disc's language (docs/ports/sonic-cd/28 phase 4: one disc per language)
 
 
 def _data_path(data, path):
@@ -233,7 +233,7 @@ def merge(rects):
 
 
 def colour_split(im, frames):
-    """A merged rect with more than 15 colours whose frames each have 15 or fewer (docs/37: Sonic 1's Scrap Brain with
+    """A merged rect with more than 15 colours whose frames each have 15 or fewer (docs/ports/sonic-1/37: Sonic 1's Scrap Brain with
     Sonic & Tails): regroup its frames greedily, biggest first, into rects whose whole region keeps 15 colours or
     fewer, so each can be a 4-bit cluster instead of the one 8-bit cluster (half the VRAM per texel). Groups may overlap:
     the runtime draws a frame from whichever cluster holds each of its texels (render.cpp PS1ForEachPieceAtlas), and
@@ -359,7 +359,7 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0, spli
     vcols = [100 + i for i in range(virtual)]
     pairs = PAIRS + [(vcols[i], vcols[i + 1]) for i in range(0, len(vcols) - 1, 2)]
     free = [(c, py) for py in (0, 1) for c in COLUMNS + vcols]
-    # Special stages (docs/28 phase 7): a tile page their tile set leaves empty joins the atlas, last (page 3
+    # Special stages (docs/ports/sonic-cd/28 phase 7): a tile page their tile set leaves empty joins the atlas, last (page 3
     # is the far floor's): SS1's animated 3D background needs 4 more columns than the sprite area has.
     if re.match(r'SS\d+$', name):
         if last_tile(data, name) < 512:

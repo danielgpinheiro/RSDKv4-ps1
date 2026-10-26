@@ -252,7 +252,7 @@ class DemuteAction : public psyqo::CDRomDevice::Action<DemuteState> {
 DemuteAction s_demute;
 
 // PS1XaStop / PS1XaPause (PauseSound: the pause menu, every 1-up's jingle): wait for the drive's PAUSE. Bounded
-// (docs/29: every CD wait needs a bound; tester report 2026-10-10, freezes at 1-ups not reproduced in emulators): after
+// (docs/ports/rsdk-common/29: every CD wait needs a bound; tester report 2026-10-10, freezes at 1-ups not reproduced in emulators): after
 // XA_WAIT_HBL without an answer the action is aborted (XaAction::abort), and after as long again it is given up
 // (the drive answers nothing at all). Root counter 1 wraps at 16 bits: the elapsed time is summed per iteration.
 #define XA_WAIT_HBL (3 * 15734) // ~3 s (NTSC hblanks; PAL a little longer)

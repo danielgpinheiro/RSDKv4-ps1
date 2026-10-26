@@ -1,5 +1,5 @@
 #!/bin/bash
-# Save test (docs/30 phase 8) on temporary card images: never the player's cards. PCSX-Redux stores -memcard1 /
+# Save test (docs/ports/sonic-2/30 phase 8) on temporary card images: never the player's cards. PCSX-Redux stores -memcard1 /
 # -memcard2 in ~/.config/pcsx-redux/pcsx.json, so it is backed up and restored on exit.
 # Part 1 (GDB, natural build): the boot read of a fresh formatted card (no save, no write) -> saveRAM gets two markers
 #   -> write -> card 1 lists the file (tools/memcard/mcd.py, CRC ok) -> RAM scrambled -> re-read -> the markers are back.
@@ -14,7 +14,7 @@ HARNESS_CARDS=0 . tools/redux_env.sh # its own temporary cards below
 CFG=${REDUX_PORTABLE:-$HOME/.config/pcsx-redux} # GAME=1: its own instance's settings (tools/redux_env.sh)
 MCD="python3 tools/memcard/mcd.py"
 FILE=BAHBRW-00004SONIC2
-[ "${GAME:-2}" = 1 ] && FILE=BAHBRW-00005SONIC1 # RSDKv4/Userdata.cpp PS1_SAVE_FILE (docs/37)
+[ "${GAME:-2}" = 1 ] && FILE=BAHBRW-00005SONIC1 # RSDKv4/Userdata.cpp PS1_SAVE_FILE (docs/ports/sonic-1/37)
 redux_busy && { echo "PCSX-Redux (GDB $REDUX_PORT) is already running (another session?): not starting it" >&2; exit 2; }
 cp -p "$CFG/pcsx.json" "$W/pcsx.json.bak"
 shasum "$CFG"/memcard*.mcd > "$W/cards.sha" 2>/dev/null

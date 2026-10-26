@@ -1,4 +1,4 @@
-// Host check (docs/30 "Mania lessons pass"): ArcTanLookup from the 64 KB table (upstream's atan2f loop) vs the PS1's
+// Host check (docs/ports/sonic-2/30 "Mania lessons pass"): ArcTanLookup from the 64 KB table (upstream's atan2f loop) vs the PS1's
 // triangle (RSDKv4/Math.cpp PS1ArcTan256), over a grid and 2,000,000 random inputs: must print 0 mismatches.
 #include <math.h>
 #include <stdio.h>

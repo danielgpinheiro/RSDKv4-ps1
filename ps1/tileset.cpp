@@ -31,7 +31,7 @@ bool PS1TileSetLoad(const char *folder, uint8_t *pal768) {
     }
     uint8_t hdr[4];
     // BE 256 x height: the lines stored (tools/tiles/convert_tiles.py): up to the last non-empty tile row, zeros after it
-    // (uploaded, not read: docs/30 9.3); 0 = the palette only (a stage that never draws a tile layer)
+    // (uploaded, not read: docs/ports/sonic-2/30 9.3); 0 = the palette only (a stage that never draws a tile layer)
     bool ok    = fread(hdr, 1, 4, f) == 4 && hdr[0] == 1 && hdr[1] == 0;
     int height = hdr[2] << 8 | hdr[3];
     ok      = ok && !(height & 15) && height <= 256 * PAGES;

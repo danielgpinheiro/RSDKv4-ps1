@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The mobile menus' bitmap fonts (Data/Game/Menu/<Name>_EN.fnt: BMFont text format + one page PNG), read and drawn at
-build time for the PS1 menus (docs/30 phase 4.2).
+build time for the PS1 menus (docs/ports/sonic-2/30 phase 4.2).
 
 Font(menu_dir, name, page=None): glyphs by code point {x, y, w, h, xoff, yoff, xadv}, lineHeight, base; the page
 image (RGBA). render(text, scale) -> RGBA image of the string (glyphs cut from the page, placed at their offsets and

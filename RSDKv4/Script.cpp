@@ -46,7 +46,7 @@ static bool s_ps1BigBucketDirty = true;
 // (logical index L, ascending by slot, at s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT - L]: the largest slot lowest, so the
 // common ascending insertions and a load's truncation move nothing): an insertion moved the loaded table's tail (up to ~40 KB: the
 // special stage's segment build fills six 40-entry tables near the code's start, ~50 hblanks on every 4th frame early
-// in a stage, docs/43) and rebuilt the bucket index. The two runs hold what the one table held, with the same capacity
+// in a stage, docs/perf/43) and rebuilt the bucket index. The two runs hold what the one table held, with the same capacity
 // (an insertion or a load's append fails when count + rtCount reaches PS1_SCRIPTBIG_COUNT, as count did), and a load
 // drops the entries at or past its position from both: every read gives the same value.
 #define PS1_BIG_RT 1
@@ -868,7 +868,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("ResetInputSlotAssignments", 0),
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
-    // PS1 extensions, only in bytecode rewritten by tools/scripts/patch_bytecode.py (docs/30): hot script loops run
+    // PS1 extensions, only in bytecode rewritten by tools/scripts/patch_bytecode.py (docs/ports/sonic-2/30): hot script loops run
     // natively, with every side effect of the script (temps, table / local writes).
     FunctionInfo("PS1Oscillate", 4),
     FunctionInfo("PS1Ring", 0),
@@ -916,7 +916,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SpecialPlayerRun", 0),
     FunctionInfo("PS1SpecialSetupSort", 0),
     FunctionInfo("PS1SpecialSetupUpdate", 0),
-    // Sonic 1's own natives (docs/37), after Sonic 2's: implemented in its build only; listed in both (2026-10-09) so
+    // Sonic 1's own natives (docs/ports/sonic-1/37), after Sonic 2's: implemented in its build only; listed in both (2026-10-09) so
     // the opcodes added after them have one number in both builds and in the tools
     FunctionInfo("PS1SSRotPos", 0),
     FunctionInfo("PS1SSBlockCollide", 0),
@@ -930,7 +930,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1S1ZoneObj", 1),
     FunctionInfo("PS1S1Spring", 1),
     FunctionInfo("PS1S1LZSetup", 1),
-    // Sonic 2 natives added after Sonic 1's (docs/30 "Mania lessons pass", 2026-10-09): Sonic 1's numbers stay
+    // Sonic 2 natives added after Sonic 1's (docs/ports/sonic-2/30 "Mania lessons pass", 2026-10-09): Sonic 1's numbers stay
     FunctionInfo("PS1SpecialBGDraw", 0),
     FunctionInfo("PS1RingSparkle", 0),
     FunctionInfo("PS1HPZSetup", 0),
@@ -1526,7 +1526,7 @@ enum ScrFunc {
     FUNC_PS1SPECIALPLAYERRUN,
     FUNC_PS1SPECIALSETUPSORT,
     FUNC_PS1SPECIALSETUPUPDATE,
-    // Sonic 1's own natives (docs/37), after Sonic 2's (implemented in its build only; numbered in both)
+    // Sonic 1's own natives (docs/ports/sonic-1/37), after Sonic 2's (implemented in its build only; numbered in both)
     FUNC_PS1SSROTPOS,
     FUNC_PS1SSBLOCKCOLLIDE,
     FUNC_PS1SSBLOCKDRAW,
@@ -3609,7 +3609,7 @@ void ParseScriptFile(char *scriptName, int scriptID)
 #endif
 
 #if RETRO_PLATFORM == RETRO_PS1
-// Script images (docs/30 phase 9.3, golden rule): what LoadBytecode leaves in the PS1's script arrays after a stage's
+// Script images (docs/ports/sonic-2/30 phase 9.3, golden rule): what LoadBytecode leaves in the PS1's script arrays after a stage's
 // bytecode (GlobalCode + the stage's own) is written at build time by the host build of this same code
 // (tools/rsdkmanifest: right after the stage's LoadBytecode, before any startup writes into the tables) as
 // Data/Stages/<stage>/Scripts.ps1, and the console reads it straight into the arrays: no bytecode decoding at a stage load
@@ -4114,7 +4114,7 @@ void ClearScriptData()
 }
 
 #if RETRO_PLATFORM == RETRO_PS1
-// Sonic 2's Ring update sub (GlobalCode object "Ring"), natively (docs/30 CPU work): the most common object, ~21
+// Sonic 2's Ring update sub (GlobalCode object "Ring"), natively (docs/ports/sonic-2/30 CPU work): the most common object, ~21
 // VM instructions a frame each (4.6 hblanks on the emulator; 11-16 on screen in several zones). The patcher
 // (tools/scripts/patch_bytecode.py) replaces the sub with `PS1Ring / End` only when its instructions match this
 // transcription exactly, constants included. Every statement below is one script instruction, in order, with the
@@ -4293,7 +4293,7 @@ static inline void PS1TouchS1(Entity *me, int l, int t, int r, int b, Entity *o)
 }
 #endif
 
-// Sonic 1's Ring update sub (GlobalCode object "Ring", docs/37 phase 2b): Sonic 2's (PS1RingUpdate) without the
+// Sonic 1's Ring update sub (GlobalCode object "Ring", docs/ports/sonic-1/37 phase 2b): Sonic 2's (PS1RingUpdate) without the
 // 2P counters, with Sonic 1's global numbering and its achievements (200 rings; 30 rings in a row while rolling).
 static void PS1RingUpdateS1()
 {
@@ -6759,7 +6759,7 @@ static void PS1StageSetupUpdate()
     }
 }
 #if PS1_GAME == 1
-// Sonic 1's Stage Setup update sub (docs/37 phase 2b), like PS1StageSetupUpdate: its main part runs only in stage state 1
+// Sonic 1's Stage Setup update sub (docs/ports/sonic-1/37 phase 2b), like PS1StageSetupUpdate: its main part runs only in stage state 1
 // (Sonic 2's: every state but 2 and 3), with Sonic 1's globals, timer local (22826), extra-life object (38) and death
 // function (51); the time-over path doesn't set a global first. Patched in when STAGESETUP_SIG_S1 matches.
 static void PS1StageSetupUpdateS1()
@@ -6927,7 +6927,7 @@ static void PS1DrawNumbers(int base, int x, int y, int value, int digits, int sp
 // Sonic 2's HUD drawing (GlobalCode function 72, called by the HUD's draw sub every frame in every zone; ~25 VM
 // instructions + DrawNumbers), natively: one statement per script instruction, in order. The function's body is
 // patched to `PS1HUDDraw / return` only when it matches HUD_FN_SIG. Sonic 1's is the same function with its own
-// globals for the score and the lives (docs/37 phase 2b, HUD_FN_SIG_S1).
+// globals for the score and the lives (docs/ports/sonic-1/37 phase 2b, HUD_FN_SIG_S1).
 #if PS1_GAME == 1
 #define PS1_G_SCORE 21
 #define PS1_G_LIVES 23
@@ -7697,7 +7697,7 @@ static void PS1PlayerInput()
 }
 
 #if PS1_GAME == 1
-// Sonic 1's special stage, function 9 (docs/37 phase 7): an object's place in the rotating maze -- its offset from
+// Sonic 1's special stage, function 9 (docs/ports/sonic-1/37 phase 7): an object's place in the rotating maze -- its offset from
 // the player (entity 0) rotated by the maze angle (LOCAL[0]) into TEMP0 / TEMP1, and its rotation 512 - angle. Every
 // block's and ring's draw sub calls it (~200 a frame: 25 VM instructions each). One statement per instruction, the
 // temps left as the script leaves them. Patched to `PS1SSRotPos / return` when SSROTPOS_FN_SIG_S1 matches.
@@ -7720,7 +7720,7 @@ static void PS1SSRotPos()
 #endif
 
 #if PS1_GAME == 1
-// Sonic 1's special stage, function 10 (docs/37 phase 7): a maze block against the player (entity 0), called by the
+// Sonic 1's special stage, function 10 (docs/ports/sonic-1/37 phase 7): a maze block against the player (entity 0), called by the
 // blocks' update subs from their player loop -- the solid box (bits of the player's value 11) or the touch box that
 // pushes the player out along the faster axis. One statement per instruction; SSBLOCKCOLLIDE_FN_SIG_S1.
 // The block's two tests against the player when they cannot hit (~70 blocks a frame, most far from the player):
@@ -8849,7 +8849,7 @@ static void PS1S1ZoneObjSbz(int kind)
 }
 #pragma GCC pop_options
 
-// Sonic 1's zone objects' update subs (docs/37 phase 2b; S1ZONEOBJ_SIGS, the operand says which), one statement per
+// Sonic 1's zone objects' update subs (docs/ports/sonic-1/37 phase 2b; S1ZONEOBJ_SIGS, the operand says which), one statement per
 // instruction, the players' loops over group 256 (ARRAYPOS6):
 // 0 Labyrinth's Door: its state switch (0 wait for the switch -- entity + 1's value 0 -- , 1 rise, 2 open, 3 wait for
 //   the player past x 4384, 4 close), then solid for each player.
@@ -9040,7 +9040,7 @@ static void PS1S1ZoneObj(int kind)
 #endif
 
 #if PS1_GAME == 1
-// Sonic 1's player input / timers (GlobalCode function 0, docs/37 phase 2b), like PS1PlayerInput: Sonic 2's function
+// Sonic 1's player input / timers (GlobalCode function 0, docs/ports/sonic-1/37 phase 2b), like PS1PlayerInput: Sonic 2's function
 // without the 2P VS parts (no GLOBAL[13] checks, no sums over both players), with Sonic 1's globals (97 / 98 / 102 / 95
 // / 39) and functions (42, 38); its pause blocks stop SFX 0. The mobile back key's pause is patched off before this
 // (patch_back_pause s1: its `IfEqual KEYDOWNBUTTONB 2` is never true). Patched in when PLAYERINPUT_FN_SIG_S1 matches.
@@ -9610,7 +9610,7 @@ static int PS1CollisionTop(Entity &e) // VAR_OBJECTCOLLISIONTOP's getter
     int h = animFrames[animationList[animFile->aniListOffset + e.animation].frameListOffset + e.frame].hitboxID;
     return hitboxList[animFile->hitboxListOffset + h].top[0];
 }
-// The player scripts Sonic 1 and Sonic 2 share (docs/37 phase 2b): Sonic 1's GlobalCode has the same physics functions
+// The player scripts Sonic 1 and Sonic 2 share (docs/ports/sonic-1/37 phase 2b): Sonic 1's GlobalCode has the same physics functions
 // but numbers a few things differently (its animation globals are 3 lower, its player states from 11 on one lower); the
 // natives name those numbers. Player states are GlobalCode function numbers (CallFunction OBJECTSTATE).
 #if PS1_GAME == 1
@@ -10316,7 +10316,7 @@ static void PS1PlayerState12() // in the air
     }
 }
 
-// Sonic 2's numbers in the player / Tails scripts both games share -> the running game's (docs/37 phase 2b): Sonic 1's
+// Sonic 2's numbers in the player / Tails scripts both games share -> the running game's (docs/ports/sonic-1/37 phase 2b): Sonic 1's
 // GlobalCode has one global object less before the player states (states 26-29 one lower), one function less before
 // 11-30 and one more before 31-69, and its animation globals are 3 lower. Only the numbers these natives use; each is
 // checked by the Sonic 1 signatures (tools/scripts/patch_bytecode.py TAILSFN*_SIG_S1). Sonic 2: the number itself.
@@ -11471,12 +11471,12 @@ static void PS1InvisibleBlockUpdate()
     }
 }
 // Scene3D buffer entries as the VM indexes them (PS1_VTX / PS1_FACE: mapped, clamped, high-water marks), out of line:
-// the special-stage natives touch them in many places (code size, docs/30 phase 7.2b).
+// the special-stage natives touch them in many places (code size, docs/ports/sonic-2/30 phase 7.2b).
 __attribute__((noinline)) static Vertex &PS1Vertex(int i) { return vertexBuffer[PS1_VTX(i)]; }
 __attribute__((noinline)) static Face &PS1Face(int i) { return faceBuffer[PS1_FACE(i)]; }
 // n consecutive vertices from i as PS1Vertex gives them, with one call when all are plain in-range indices (the last
 // one's: the high-water marks only grow, so they end the same; below 0xF00 nothing is remapped); otherwise null, and
-// the caller takes PS1Vertex for each (docs/43: the special stage's rings and bombs, ~300 calls a frame)
+// the caller takes PS1Vertex for each (docs/perf/43: the special stage's rings and bombs, ~300 calls a frame)
 static inline Vertex *PS1VertexRun(int i, int n)
 {
     if (i >= 0 && i + n <= g_ps1VtxCap && i + n <= 0xF00)
@@ -11655,7 +11655,7 @@ __attribute__((optimize("Os"))) static void PS1HalfpipeSegment()
     get(L(929), t[0], t[1]);
     t[0]++;
     { // the whole run at once when every index is in the table and the vertices are plain in-range ones (PS1VertexRun):
-      // the same values and high-water marks without a bounds-checked call and two range tests per value (docs/43:
+      // the same values and high-water marks without a bounds-checked call and two range tests per value (docs/perf/43:
       // ~180 vertices a segment, ~11 hblanks of the segment frame's spike)
         const int table = L(929), n = t[1], len = L(table);
         Vertex *run = (n > 0 && t[0] >= 0 && t[0] + 3 * n <= len) ? PS1VertexRun(ap[0], n) : nullptr;
@@ -12095,7 +12095,7 @@ static void PS1SpecialSetupUpdate()
 }
 // The special stage's Special BG draw sub (every frame: the rotating star field, 12 sprites), natively: one statement
 // per script instruction, in order (t = temps; p = slot 0's values: the stage's camera angles). Patched in only when
-// the sub and its jump-table entries match SPBG_DRAW_SIG (docs/30 "Mania lessons pass": ~50 VM instructions a frame).
+// the sub and its jump-table entries match SPBG_DRAW_SIG (docs/ports/sonic-2/30 "Mania lessons pass": ~50 VM instructions a frame).
 __attribute__((optimize("Os"))) static void PS1SpecialBGDraw(ObjectScript *o)
 {
     int *t     = scriptEng.temp;
@@ -12157,7 +12157,7 @@ __attribute__((optimize("Os"))) static void PS1SpecialBGDraw(ObjectScript *o)
     t[0] += SCREEN_CENTERX;
     t[1] += SCREEN_CENTERY;
     if (me.rotation == 0) {
-        // docs/43 G2: frame 8 repeats frame 1 (the same 256 x 256 tile at the same place: 28.7 GPU hblanks). An opaque
+        // docs/perf/43 G2: frame 8 repeats frame 1 (the same 256 x 256 tile at the same place: 28.7 GPU hblanks). An opaque
         // sprite drawn again over itself changes nothing unless a frame drawn in between overlaps it: such frames are
         // skipped (the mask is worked out once per frame list: the frames are the stage's data)
         static int s_maskList = -1;
@@ -12947,7 +12947,7 @@ static void PS1SpecialRingUpdate()
     }
 }
 // The special stage's Bomb update sub (stage object "Bomb" in Special: ~93 VM instructions a bomb a frame, 86 hblanks a
-// frame with 4 bombs in stage 7, docs/43 C2), natively: one statement per script instruction, in order. Its shadow face
+// frame with 4 bombs in stage 7, docs/perf/43 C2), natively: one statement per script instruction, in order. Its shadow face
 // (value7 == 1, as the Ring's) and bomb face (TEXTURED_C, U 83 / V 50, its size from its height over the player's) go
 // into the Scene3D buffers; a player (type 4) it touches turns it into type 10 (the explosion) and, unless already hit
 // (state 6) or still blinking (value7), runs script function 7 in the VM (PS1CallScriptFunction, one foreach deep) and is
@@ -13100,7 +13100,7 @@ static void PS1SpecialBombUpdate()
 }
 
 // The special stage's Text Message object (its messages: "GET n RINGS", "COOL!", the ring counts, and the letters
-// flying off when a message ends; docs/43: 11 letters were ~65 hblanks of VM a frame), natively: one statement per
+// flying off when a message ends; docs/perf/43: 11 letters were ~65 hblanks of VM a frame), natively: one statement per
 // script instruction, in order. Special function 12 (the text, one sprite a letter: every frame a message shows) is
 // transcribed inline; function 13 (spawns the letters: once a message) runs in the VM (PS1CallScriptFunction). Patched in
 // only when both subs, their jump-table entries and function 12 match TEXTMSG_* (tools/scripts/patch_bytecode.py).
@@ -13316,7 +13316,7 @@ __attribute__((optimize("Os"))) static void PS1TextMsgUpdate()
 // total; in a 2-player game the counters and the win icons), natively: one statement per script instruction, in order
 // (t = temps, ap = array positions, G = globals, me = the HUD; function 10 inline: its listing is checked with the
 // sub's). Patched in only when the sub, its jump-table entries and function 10 match SPHUD_DRAW_SIG / SPHUD_FN10_SIG
-// (docs/43: ~10 hblanks a frame in the VM with Sonic & Tails).
+// (docs/perf/43: ~10 hblanks a frame in the VM with Sonic & Tails).
 __attribute__((optimize("Os"))) static void PS1SpecialHUDDraw()
 {
     int *t = scriptEng.temp, *ap = scriptEng.arrayPosition, *G = globalVariables;
@@ -13445,7 +13445,7 @@ __attribute__((optimize("Os"))) static void PS1SpecialHUDDraw()
 // check result, ap = array positions, G = globals, E() = the running entity, re-read as the VM re-reads
 // objectEntityPos; key variables with the VM's inputCheck, their array index being the running entity). Function
 // bodies: the VM's `return` after the opcode ends the call. Patched in only when each function and its jump-table
-// entries match SPCTRL1_FN_SIG / SPCTRL2_FN_SIG (docs/43: ~45 VM instructions a frame for Tails, 25 for the first
+// entries match SPCTRL1_FN_SIG / SPCTRL2_FN_SIG (docs/perf/43: ~45 VM instructions a frame for Tails, 25 for the first
 // player; the shift registers hold up to 0xFFFF, so every one of Tails's goes through the big-value table).
 __attribute__((optimize("Os"))) static void PS1SpecialCtrlP1()
 {
@@ -13649,7 +13649,7 @@ static void PS1SpecialCtrlP2()
     }
 }
 // The special stage's Lose Ring (the rings a hit scatters: dozens at once, 90 frames each, ~20 VM instructions a frame
-// apiece: up to ~60 hblanks a frame after a hit, docs/43): its update sub (fall, grow to 512, spin, gone after 90 frames)
+// apiece: up to ~60 hblanks a frame after a hit, docs/perf/43): its update sub (fall, grow to 512, spin, gone after 90 frames)
 // and draw sub (a scaled sprite at the screen centre's offset), natively: one statement per script instruction, in
 // order (t = temps). Patched in only when the subs (and the update's jump-table entries) match SPLOSERING_SIG /
 // SPLOSERING_DRAW_SIG.
@@ -13801,7 +13801,7 @@ __attribute__((optimize("Os"))) static void PS1TextMsgDraw()
 #define PS1_RAW(p) scriptCode[p]
 #endif
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
-// Sonic 1's special stage runs ~400 object subs a frame that are just one native opcode (docs/37 phase 7): `op End`,
+// Sonic 1's special stage runs ~400 object subs a frame that are just one native opcode (docs/ports/sonic-1/37 phase 7): `op End`,
 // `op int End` or `op int int End` as tools/scripts/patch_bytecode.py writes them. For those the VM's per-sub work (the
 // instruction loop, operand decoding, dispatch, write-back, then End) is skipped: the native runs directly, with what
 // the VM leaves behind done the same way (scriptText cleared per instruction, the operands' values). Anything else,
@@ -13835,7 +13835,7 @@ static bool PS1S1FastSub(int p)
     scriptText[0] = '\0'; // End
     return true;
 }
-// The same before ProcessScript is entered (ProcessObjects / DrawObjectList, docs/37 phase 7): the stacks reset as
+// The same before ProcessScript is entered (ProcessObjects / DrawObjectList, docs/ports/sonic-1/37 phase 7): the stacks reset as
 // ProcessScript resets them for a top-level run, then the fast path; false = run ProcessScript as before.
 bool PS1S1TopSub(int p)
 {
@@ -13849,7 +13849,7 @@ bool PS1S1TopSub(int p)
 #endif
 
 #if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)
-// Direct operands (docs/30 "Script VM direct operands", 2026-10-09; the Sonic CD port's technique, RSDKv3-ps1 26fbd15,
+// Direct operands (docs/ports/sonic-2/30 "Script VM direct operands", 2026-10-09; the Sonic CD port's technique, RSDKv3-ps1 26fbd15,
 // in int16 slots). The VM decodes every variable operand twice per instruction (fetch, then write-back): its array
 // form, then a switch over ~250 variables. Most operands are plain storage -- the temps, the check result, the array
 // positions, a global with a constant index, or a field of the running entity / one a constant away / one with a
@@ -14024,7 +14024,7 @@ static inline uint8_t *PS1DirectAt(const short *c)
 
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
 // Sonic 2's subs that are one native opcode and End (tools/scripts/patch_bytecode.py: the rings, bombs, Halfpipe, Special
-// Setup, the player, the zones' objects; docs/43, as Sonic 1's PS1S1FastSub): the native runs without the VM's per-sub
+// Setup, the player, the zones' objects; docs/perf/43, as Sonic 1's PS1S1FastSub): the native runs without the VM's per-sub
 // work (the instruction loop, dispatch, then End), leaving what the VM would (scriptText cleared by each instruction).
 // Only natives that take no operands and use none of ProcessScript's locals; anything else takes the VM.
 static bool PS1S2FastSub(int p)
@@ -15045,7 +15045,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_DEC: --scriptEng.operands[0]; break;
             case FUNC_MUL: scriptEng.operands[0] *= scriptEng.operands[1]; break;
             case FUNC_DIV:
-#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/09)
+#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/hardware/09)
                 if (!scriptEng.operands[1]) {
                     g_ps1ScriptDivZero    = g_ps1ScriptDivZero + 1;
                     scriptEng.operands[0] = 0;
@@ -15060,7 +15060,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_OR: scriptEng.operands[0] |= scriptEng.operands[1]; break;
             case FUNC_XOR: scriptEng.operands[0] ^= scriptEng.operands[1]; break;
             case FUNC_MOD:
-#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/09)
+#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/hardware/09)
                 if (!scriptEng.operands[1]) {
                     g_ps1ScriptDivZero    = g_ps1ScriptDivZero + 1;
                     scriptEng.operands[0] = 0;
@@ -15272,7 +15272,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 --jumpTableStackPos;
                 break;
             case FUNC_RAND:
-#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/09)
+#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/hardware/09)
                 if (!scriptEng.operands[1]) {
                     g_ps1ScriptDivZero    = g_ps1ScriptDivZero + 1;
                     scriptEng.operands[0] = 0;
@@ -16285,7 +16285,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             }
 #if RETRO_PLATFORM == RETRO_PS1
 #if PS1_GAME == 2
-            // Sonic 2's natives (docs/30): only its build compiles them (the functions they call are static, so the
+            // Sonic 2's natives (docs/ports/sonic-2/30): only its build compiles them (the functions they call are static, so the
             // Sonic 1 build leaves them out entirely); the oscillators and the Bridge draw below serve both games.
             case FUNC_PS1RING:
                 opcodeSize = 0;
@@ -16683,7 +16683,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             }
 #else
-            // Sonic 1 (docs/37 phase 2b): the natives it shares with Sonic 2, with its own numbers (PS1_ANI_JUMPING,
+            // Sonic 1 (docs/ports/sonic-1/37 phase 2b): the natives it shares with Sonic 2, with its own numbers (PS1_ANI_JUMPING,
             // PS1_G_SCORE...)
             case FUNC_PS1HUDDRAW:
                 opcodeSize = 0;

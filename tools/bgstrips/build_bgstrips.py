@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Build-time BG line strips for the RSDKv4 (Sonic 2) PS1 tile renderer (docs/30 phase 3.5).
+"""Build-time BG line strips for the RSDKv4 (Sonic 2) PS1 tile renderer (docs/ports/sonic-2/30 phase 3.5).
 
 From the Sonic CD port's builder (RSDKv3-ps1), adapted to v4 data: Backgrounds.bin layer headers are 8 bytes
 (xsize, unused, ysize, unused, type, u16 parallaxFactor, speed) and layout chunks little endian; BG layers hold at
@@ -20,7 +20,7 @@ vParallax lists of 4-byte entries, per layer u8 xsize, unused, ysize, unused, ty
 RLE lineScroll (0xFF v n = v repeated n-1 times, 0xFF 0xFF ends), xsize*ysize u16 LE chunks),
 128x128Tiles.bin (3 bytes per chunk tile: plane bit 4, flip bits 2-3, index bits 0-1 + byte 1),
 Act*.bin (active layers + midpoint; acts may differ: union of their (layer, plane) keys), and the tile pixels from 16x16Tiles.vram (tools/tiles).
-Per player variant (the sprite atlases differ, docs/30 3.1): the free VRAM is what <Stage><suffix>.atl leaves,
+Per player variant (the sprite atlases differ, docs/ports/sonic-2/30 3.1): the free VRAM is what <Stage><suffix>.atl leaves,
 and the output is BGStrips<suffix>.bin ('' Sonic, _t Tails, _k Knuckles, _st Sonic & Tails).
 
 Output Data/Stages/<Stage>/BGStrips<suffix>.bin (little endian):
@@ -32,7 +32,7 @@ A piece starts at a 64-halfword column (texture page pageX = vramX / 64, u = 0) 
 256-row page (v = vramY & 255); pieces split the period into <= 256-texel parts.
 Self-check: the file is decoded back and every stored line compared with the tile render.
 
-Sonic 1 (--game 1, docs/37 phase 3): 'BGS3' files. Green Hill's BG is 8,192 texels wide without a repeat and its water
+Sonic 1 (--game 1, docs/ports/sonic-1/37 phase 3): 'BGS3' files. Green Hill's BG is 8,192 texels wide without a repeat and its water
 gives every line its own X scroll (~100 tile bands a frame), but its rows are built from a handful of 256-texel segments
 and use <= 13 colours. So a region's period is a map of up to 32 256-texel pieces, and pieces with the same content share
 one VRAM spot (stored once); a row of <= 15 colours is stored 4-bit, with its own CLUT (16 master palette indices, a

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The stages whose scripts use the Scene3D buffers (docs/30, before phase 9): Data/Game/PS1Scene3D.bin.
+"""The stages whose scripts use the Scene3D buffers (docs/ports/sonic-2/30, before phase 9): Data/Game/PS1Scene3D.bin.
 
 The PS1 allocates the Scene3D arrays (faces, vertices, draw list, ~85 KB: RSDKv4/Scene3D.cpp PS1Scene3DPrepare) only
 while such a stage is loaded. A stage is listed when its loaded bytecode (its file + GlobalCode when its StageConfig

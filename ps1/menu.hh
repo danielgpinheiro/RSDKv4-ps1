@@ -1,5 +1,5 @@
 /*
- * PS1 menus (docs/30 phase 4): the mobile menus' flow rebuilt in 2D. Art and fonts come pre-converted from
+ * PS1 menus (docs/ports/sonic-2/30 phase 4): the mobile menus' flow rebuilt in 2D. Art and fonts come pre-converted from
  * tools/menu/build_menu.py (format there): Data/Game/Menu/PS1Fonts.pmn (resident: the pause menu's fonts + the
  * strings, VRAM rows 242-255, uploaded at boot) and PS1Menu.pmn (the menu screens' art, uploaded when they open).
  * Ids: ps1/menu_pack.h (generated).

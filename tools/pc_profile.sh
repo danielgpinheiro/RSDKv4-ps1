@@ -5,7 +5,7 @@
 # Usage: tools/pc_profile.sh OUT [START END]   (MASK=, FROM= as tools/frame_capture.sh)
 # CHASE=1: tools/perf_scene.sh's input instead (Right from 240, Right + A from 420 to 432, then Right): profile the frames
 # perf_scene.sh times. The ELF is copied to OUT.elf with the samples and the report maps through that copy, so a report
-# re-run after a rebuild still reads the right symbols (docs/32 9f lesson).
+# re-run after a rebuild still reads the right symbols (docs/ports/mania/32 9f lesson).
 # PRE='gdb commands': run before the game starts (e.g. a breakpoint that sets a global at the stage load).
 cd "$(dirname "$0")/.."
 OUT=$1; START=${2:-300}; END=${3:-420}

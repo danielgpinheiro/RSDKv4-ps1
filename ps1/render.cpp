@@ -1,5 +1,5 @@
 // RSDKv4 (Sonic 2) PS1 renderer: replaces RSDKv4/Drawing.cpp (the PC software renderer) on PS1. From the Sonic CD
-// port's ps1/render.cpp (RSDKv3-ps1 1e583ad; docs/30 phase 3.2), bound to the v4 engine.
+// port's ps1/render.cpp (RSDKv3-ps1 1e583ad; docs/ports/sonic-2/30 phase 3.2), bound to the v4 engine.
 //
 // Everything a frame draws is DMA-chained (ps1/gpu_chain.hh, the Nexus port's chain): main.cpp opens the
 // chain around Engine.RunFrame(), psyqo sends it after frame() returns. Sprites come from the stage's
@@ -15,7 +15,7 @@
 // points it at its bank): on PS1 it stays at gfxLineBuffer[0]'s bank (SetActivePalette), as the mobile
 // game's GL renderer leaves it; it only matters for SetPaletteEntry(-1) (the next zone's tile colours).
 //
-// Scope (docs/30 phase 3): chain + clear + palette (fades, per-line banks), atlas sprites (plain / flipped / scaled /
+// Scope (docs/ports/sonic-2/30 phase 3): chain + clear + palette (fades, per-line banks), atlas sprites (plain / flipped / scaled /
 // rotated / rotozoom / ink), HScroll tile layers from the packed chunk table (Scene.hpp Tiles128x128::ps1Tile) and
 // BG line strips, text menus (phase 4: the level select's DrawMenu, upstream's code). Not yet (counted in
 // g_ps1DrawTodo): tint, VScroll layers, 3D faces (phase 7). Sonic 2 has no 3D floor / sky layer.
@@ -81,7 +81,7 @@ volatile uint32_t g_ps1ProfObjDrawHbl = 0; // this frame: object draw subs (scri
 volatile uint32_t g_ps1ProfFloorsHbl  = 0; // this frame: every 3D floor / sky layer
 volatile uint32_t g_ps1ProfLayer[5]   = {}; // this frame: FG (uniform) layers, per-line passes, tile bands, strip bands (hblanks), HScroll calls
 volatile uint32_t g_ps1ProfSlot[4]    = {}; // this frame: hblanks per draw slot (layerID 0-3)
-volatile uint32_t g_ps1TileFlipRects  = 0; // flipped tiles drawn as flip-bit sprites (total, docs/43 G3)
+volatile uint32_t g_ps1TileFlipRects  = 0; // flipped tiles drawn as flip-bit sprites (total, docs/perf/43 G3)
 volatile uint32_t g_ps1TileFlipped    = 0; // this frame: tiles drawn as flipped / partial quads or sprites (slow path)
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
 volatile int32_t g_ps1MissSheet = -1, g_ps1MissX = 0, g_ps1MissY = 0; // the last miss (atlas sheet, texel)
@@ -201,7 +201,7 @@ static void PS1ReserveRow(int src, int count, int16_t x, int16_t y)
 }
 
 #if PS1_GAME == 1
-// Sonic 1 (docs/37): the converted palette of a bank (colours + the atlas / strip 4-bit CLUTs, ~5 hblanks to build) is
+// Sonic 1 (docs/ports/sonic-1/37): the converted palette of a bank (colours + the atlas / strip 4-bit CLUTs, ~5 hblanks to build) is
 // kept in one of two slots (Labyrinth's water draws two banks a frame) with the RGB565 colours it came from. Each fill
 // compares the bank's colours with them (word by word: every palette writer is covered) and converts only the entries
 // that changed, then the CLUT maps if any did (palette cycling touches a few entries a frame); a slot built for another
@@ -292,7 +292,7 @@ static const uint16_t *PS1PaletteFor(int bank)
 #endif
 
 #if PS1_GAME != 1
-// Sonic 2 (docs/43: ~4 hblanks a frame converted all 255 colours): the converted palette kept with the RGB565 colours it
+// Sonic 2 (docs/perf/43: ~4 hblanks a frame converted all 255 colours): the converted palette kept with the RGB565 colours it
 // came from, in two slots (s_pal, and s_palB for a stage with <= PS1_PALB_CLUTS atlas CLUTs: every Sonic 2 atlas has
 // <= 19): a water frame fills the top and the bottom bank, and with one slot both were converted whole every frame
 // (V4-046: ~14 hblanks in Aquatic Ruin). A fill of a slot's bank, atlas load and CLUT count converts only the entries
@@ -408,7 +408,7 @@ static void PS1ReservePaletteRows(int dy = 0)
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Draw-time palette-bank split (docs/30 phase 3.6). Upstream's SW renderer picks each line's bank
+// Draw-time palette-bank split (docs/ports/sonic-2/30 phase 3.6). Upstream's SW renderer picks each line's bank
 // (gfxLineBuffer, SetActivePalette: the water) as it draws. When the lines form two runs (a top bank
 // over [0, y0), a bottom bank over [y0, 240): every water frame), the bottom run is drawn with a second
 // copy of the CLUTs ("set B", PS1_CLUT_B_DY rows below set A: master row 497, the atlas' CLUT rows
@@ -602,7 +602,7 @@ struct PS1ClusterCacheEntry {
 static PS1ClusterCacheEntry s_clusterCache[64];
 static const PS1AtlasCluster *s_faceCluster = nullptr; // PS1TexturedFace's last cluster (cleared with the cache)
 static uint16_t s_faceTPage = 0, s_faceClut = 0;
-// One-piece sprite frames with their GPU words (PS1DrawSprite's fast path, docs/30 / docs/37 "Mania lessons pass"):
+// One-piece sprite frames with their GPU words (PS1DrawSprite's fast path, docs/ports/sonic-2/30 / docs/ports/sonic-1/37 "Mania lessons pass"):
 // keyed on (surface, frame rect), the piece's texture word (u | v << 8 | CLUT << 16) and texture page as
 // PS1ChainPieceSpriteRows builds them. Cleared with the cluster cache (atlas / surface list changes).
 struct PS1SpriteCacheEntry {
@@ -735,7 +735,7 @@ template <typename Fn> static void PS1ForEachPieceAtlas(int sheet, int sheetID, 
 
 static inline bool PS1ObjectsHidden() { return (g_ps1DebugDrawMask & 1) != 0; }
 
-// Flip-bit rectangles (PS1DetectGpu below, docs/43 G3): s_flipRects = the GPU draws them (type 1 / 2 and the readback).
+// Flip-bit rectangles (PS1DetectGpu below, docs/perf/43 G3): s_flipRects = the GPU draws them (type 1 / 2 and the readback).
 // g_ps1GpuType: psx-spx's GPU version (0 old, 1 unknown, 2 new), g_ps1GpuQuery7 the raw GP1(10h) index 7 answer,
 // g_ps1FlipTest the readback word (0 = not tested: type 0).
 static bool s_flipRects = false;
@@ -783,7 +783,7 @@ static void PS1ChainPieceSpriteRows(const PS1Piece &p, int x, int y, int v, int 
     g_ps1DrawSprites = g_ps1DrawSprites + 1;
 }
 
-// A 1:1 mirrored piece as a flip rectangle (docs/43 G3, V4-104): PS1ChainPieceSpriteRows' sprite from texcoord (tu, tv)
+// A 1:1 mirrored piece as a flip rectangle (docs/perf/43 G3, V4-104): PS1ChainPieceSpriteRows' sprite from texcoord (tu, tv)
 // (PS1FlipRectTex) under the piece's texpage with GP0(E1h) bit 12 (X) / 13 (Y) (dir = RSDK FLIP_X 1 | FLIP_Y 2), its own
 // copy so the unflipped path stays exactly as it was.
 static __attribute__((noinline)) void PS1ChainPieceFlipRect(const PS1Piece &p, int x, int y, int tu, int tv, bool setB, int dir)
@@ -1289,7 +1289,7 @@ void DrawObjectList(int layer)
         objectEntityPos = drawListEntries[layer].entityRefs[i];
         int type        = objectEntityList[objectEntityPos].type;
 #if PS1_GAME == 1
-        // Sonic 1 (docs/37 phase 7): a draw sub that is one native opcode runs without ProcessScript (Script.cpp
+        // Sonic 1 (docs/ports/sonic-1/37 phase 7): a draw sub that is one native opcode runs without ProcessScript (Script.cpp
         // PS1S1TopSub); the per-type draw ticks only in PROFILE=1 builds (two counter reads a sub).
         if (type) {
 #if PS1_PROFILE
@@ -1412,7 +1412,7 @@ volatile uint32_t g_ps1TileInputGen = 0;
 static inline bool PS1TileSolid(int t) { return (g_ps1TileSolid[t >> 3] >> (t & 7)) & 1; }
 
 // Copy16x16Tile destinations made solid at least once since the stage load ("sticky"): their chunk rows stay marked
-// whatever the tile shows later (docs/30 / docs/37 "Mania lessons pass"). The row masks are a superset of the rows
+// whatever the tile shows later (docs/ports/sonic-2/30 / docs/ports/sonic-1/37 "Mania lessons pass"). The row masks are a superset of the rows
 // with a visible tile -- PS1DrawTileBand still checks each tile's solidity -- so pictures don't change; a tile an
 // animation keeps turning empty and solid costs one rebuild per stage instead of one per copy. A rebuild is also
 // deferred to the next tile layer draw: a frame of animated-tile copies rebuilds once (Sonic 1's special stage: ~30
@@ -1543,7 +1543,7 @@ static void PS1TileSetup()
     }
 }
 
-// Texture flip bits (docs/43 G3; nocash psx-spx "GPU Render Rectangle Commands" / "GPU Versions"): GP0(E1h) bits 12-13
+// Texture flip bits (docs/perf/43 G3; nocash psx-spx "GPU Render Rectangle Commands" / "GPU Versions"): GP0(E1h) bits 12-13
 // mirror rectangles on every GPU but the old 160-pin CXD8514Q (PU-7 / EARLY-PU-8 boards; every PSone has them), which is
 // why flipped tiles were 9-word textured quads (~3x a rectangle's GPU time, "GPU Rendering Timings"). Emulators differ
 // (PCSX-Redux and DuckStation before 2026-10-16 ignore the bits; DuckStation b9b8366 draws them). The GPU type comes first
@@ -1720,7 +1720,7 @@ static inline bool PS1TileAccumFull(const PS1AccSet &a)
     return PS1_ACC_PAGE_FULL(a, 0) || PS1_ACC_PAGE_FULL(a, 1) || PS1_ACC_PAGE_FULL(a, 2) || PS1_ACC_PAGE_FULL(a, 3)
            || PS1_ACC_QUAD_FULL(a);
 }
-// FLIP (docs/43 G3): flipped tiles recorded for PS1ChainFlipTiles' flip rects; else textured quads written in the loop,
+// FLIP (docs/perf/43 G3): flipped tiles recorded for PS1ChainFlipTiles' flip rects; else textured quads written in the loop,
 // as before (two instances: the quad path keeps its registers).
 template <bool FLIP, bool DUAL>
 static void PS1DrawTileBandT(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
@@ -1875,7 +1875,7 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
         PS1DrawTileBandT<false, false>(layer, above, sy, h, ly, chunkX, fullW);
 }
 // PS1DrawTileBand's flipped tiles (n entries x | tile index << 16 | dir << 28, rows [ty0, ty0 + h) at screen line sy):
-// as flip rects (docs/43 G3): per tile page and direction the page's texpage with the flip bits, then the sprites (16 x 16,
+// as flip rects (docs/perf/43 G3): per tile page and direction the page's texpage with the flip bits, then the sprites (16 x 16,
 // or variable for a partial band) with the texcoords of their first texel (u + 15 for an X flip, v + 15 - ty0 for a Y flip).
 static __attribute__((noinline)) void PS1ChainFlipTiles(const uint32_t *f, int n, int sy, int ty0, int h)
 {
@@ -1938,11 +1938,11 @@ static void PS1DrawTileBandSplit(const TileLayer *layer, byte above, int sy, int
 }
 
 // BG line strips (tools/bgstrips/build_bgstrips.py -> Data/Stages/<Stage>/BGStrips<suffix>.bin, format
-// there; docs/30 phase 3.5): BG layer lines pre-rendered at build time as 8-bit rows of one horizontal period, in
+// there; docs/ports/sonic-2/30 phase 3.5): BG layer lines pre-rendered at build time as 8-bit rows of one horizontal period, in
 // VRAM the stage's atlas leaves free. A band of lines in a strip region costs 1-3 sprites instead of ~21
 // tiles (per-line parallax would otherwise make one band per line). From the Nexus / Sonic CD ports.
 #define PS1_STRIP_MAX    32 // Sonic 2: 18 at most (Wing Fortress with Tails); tools/bgstrips MAX_REGIONS
-// 'BGS3' strips (tools/bgstrips build_stage_seg; Sonic 1 docs/37 phase 3, Sonic 2 since V4-110): a region's period is a
+// 'BGS3' strips (tools/bgstrips build_stage_seg; Sonic 1 docs/ports/sonic-1/37 phase 3, Sonic 2 since V4-110): a region's period is a
 // map of 256-texel pieces (Sonic 1 up to 32, Sonic 2 up to 9), pieces with the same content share one VRAM spot, and
 // rows of <= 15 colours are 4-bit with their own CLUT (appended to the atlas' CLUTs, filled with the palette like them).
 // Flags bit 7 (Sonic 2): the region's rows equal rows an earlier region stored, its spots point there, no data in the
@@ -2170,7 +2170,7 @@ static short s_lineX[SCREEN_YSIZE];
 // upstream DrawHLineScrollLayer (v4 SW path): the same scroll-state update (BG autoscroll, parallax line
 // positions: game state) and per-line X (parallax line, deformation above / below the water line, wrap),
 // drawn as bands of lines sharing one X (a band never crosses a tile row).
-// docs/43 C9: the per-line loops at -O2 (the rest of this file is -Os; the tile band itself measured slower at -O2:
+// docs/perf/43 C9: the per-line loops at -O2 (the rest of this file is -Os; the tile band itself measured slower at -O2:
 // Hidden Palace S&T tiles 109.6 -> 116.9)
 extern volatile uint32_t g_ps1PerfFrames; // frames drawn (below): the FG line-X key's frame
 extern int16_t g_ps1LayerOneEntry[LAYER_COUNT]; // RSDKv4/Scene.cpp LoadStageBackground
@@ -2536,7 +2536,7 @@ void DrawVLineScrollLayer(int layerID)
     g_ps1DrawTodo = g_ps1DrawTodo + 1;
 }
 
-// Sonic 2 has no 3D floor / sky layer (docs/30 phase 1): counted if one ever comes.
+// Sonic 2 has no 3D floor / sky layer (docs/ports/sonic-2/30 phase 1): counted if one ever comes.
 volatile uint32_t g_ps1Draw3DLayer = 0;
 void Draw3DFloorLayer(int layerID) { g_ps1Draw3DLayer = g_ps1Draw3DLayer + 1; }
 void Draw3DSkyLayer(int layerID) { g_ps1Draw3DLayer = g_ps1Draw3DLayer + 1; }
@@ -2606,7 +2606,7 @@ void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivot
 // Sprites
 
 // A sprite wholly outside the 320 x 240 drawing area draws nothing: skipped before its atlas pieces are looked up
-// (the special stage's background draws twelve 256 x 256 frames around the screen; docs/30 7.2b). Sonic 2's atlases
+// (the special stage's background draws twelve 256 x 256 frames around the screen; docs/ports/sonic-2/30 7.2b). Sonic 2's atlases
 // have no on-demand pictures, so no lookup side effect is lost.
 volatile uint32_t g_ps1SpriteCull = 1; // GDB: 0 = draw off-screen sprites too (the A/B of this cull)
 static inline bool PS1SpriteOffScreen(int x, int y, int w, int h)
@@ -2727,7 +2727,7 @@ void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, i
 // upstream (HW path) corners: (XPos, YPos) + R * (x, y), x = +-(local x - pivotX), y = local y - pivotY,
 // cos/sin from the 512-step tables (scaled by `scale` / 0x200 for rotozoom).
 #if PS1_GAME == 1
-// Sonic 1 (docs/37 phase 7): the special stage draws ~220 rotated sprites a frame from a handful of frames, all at the
+// Sonic 1 (docs/ports/sonic-1/37 phase 7): the special stage draws ~220 rotated sprites a frame from a handful of frames, all at the
 // maze's one rotation. A frame's pieces with their rotated corner offsets, bounds and UV edges -- everything but the
 // screen position, which the corners add after the shift as before -- are kept per (frame, pivot, rotation, scale,
 // flip, sheet) in a small direct-mapped cache (dropped when the atlas or the surface list changes). Frames of more
@@ -2877,7 +2877,7 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         rotation += 0x200;
     if (rotation != 0)
         rotation = 0x200 - rotation;
-    // Wholly off screen (as Sonic 1's version above, docs/43: the special stage's message letters fly off at ~10x): each
+    // Wholly off screen (as Sonic 1's version above, docs/perf/43: the special stage's message letters fly off at ~10x): each
     // corner PS1AffineCorners makes is within R + 2 of (XPos, YPos) (|sn|, |cs| <= |scale|; the shifts' floors, and the
     // fourth corner q1 + q2 - q0 adds up three of them). When that square is off screen every piece below is culled
     // (with g_ps1LimitFix), and Sonic 2's atlases have no on-demand pictures (PS1DrawSprite's cull): nothing drawn is lost
@@ -3121,7 +3121,7 @@ volatile uint32_t g_ps1Faces        = 0; // faces chained (flat + textured), tot
 volatile uint32_t g_ps1FaceTexMiss  = 0; // textured faces whose UVs span no single atlas cluster (skipped)
 
 // The special stage's per-face / per-vertex functions are built -O2 (the rest of the file stays -Os: -O2 for all of it
-// costs 7.3 KB of the 2 MB heap; docs/30 phase 7.2b).
+// costs 7.3 KB of the 2 MB heap; docs/ports/sonic-2/30 phase 7.2b).
 #define PS1_HOT3D __attribute__((optimize("O2")))
 // Upstream's software rasterizer fills the convex hull of a face's 4 corners, in any order (its scan edges join every
 // pair); the GPU's quad is a triangle strip (0 1 2, 1 2 3). Strip order: the diagonal (1-2) is the corner pair whose
@@ -3258,9 +3258,9 @@ PS1_HOT3D static void PS1TexturedFace(const Vertex *q, byte sheetID, bool blende
 }
 // Draw3DScene's TEXTURED_C / _BLEND faces (the special stage's rings and shadows: ~45 a frame) are axis-aligned
 // rectangles: corners (x0, y0) (x1, y0) (x0, y1) (x1, y1) with texels (u0, v0) (u1, v0) (u0, v1) (u1, v1). The same
-// words as PS1TexturedFace for that quad, without its per-corner loops (docs/30 phase 7.2b).
+// words as PS1TexturedFace for that quad, without its per-corner loops (docs/ports/sonic-2/30 phase 7.2b).
 // PS1TexturedRectWords: the same quad's 9 words into w (false: nothing to draw), for Sonic 2's ordering table, which
-// writes them straight into its arena (RSDKv4/Scene3D.cpp PS1Draw3DSceneOT, docs/43 C1).
+// writes them straight into its arena (RSDKv4/Scene3D.cpp PS1Draw3DSceneOT, docs/perf/43 C1).
 PS1_HOT3D bool PS1TexturedRectWords(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended, uint32_t *w)
 {
     if (!s_frameOpen || PS1ObjectsHidden())
@@ -3331,7 +3331,7 @@ PS1_HOT3D bool PS1TexturedRectWords(int x0, int y0, int x1, int y1, int u0, int 
     return true;
 }
 #if PS1_GAME != 1 // Sonic 1 has no 3D stage (its EXE stays as it was)
-// PS1TexturedRectWords for the special stage's ring / bomb / shadow quads (docs/43 C1: 45-70 a frame): the texture part
+// PS1TexturedRectWords for the special stage's ring / bomb / shadow quads (docs/perf/43 C1: 45-70 a frame): the texture part
 // of the words (command, CLUT / texpage, UVs) depends only on the sprite's UV box, the sheet and the blend, so it is
 // kept for the frame in a small cache; the position tests and words are the full function's. A quad beyond the GPU
 // limits (its UVs are cut with it) or a picture cluster takes the full function.
@@ -3340,12 +3340,12 @@ struct PS1TexWordCache {
     int u0, v0, u1, v1;
     uint32_t w0, a, b, c, d;
 };
-#define PS1_TEXWORD_N 64 // the rings' and bombs' animation frames and the shadows: 8 entries thrashed (docs/43)
+#define PS1_TEXWORD_N 64 // the rings' and bombs' animation frames and the shadows: 8 entries thrashed (docs/perf/43)
 static PS1TexWordCache s_texWordCache[PS1_TEXWORD_N];
 extern volatile uint32_t g_ps1PerfFrames;
 // The words depend only on the UV box, the sheet, the blend and the atlas state they were made in (the sheet binding
 // g_ps1SurfaceGen, the atlas load, its CLUT count; picture clusters are never cached): entries stay valid across frames
-// (docs/43: keyed on the frame, every box missed once a frame and took the full path)
+// (docs/perf/43: keyed on the frame, every box missed once a frame and took the full path)
 __attribute__((always_inline)) static inline bool PS1TexWordCurrent(const PS1TexWordCache &e)
 {
     return e.surf == g_ps1SurfaceGen && e.atlas == g_ps1AtlasLoads && e.cluts == (uint32_t)g_ps1AtlasClutCount;
@@ -3386,7 +3386,7 @@ __attribute__((optimize("Os"))) bool PS1TexturedRectFast(int x0, int y0, int x1,
     w[8] = e.d;
     return true;
 }
-// PS1TexturedRectFast + PS1ChainOTRaw(9) for the ordering table's textured quads (docs/43): on a cache hit the words go
+// PS1TexturedRectFast + PS1ChainOTRaw(9) for the ordering table's textured quads (docs/perf/43): on a cache hit the words go
 // straight into the arena (no copy); the same tests, cache and words. Null: nothing drawn, or no room.
 uint32_t *PS1TexturedRectOT(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1, byte sheetID, bool blended)
 {
@@ -3458,7 +3458,7 @@ void DrawFadedFace(void *v, uint color, uint fogColor, int alpha)
 }
 
 #if PS1_GAME != 1 // Sonic 1 has no 3D stage (its EXE stays as it was)
-// DrawFadedFace + DrawFace as words for the ordering table (docs/43 C1: the special stage's faded faces with a corner left
+// DrawFadedFace + DrawFace as words for the ordering table (docs/perf/43 C1: the special stage's faded faces with a corner left
 // to the CPU, ~30-200 a frame, no longer captured through the general path): the same early-outs, strip order, colour
 // and limits test. 0: nothing drawn; 1: w[0..4] = the opaque flat quad; 2: beyond the GPU limits (the caller draws it
 // through DrawFadedFace: the clipped polygon).

@@ -46,7 +46,7 @@ int disableFocusPause_Config = 0;
 bool useSGame = false;
 
 #if RETRO_PLATFORM == RETRO_PS1
-// Memory card saves (docs/30 phase 8; the Sonic CD port's scheme on ps1/memcard: Sony file name, CRC-checked header,
+// Memory card saves (docs/ports/sonic-2/30 phase 8; the Sonic CD port's scheme on ps1/memcard: Sony file name, CRC-checked header,
 // never formats a card). Sonic 2 keeps its saves in saveRAM[0..191] (SaveGame, Userdata.hpp: the 4 files 0-31,
 // settings 32-46, Time Attack records 64-191): the file holds saveRAM[0..255] (1 KB, one card block). The card is read
 // once, at the first ReadSaveRAMData (boot, InitNativeObjectSystem); from then on the RAM copy is the truth and each

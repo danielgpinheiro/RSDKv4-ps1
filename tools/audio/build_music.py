@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time CD-XA music for the Sonic 2 PS1 port (docs/30 phase 5.2; the Sonic CD port's tool, RSDKv3-ps1):
+"""Build-time CD-XA music for the Sonic 2 PS1 port (docs/ports/sonic-2/30 phase 5.2; the Sonic CD port's tool, RSDKv3-ps1):
 Data/Music/*.ogg (44 tracks) -> Data/Music/Music.xa + Music.bin.
 
 Format (as the RSDKv2 port): XA-ADPCM 37.8 kHz stereo 4-bit, 18.75 sectors/s per channel; at 2x CD speed
@@ -70,7 +70,7 @@ NATIVE_LOOPS = {'mainmenu.ogg': 106596, 'menuintro.ogg': 0}
 def loop_points(bcdir, full=False):
     """{path under Data/Music (lower case): loop point (44.1 kHz samples, 0 = from the start)} from every
     SetMusicTrack / SwapMusicTrack with constant operands in the v4 bytecode, and the native menus'.
-    full (Sonic 1, docs/37 phase 5): also the stage files' own subs and functions, whose pointers follow GlobalCode's
+    full (Sonic 1, docs/ports/sonic-1/37 phase 5): also the stage files' own subs and functions, whose pointers follow GlobalCode's
     code (the speed shoes' _F tracks are set there); a track given two loop points keeps the first (sorted file order)."""
     funcs, vars_ = bs.tables(3)
     names = [f[0] for f in funcs]
@@ -123,7 +123,7 @@ def encode(src, loop44, tmp, channel):
 
 def main():
     src_data, out_data, bcdir = sys.argv[1], sys.argv[2], sys.argv[3]
-    s1 = '--game' in sys.argv and sys.argv[sys.argv.index('--game') + 1] == '1'  # docs/37: every file's code scanned
+    s1 = '--game' in sys.argv and sys.argv[sys.argv.index('--game') + 1] == '1'  # docs/ports/sonic-1/37: every file's code scanned
     root = os.path.join(src_data, 'Music')
     out_root = os.path.join(out_data, 'Music')
     os.makedirs(out_root, exist_ok=True)

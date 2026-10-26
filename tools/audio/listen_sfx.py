@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Listening check for the SFX banks (docs/30 "Scene3D block + SFX cap"): original vs what the PS1 plays.
+"""Listening check for the SFX banks (docs/ports/sonic-2/30 "Scene3D block + SFX cap"): original vs what the PS1 plays.
 
 For one stage bank on the disc tree (build/iso/Data/Stages/<STAGE>/PS1Sfx.bin, or Data/Game/PS1SfxResident.bin /
 PS1SfxMenu.bin with STAGE = Resident / Menu), each sound is written twice to build/listen/<STAGE>/:

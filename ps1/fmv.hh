@@ -1,5 +1,5 @@
 /*
- * Full-screen FMV for Sonic CD (docs/28 phase 6): the engine's PlayVideoFile / ProcessVideo on the PS1.
+ * Full-screen FMV for Sonic CD (docs/ports/sonic-cd/28 phase 6): the engine's PlayVideoFile / ProcessVideo on the PS1.
  * Data/Videos/<Name>.str (tools/fmv/build_str.py: MDEC 320x176 @ 15 fps + JP / US XA audio) plays
  * letterboxed at Y 32. The video owns the CD (music stopped) and borrows the chain arenas' heap for
  * its buffers: open and close happen at a frame start (PS1FmvBeginFrame), when nothing is chained yet.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Every build-time conversion of the Sonic 2 PS1 disc (docs/30 phases 1-9, 11): one pipeline for the port
+"""Every build-time conversion of the Sonic 2 PS1 disc (docs/ports/sonic-2/30 phases 1-9, 11): one pipeline for the port
 (tools/data_disc.sh) and the public ISO builder (build_iso.py), so both make the same image.
 
 From the game's datapack (--rsdk: the Android / iOS Data.rsdk, "RSDKvB") or an already extracted tree (--src: Data/ +
@@ -86,14 +86,14 @@ def copy_tree(src, dst, excludes):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Convert the Sonic 2 (docs/30) or Sonic 1 (docs/37) data for the PS1 disc.')
+    ap = argparse.ArgumentParser(description='Convert the Sonic 2 (docs/ports/sonic-2/30) or Sonic 1 (docs/ports/sonic-1/37) data for the PS1 disc.')
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument('--rsdk', help='the Android / iOS Data.rsdk')
     g.add_argument('--src', help='an extracted tree (Data/ + Bytecode/)')
     ap.add_argument('--out', default=REPO, help='where build/iso and build/manifest go (default: the repo)')
     ap.add_argument('--order', help='the load order file to write (default: tools/disc/load_order.txt)')
     ap.add_argument('--disc-tools', action='store_true', help='also require mkpsxiso (the disc step that follows)')
-    ap.add_argument('--game', choices=('1', '2'), default='2', help='2 = Sonic 2 (default), 1 = Sonic 1 (docs/37)')
+    ap.add_argument('--game', choices=('1', '2'), default='2', help='2 = Sonic 2 (default), 1 = Sonic 1 (docs/ports/sonic-1/37)')
     a = ap.parse_args()
     s1 = a.game == '1'
     tools = check_tools(a.disc_tools)
@@ -130,7 +130,7 @@ def main():
                         '--out', os.path.join(data, 'Sprites', 'Atlas')], log=os.path.join(mdir, 'atlas%s.log' % suffix), env=env)
     run('4 tiles', [PY, os.path.join(HERE, 'tiles', 'convert_tiles.py'), sdata, data], env=env)
     run('5 strips', [PY, os.path.join(HERE, 'bgstrips', 'build_bgstrips.py'), data] + (['--game', '1'] if s1 else []),
-        log=os.path.join(mdir, 'bgstrips.log'), env=env)  # Sonic 1: BGS3 (segment maps, 4-bit rows; docs/37 phase 3)
+        log=os.path.join(mdir, 'bgstrips.log'), env=env)  # Sonic 1: BGS3 (segment maps, 4-bit rows; docs/ports/sonic-1/37 phase 3)
     run('6 menus', [PY, os.path.join(HERE, 'menu', 'build_menu.py'), sdata, data] + (['--game', '1'] if s1 else []), env=env)
     run('7 sfx', [PY, os.path.join(HERE, 'audio', 'build_sfx.py'), sdata, data, sbc], env=env)
     run('8 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), sdata, data, sbc] + (['--game', '1'] if s1 else []), env=env)

@@ -9,11 +9,11 @@ Performance at HEAD: `../docs/43`.
 (`../Sonic1_Extracted`; its own natives, save file, loading icon, menus, BG strip format 'BGS3'; its own PCSX-Redux
 instance, `tools/redux_env.sh`); the default `GAME=2` is Sonic 2 and must stay byte-identical to the published EXE unless
 Sonic 2 itself changes: Sonic 1-only code goes behind `#if PS1_GAME == 1` with Sonic 2's text verbatim in `#else`, and
-Sonic 1-only opcodes after Sonic 2's (docs/37 choices 9-10).
+Sonic 1-only opcodes after Sonic 2's (docs/ports/sonic-1/37 choices 9-10).
 
 ## What this is
 RSDKv4-Decompilation (Retro Engine v4, Sonic 1/2 2013) ported to the PS1 with **psyqo** (C++20) on
-branch `ps1`: **Sonic 2** and **Sonic 1** (`GAME=1`, docs/37). Remotes: `origin` = upstream RSDKModding (read-only),
+branch `ps1`: **Sonic 2** and **Sonic 1** (`GAME=1`, docs/ports/sonic-1/37). Remotes: `origin` = upstream RSDKModding (read-only),
 `fork` = github.com/danielgpinheiro/RSDKv4-ps1 (public on GitHub as of 2026-10-16; push here).
 
 **Status (2026-10-16): both done**, both run on a PSone from a CD-R (Sonic 2 2026-09-28, Sonic 1 2026-09-29). Public
@@ -48,7 +48,7 @@ make -j8 BOOT=Zone01 [BOOT_ID=2] [BOOT_PLAYER=0..3]   # start in a stage (0 Soni
 make -j8 BOOT=Special BOOT_ID=1..8              # Sonic 2's special stages 1-8 (GameConfig entries)
 make BOOT=<stage> COMBO=1|2 [GAP=n]             # 1-up + Sign Post (1) / Super (2) test without a debugger (RetroArch
                                                 # cores); make dist refuses it
-make PERF_SPLIT=1 ...                           # docs/43 frame-split counters (GPU tail, flip gap, sections); harness only
+make PERF_SPLIT=1 ...                           # docs/perf/43 frame-split counters (GPU tail, flip gap, sections); harness only
 make BOOT=Special OT_CHECK=1                    # every call of the special stage's asm face loop (RSDKv4/Scene3DOT.S) replayed
                                                 # by the C fast path and compared: g_ps1OTCheckMismatch / Cover[] (GDB
                                                 # g_ps1OTCheckFogMax, g_ps1OTCheckNoDraw inject rare branches); harness only
@@ -115,8 +115,8 @@ python3 tools/memcard/build_icons.py                  # regenerate ps1/memcard_i
   `-run`** when GDB sets breakpoints before the first `continue`. Use line breakpoints (`file.cpp:N if cond`) rather
   than watchpoints. GDB convenience variables must not be register names (`$v0`, `$s0`…).
 
-## docs/43 fix pass (2026-10-16/17)
-Results per issue: `docs/perf-43-report.md` (log: `docs/perf-43-tracker.md`; hardware facts: `docs/ps1-perf-findings.md`).
+## docs/perf/43 fix pass (2026-10-16/17)
+Results per issue: `docs/perf/perf-43-report.md` (log: `docs/perf/perf-43-tracker.md`; hardware facts: `docs/perf/ps1-perf-findings.md`).
 New in RSDKv4-ps1: `ps1/pad.cpp` (psyqo's AdvancedPad driver for port 1 only), flip-bit tile sprites after a boot
 self-test (`PS1DetectGpu`; since 2026-10-19 also 1:1 flipped sprite pieces: "GPU type and flip rectangles" below; GDB
 `g_ps1FlipRectsOn` / `g_ps1FlipRectsForce`), the special-stage Bomb native (`PS1SpecialBomb`), the ordering table's rare
@@ -124,7 +124,7 @@ paths out of line. Harness: `tools/perf_scene.sh` `SHOTS=` (VRAM + entity table 
 `RUN_EXE` / `RUN_ELF`, `DISC=` (reference on the pre-patch disc), `HOLD=`, `PAD="f:mask ..."`, `MID=` / `POST=` (GDB
 lines at the window's start / end), a retry when GDB loses the race.
 
-## Special stage in assembly (docs/43 C1 / C4, 2026-10-18)
+## Special stage in assembly (docs/perf/43 C1 / C4, 2026-10-18)
 `RSDKv4/Scene3DOT.S` (the ordering table's faded fast path) and `RSDKv4/Scene3DTf.S` (the GTE transform loop), Sonic 2
 only (`GAME=1` doesn't build them; Sonic 1's EXE stays byte-identical). Both return to the C code at the first face /
 triple it must do; state structs `PS1OTFastState` / `PS1TfState` in `Scene3D.cpp` with `static_assert`s on the `.S`
@@ -133,7 +133,7 @@ or GTE instruction in a branch delay slot, two instructions between mtc2 and the
 the next mult. Verify a change with `OT_CHECK=1`, `perf_scene.sh SHOTS= GPU= KEEP_RAM=1` + `shots_cmp.py` /
 `chain_cmp.py` against a saved reference EXE (`RUN_EXE` / `RUN_ELF`), and `../tests/tools/ab.py
 s2-release-ss-frames-ssN --ref <commit> [--cur <worktree>]` (all 8 stages and the two -jump runs; add `--data` when the
-bytecode patcher changed). Later steps (2026-10-19, `docs/30` "Sonic 2 special stage to 60 fps"): the CPU vertices' exact
+bytecode patcher changed). Later steps (2026-10-19, `docs/ports/sonic-2/30` "Sonic 2 special stage to 60 fps"): the CPU vertices' exact
 screen positions by list slot after the transform (`PS1ExactXYPass`, the slot in `.u`'s upper half), the textured quads
 through `PS1OTTexFace` / `PS1TexturedRectOT`, Sonic 2's one-native-sub fast path (`PS1S2FastSub`), the integer rotation
 inverse (`tools/scene3d/inverse_check.sh`), the runtime big-value run (`tools/scripts/big_rt_check.sh`). **RAM at the

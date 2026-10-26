@@ -342,7 +342,7 @@ void RetroEngine::Init()
     running  = false;
 #if !RETRO_USE_ORIGINAL_CODE
 #if RETRO_PLATFORM == RETRO_PS1
-    // PS1 (docs/30): the scripted Title (the decomp's skipStartMenu path); the 2D PS1 menus come in phase 4.
+    // PS1 (docs/ports/sonic-2/30): the scripted Title (the decomp's skipStartMenu path); the 2D PS1 menus come in phase 4.
     skipStartMenu  = true;
     bool skipStart = true;
     onlineActive   = false; // no online services on a PS1 (the scripts check it)
@@ -542,7 +542,7 @@ volatile uint32_t g_ps1PauseRequests = 0;
 
 // PS1: psyqo owns the frame loop (RSDKv4/main.cpp frame() -> RunFrame, flip by psyqo), so this is one pass of
 // Run()'s loop without the SDL timing, focus handling and window swap. The native objects are not built on
-// PS1 (docs/30: scripted Title + 2D PS1 menus), so the work of RetroGameLoop_Main (NativeObjects/RetroGameLoop.cpp)
+// PS1 (docs/ports/sonic-2/30: scripted Title + 2D PS1 menus), so the work of RetroGameLoop_Main (NativeObjects/RetroGameLoop.cpp)
 // is done here, on its skipStartMenu paths.
 void RetroEngine::RunFrame()
 {
@@ -1467,7 +1467,7 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
         startPlayer = PS1_BOOT_PLAYER; // stage.playerListPos: 0 Sonic, 1 Tails, 2 Knuckles, 3 Sonic & Tails
 #elif PS1_TEST
         if (PS1TestBootStage())
-            startPlayer = PS1TestBootPlayer(); // the scenario's character (docs/45)
+            startPlayer = PS1TestBootPlayer(); // the scenario's character (docs/regression/45)
 #endif
     }
 #else

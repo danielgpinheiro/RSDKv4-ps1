@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PS1 edits to Sonic 2's script bytecode, applied to the disc tree at build time (docs/30; the model is the Sonic
+"""PS1 edits to Sonic 2's script bytecode, applied to the disc tree at build time (docs/ports/sonic-2/30; the model is the Sonic
 CD port's tool). The engine runs the scripts unchanged; only their data changes here: hot script loops become one
 PS1 engine opcode (RSDKv4/Script.cpp, `#if RETRO_PLATFORM == RETRO_PS1` FunctionInfo list) that runs the same loop
 natively, leaving the same temps and table / local writes behind.
@@ -24,7 +24,7 @@ natively, leaving the same temps and table / local writes behind.
   included).
 - The special stage's Ring (stage object "Ring" in Special: its update sub, ~90 VM instructions a frame per ring, the
   shadow + ring faces and the pickup) -> PS1SpecialRing / End when the sub and its jump-table entries are exactly
-  SPECIALRING_SIG (docs/30 phase 7.2b).
+  SPECIALRING_SIG (docs/ports/sonic-2/30 phase 7.2b).
 - The special stage's Halfpipe (Special: its update sub + function 0, the pipe-segment build it and the startup call)
   -> PS1Halfpipe / End and PS1HalfpipeSegment / return when HALFPIPE_SIG / HPSEG_FN_SIG match (jump-table entries
   included).
@@ -34,7 +34,7 @@ natively, leaving the same temps and table / local writes behind.
   VM) -> PS1SpecialSetupSort / End at its instruction 81 when the whole sub matches SPSETUP_STARTUP_SIG; its update sub
   (palette cycling) -> PS1SpecialSetupUpdate / End when SPSETUP_UPDATE_SIG matches.
 - The special stage's Special BG draw sub (the star field) -> PS1SpecialBGDraw / End and Ring Sparkle's update sub
-  -> PS1RingSparkle / End when SPBG_DRAW_SIG / SPARKLE_SIG match, jump-table entries included (docs/30 "Mania lessons
+  -> PS1RingSparkle / End when SPBG_DRAW_SIG / SPARKLE_SIG match, jump-table entries included (docs/ports/sonic-2/30 "Mania lessons
   pass"; their opcodes come after Sonic 1's, so Sonic 1's numbers and patched files stay the same).
 - Hidden Palace's HPZ Setup update sub -> PS1HPZSetup / End when HPZSETUP_SIG matches, jump-table entries included.
 - The special stage's Player Object update sub -> PS1SpecialPlayer / End when SPPLAYER_SIG matches and every function of
@@ -54,7 +54,7 @@ Every edit is found by its instruction pattern and checked (count and operands);
 build. Already patched files are recognised and left alone.
 
 Usage: patch_bytecode.py BYTECODE_DIR [--game 1|2]   (the disc tree's Bytecode/, e.g. build/iso/Bytecode;
-       --game 1: Sonic 1's list, docs/37 -- default 2, Sonic 2's)
+       --game 1: Sonic 1's list, docs/ports/sonic-1/37 -- default 2, Sonic 2's)
 """
 import collections, os, struct, sys
 
@@ -2334,7 +2334,7 @@ PS1_TEMPENTITY_START = 0x380 - 0x80
 # forward from their own slot. Title Card (the stage pauses when a title card is placed), Special Setup, Bridge End
 # (Zone01, Zone08), Breakable Wall (Zone08), Spikes Activator (Zone07), Belt Activation (Zone09).
 ENTITY_BOUND_SITES = {'GlobalCode': 1, 'Special': 1, 'Zone01': 1, 'Zone07': 1, 'Zone08': 2, 'Zone09': 1}
-# Sonic 1 (docs/37): its own scans (the special stage's 707 placed blocks end at slot 738, inside the PS1's 768)
+# Sonic 1 (docs/ports/sonic-1/37): its own scans (the special stage's 707 placed blocks end at slot 738, inside the PS1's 768)
 ENTITY_BOUND_SITES_S1 = {'GlobalCode': 2, 'Special': 7, 'Zone01': 1, 'Zone03': 1, 'Zone04': 2, 'Zone05': 1, 'Zone06': 1}
 
 
@@ -2387,7 +2387,7 @@ def patch_entity_layout(bcdir, expected=None):
 
 UPSTREAM_ENTITY_COUNT, PS1_ENTITY_COUNT = 1184, 0x380
 CLEARALL_SITES = {'Special': 1}
-CLEARALL_SITES_S1 = {'Special': 2}  # Sonic 1 (docs/37)
+CLEARALL_SITES_S1 = {'Special': 2}  # Sonic 1 (docs/ports/sonic-1/37)
 
 
 def patch_clear_all(bcdir, expected=None):
@@ -4235,7 +4235,7 @@ INVBLOCK_SIG = [
 ]
 
 
-# The special stage's Text Message object (docs/43: its letters and texts were the VM's worst frames): update sub ->
+# The special stage's Text Message object (docs/perf/43: its letters and texts were the VM's worst frames): update sub ->
 # PS1TextMsgUpdate (function 13, spawning the letters, runs in the VM), draw sub -> PS1TextMsgDraw (function 12, the text,
 # transcribed inline: checked with TEXTMSG_FN12_SIG) / End (RSDKv4/Script.cpp).
 TEXTMSG_UPDATE_SIG = [
@@ -4350,7 +4350,7 @@ TEXTMSG_UPDATE_SIG = [
     'JT 89 IfLower @92 @94',
 ]
 # The special stage's HUD draw sub (each player's ring counter through function 10, with Sonic & Tails their total;
-# 2-player: the counters and win icons) -> PS1SpecialHUDDraw, function 10 inline (docs/43: ~10 hblanks a frame in the VM
+# 2-player: the counters and win icons) -> PS1SpecialHUDDraw, function 10 inline (docs/perf/43: ~10 hblanks a frame in the VM
 # with Sonic & Tails). The listing and jump-table entries (with_jumps) and function 10's listing must match.
 SPHUD_DRAW_SIG = [
     'IfEqual 0 GLOBAL[1,0,13] 0',
@@ -4870,7 +4870,7 @@ TEXTMSG_FN12_SIG = [
 ]
 
 
-# The special stage's Bomb update sub (docs/43 C2: special stage 7, ~93 VM instructions a bomb a frame): its two faces
+# The special stage's Bomb update sub (docs/perf/43 C2: special stage 7, ~93 VM instructions a bomb a frame): its two faces
 # and the players it touches (CallFunction 7 runs in the VM) -> PS1SpecialBomb / End (RSDKv4/Script.cpp).
 SPECIALBOMB_SIG = [
     'Equal ARRAYPOS0 SCENE3DVERTEXCOUNT',
@@ -7602,14 +7602,14 @@ def patch_oscillate(bcdir):
 
 
 def substituted(sig, subs):
-    """A Sonic 2 signature with whole lines replaced (Sonic 1's numbering, docs/37); every replacement must apply."""
+    """A Sonic 2 signature with whole lines replaced (Sonic 1's numbering, docs/ports/sonic-1/37); every replacement must apply."""
     out = [subs.get(l, l) for l in sig]
     missing = [l for l in subs if l not in sig]
     assert not missing, missing
     return out
 
 
-# Sonic 1's player physics (docs/37 phase 2b): the same functions as Sonic 2's (PS1PlayerFn* natives, PS1_ANI_JUMPING /
+# Sonic 1's player physics (docs/ports/sonic-1/37 phase 2b): the same functions as Sonic 2's (PS1PlayerFn* natives, PS1_ANI_JUMPING /
 # PS1_ST_*): the jumping animation is G[64], the air / rolling / rolling-jump states 11 / 13 / 14, function 51 is 52.
 PLAYERFN_SIGS_S1 = {
     4: substituted(PLAYERFN4_SIG, {'IfEqual 12 OBJECTANIMATION GLOBAL[1,0,67]': 'IfEqual 12 OBJECTANIMATION GLOBAL[1,0,64]'}),
@@ -12267,7 +12267,7 @@ def patch_title_card(bcdir):
 
 
 def s1_patches():
-    """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
+    """Sonic 1 (docs/ports/sonic-1/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
     written (phase 2b)."""
     return (('oscillate', patch_oscillate),

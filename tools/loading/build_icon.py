@@ -28,7 +28,7 @@ SIZE = 48
 PER_ROW = 5
 TEX_W = 256  # texels
 DEFAULT_FRAME_MS = 83
-# Per game (GAME env var, as the Makefile: 2 = Sonic 2, 1 = Sonic 1 / docs/37): the GIF, the crop to its first pose
+# Per game (GAME env var, as the Makefile: 2 = Sonic 2, 1 = Sonic 1 / docs/ports/sonic-1/37): the GIF, the crop to its first pose
 # cell and the header. sonic-1-loading.gif (Sonic running, 4 frames of 172x200) is used whole.
 GAMES = {'2': ('sonic-2-loading.gif', (0, 0, 144, 144), 'ps1/loading_icon.h'),
          '1': ('sonic-1-loading.gif', (0, 0, 172, 200), 'ps1/loading_icon_s1.h')}

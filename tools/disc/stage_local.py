@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage-local copies of the shared files a stage load opens (docs/30 phase 9.2).
+"""Stage-local copies of the shared files a stage load opens (docs/ports/sonic-2/30 phase 9.2).
 
 A stage load reads a few files that live elsewhere on the disc: Data/Game/GameConfig.bin (when its StageConfig loads the
 global scripts: first byte 1; GlobalCode.bin was one too until the script images, phase 9.3), the players' animation files (Data/Animations/*.ani, opened by

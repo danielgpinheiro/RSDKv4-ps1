@@ -1,5 +1,5 @@
 #!/bin/bash
-# Phase 2 sweep (docs/37): for each "FOLDER[:PLAYER[:ID]]" builds `make BOOT=FOLDER BOOT_PLAYER=PLAYER [BOOT_ID=ID]` for
+# Phase 2 sweep (docs/ports/sonic-1/37): for each "FOLDER[:PLAYER[:ID]]" builds `make BOOT=FOLDER BOOT_PLAYER=PLAYER [BOOT_ID=ID]` for
 # the current GAME and runs tools/logic_test.sh on it (run right, jump, land; guards, heap, frame hblanks), then prints
 # one summary line per run. The natural build is rebuilt at the end (make dist / the exports refuse BOOT builds).
 # Usage: GAME=1 tools/zone_sweep.sh OUT_DIR Zone01:0 Zone01:1 Zone02 ...

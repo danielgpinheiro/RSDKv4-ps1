@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static scan of RSDKv4 (Sonic 1/2 2013) script bytecode (docs/30 phase 1), ported from the Sonic CD tool.
+"""Static scan of RSDKv4 (Sonic 1/2 2013) script bytecode (docs/ports/sonic-2/30 phase 1), ported from the Sonic CD tool.
 
 Bytecode files (Bytecode/<StageFolder>.bin, Bytecode/GlobalCode.bin), as RSDKv4/Script.cpp LoadBytecode
 reads them: a block-encoded int array of script code (u32 count, then blocks: header h, n = h & 0x7F
@@ -29,7 +29,7 @@ def preprocess(lines, rev):
     macros = {'RETRO_REV00': rev == 0, 'RETRO_REV01': rev >= 1, 'RETRO_REV02': rev >= 2, 'RETRO_REV03': rev >= 3,
               'RETRO_USE_HAPTICS': False, 'RETRO_USE_COMPILER': True, 'RETRO_USE_ORIGINAL_CODE': False,
               'RETRO_USE_MOD_LOADER': False,
-              'PS1_GAME': 1}  # Sonic 1's opcodes (docs/37) come after Sonic 2's: listing them keeps Sonic 2's numbers
+              'PS1_GAME': 1}  # Sonic 1's opcodes (docs/ports/sonic-1/37) come after Sonic 2's: listing them keeps Sonic 2's numbers
 
     def ev(expr):
         e = expr.strip()

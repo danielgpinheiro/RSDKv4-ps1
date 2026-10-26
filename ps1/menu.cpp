@@ -149,12 +149,12 @@ void PS1MenuTestService() {
 
 // ---------------------------------------------------------------------------------------------------
 // Menu screens (phase 4.3): the mobile menus' flow (RSDKv4/NativeObjects: MenuControl, SaveSelect,
-// PlayerSelectScreen) in 2D, with the approved look (docs/30 "Menu look"). Every action sets the same globals and
+// PlayerSelectScreen) in 2D, with the approved look (docs/ports/sonic-2/30 "Menu look"). Every action sets the same globals and
 // calls the same InitStartingStage as the native code (quoted per action).
 
 #include "RetroEngine.hpp"
 #if PS1_GAME == 1
-#include "menu_pack_s1.h" // Sonic 1 (docs/37 phase 4)
+#include "menu_pack_s1.h" // Sonic 1 (docs/ports/sonic-1/37 phase 4)
 #else
 #include "menu_pack.h"
 #endif

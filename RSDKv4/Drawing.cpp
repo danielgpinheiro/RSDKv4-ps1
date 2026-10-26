@@ -1007,7 +1007,7 @@ void DrawObjectList(int Layer)
             if (scriptCode[objectScriptList[type].eventDraw.scriptCodePtr] > 0)
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
                 if (scriptCode.raw(objectScriptList[type].eventDraw.scriptCodePtr + 1) != 0 // one native opcode and End
-                    || !PS1S2TopSub(objectScriptList[type].eventDraw.scriptCodePtr))   // (FUNC_END = 0; Script.cpp, docs/43)
+                    || !PS1S2TopSub(objectScriptList[type].eventDraw.scriptCodePtr))   // (FUNC_END = 0; Script.cpp, docs/perf/43)
 #endif
                 ProcessScript(objectScriptList[type].eventDraw.scriptCodePtr, objectScriptList[type].eventDraw.jumpTablePtr, EVENT_DRAW);
         }

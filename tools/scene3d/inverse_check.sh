@@ -1,7 +1,7 @@
 #!/bin/bash
-# Host check (docs/30 phase 7.2b): PS1MatrixInverseRotation (RSDKv4/Scene3D.cpp) == upstream's double MatrixInverse,
+# Host check (docs/ports/sonic-2/30 phase 7.2b): PS1MatrixInverseRotation (RSDKv4/Scene3D.cpp) == upstream's double MatrixInverse,
 # bit for bit, on random rotations and 3x3 blocks up to +-32767 (IEEE doubles, no FMA: as the PS1's soft-float); and
-# Sonic 2's table-driven PS1MatrixInverseTable (docs/43) == upstream's on random full 4x4 matrices (any last column and
+# Sonic 2's table-driven PS1MatrixInverseTable (docs/perf/43) == upstream's on random full 4x4 matrices (any last column and
 # translation, singular ones included).
 set -eu
 cd "$(dirname "$0")/../.."

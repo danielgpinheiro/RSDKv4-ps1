@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GPU time of one frame's DMA chain (docs/43; from RSDKv5-ps1/tools/play/gpu_cost.py, docs/32 9f), priced with
+"""GPU time of one frame's DMA chain (docs/perf/43; from RSDKv5-ps1/tools/play/gpu_cost.py, docs/ports/mania/32 9f), priced with
 DuckStation's model (duckstation/src/core/gpu.cpp: AddDrawTriangleTicks, AddDrawRectangleTicks, UpdateCLUTIfNeeded,
 the fill and VRAM copy costs; GPU ticks, 2 per CPU cycle; one NTSC hblank = 2152 cycles). psx-spx gives no GPU
 drawing times (dmachannels.md "DMA Transfer Rates"), so this is a model, not a measurement. The chain is walked from
