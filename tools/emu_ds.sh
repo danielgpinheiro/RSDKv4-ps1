@@ -8,6 +8,10 @@ DS_APP=/Applications/DuckStation.app/Contents/MacOS/DuckStation
 DS_SET="$HOME/Library/Application Support/DuckStation/settings.ini"
 DS_PID=
 DS_BAK=
+# The user's settings.ini while a harness run holds DuckStation (every harness that edits it, 2026-10-23: a run killed
+# before its restore left a throwaway memory card and StartPaused in the user's settings for days). A run that finds it
+# at start puts it back first (no DuckStation runs then: its holder was killed); the restore removes it.
+DS_HELD="$DS_SET.harness"
 
 ds_busy() { pgrep -f "DuckStation.app/Contents/MacOS" >/dev/null; }
 
@@ -19,14 +23,25 @@ ds_snapshot() {
     cp rsdkv4.elf "$1/rsdkv4.elf"
 }
 
-ds_restore() { [ -n "$DS_BAK" ] && [ -f "$DS_BAK" ] && cp "$DS_BAK" "$DS_SET"; }
+ds_restore() {
+    [ -n "$DS_BAK" ] || return 0
+    if [ -f "$DS_HELD" ]; then cp "$DS_HELD" "$DS_SET" && rm -f "$DS_HELD"
+    elif [ -f "$DS_BAK" ]; then cp "$DS_BAK" "$DS_SET"; fi
+    DS_BAK=
+}
 
 # ds_start SNAPDIR: exits 2 when DuckStation already runs (another session)
 ds_start() {
     ds_busy && { echo "DuckStation is already running (another session?): not starting it" >&2; exit 2; }
+    if [ -f "$DS_HELD" ]; then
+        echo "DuckStation settings: the user's put back from $DS_HELD (a killed run left them)" >&2
+        cp "$DS_HELD" "$DS_SET"
+    fi
+    cp "$DS_SET" "$DS_HELD"
     DS_BAK="$1/settings.ini.bak"
     cp "$DS_SET" "$DS_BAK"
-    trap ds_restore EXIT
+    # the exit trap stops our DuckStation before restoring: it writes its settings (the run's) when it quits
+    trap ds_stop EXIT
     /usr/bin/python3 - "$DS_SET" <<'PYEOF'
 import re, sys
 p = sys.argv[1]
@@ -52,4 +67,13 @@ PYEOF
     for _ in $(seq 1 26); do nc -z localhost 2345 2>/dev/null && break; sleep 1; done
 }
 
-ds_stop() { [ -n "$DS_PID" ] && { kill $DS_PID 2>/dev/null; wait $DS_PID 2>/dev/null; }; DS_PID=; ds_restore; }
+# started with open -g, DuckStation is not our child (wait returns at once): TERM each second until it is gone, KILL
+# after 15 s, then restore (a restore while it still quits was overwritten by its own settings)
+ds_stop() {
+    if [ -n "$DS_PID" ]; then
+        for _ in $(seq 1 15); do kill $DS_PID 2>/dev/null || break; sleep 1; done
+        kill -9 $DS_PID 2>/dev/null
+        wait $DS_PID 2>/dev/null
+    fi
+    DS_PID=; ds_restore
+}
